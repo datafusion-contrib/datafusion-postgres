@@ -16,6 +16,6 @@ arrow.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 futures.workspace = true
-pgwire.workspace = true
+pgwire = { workspace = true, features = ["server-api"] }
 postgres-types.workspace = true
 rust_decimal.workspace = true
