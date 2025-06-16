@@ -10,6 +10,7 @@ homepage.workspace = true
 repository.workspace = true
 documentation.workspace = true
 readme = "../README.md"
+rust-version.workspace = true
 
 [dependencies]
 arrow-pg = { path = "../arrow-pg", version = "0.1.0" }
