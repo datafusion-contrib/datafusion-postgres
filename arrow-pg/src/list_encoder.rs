@@ -1,12 +1,13 @@
 use std::{str::FromStr, sync::Arc};
 
-use arrow::array::{
-    timezone::Tz, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-    LargeBinaryArray, PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
-    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-};
+#[cfg(not(feature = "datafusion"))]
 use arrow::{
+    array::{
+        timezone::Tz, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+        LargeBinaryArray, PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    },
     datatypes::{
         DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,
         Int64Type, Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
@@ -14,6 +15,22 @@ use arrow::{
     },
     temporal_conversions::{as_date, as_time},
 };
+#[cfg(feature = "datafusion")]
+use datafusion::arrow::{
+    array::{
+        timezone::Tz, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+        LargeBinaryArray, PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    },
+    datatypes::{
+        DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,
+        Int64Type, Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+        Time64NanosecondType, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    },
+    temporal_conversions::{as_date, as_time},
+};
+
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, TimeZone, Utc};
 use pgwire::api::results::FieldFormat;

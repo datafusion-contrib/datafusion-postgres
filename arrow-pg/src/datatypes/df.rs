@@ -17,9 +17,9 @@ use pgwire::messages::data::DataRow;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 
-use arrow_pg::datatypes::{arrow_schema_to_pg_fields, encode_recordbatch, into_pg_type};
+use super::{arrow_schema_to_pg_fields, encode_recordbatch, into_pg_type};
 
-pub(crate) async fn encode_dataframe<'a>(
+pub async fn encode_dataframe<'a>(
     df: DataFrame,
     format: &Format,
 ) -> PgWireResult<QueryResponse<'a>> {
@@ -51,7 +51,7 @@ pub(crate) async fn encode_dataframe<'a>(
 /// If the type is empty or unknown, we fallback to datafusion inferenced type
 /// from `inferenced_types`.
 /// An error will be raised when neither sources can provide type information.
-pub(crate) fn deserialize_parameters<S>(
+pub fn deserialize_parameters<S>(
     portal: &Portal<S>,
     inferenced_types: &[Option<&DataType>],
 ) -> PgWireResult<ParamValues>

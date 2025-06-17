@@ -1,3 +1,8 @@
+//! Arrow data encoding and type mapping for Postgres(pgwire).
+
+// #[cfg(all(feature = "arrow", feature = "datafusion"))]
+// compile_error!("Feature arrow and datafusion cannot be enabled at same time. Use no-default-features when activating datafusion");
+
 pub mod datatypes;
 pub mod encoder;
 mod error;

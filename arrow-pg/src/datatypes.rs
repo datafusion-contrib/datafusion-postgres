@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
-use arrow::datatypes::*;
-use arrow::record_batch::RecordBatch;
+#[cfg(not(feature = "datafusion"))]
+use arrow::{datatypes::*, record_batch::RecordBatch};
+#[cfg(feature = "datafusion")]
+use datafusion::arrow::{datatypes::*, record_batch::RecordBatch};
+
 use pgwire::api::portal::Format;
 use pgwire::api::results::FieldInfo;
 use pgwire::api::Type;
@@ -10,6 +13,9 @@ use pgwire::messages::data::DataRow;
 use postgres_types::Kind;
 
 use crate::row_encoder::RowEncoder;
+
+#[cfg(feature = "datafusion")]
+pub mod df;
 
 pub fn into_pg_type(arrow_type: &DataType) -> PgWireResult<Type> {
     Ok(match arrow_type {

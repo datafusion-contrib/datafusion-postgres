@@ -358,6 +358,7 @@ dependencies = [
  "arrow",
  "bytes",
  "chrono",
+ "datafusion",
  "futures",
  "pgwire",
  "postgres-types",
@@ -1502,7 +1503,6 @@ dependencies = [
  "datafusion",
  "datafusion-postgres",
  "env_logger",
- "pgwire",
  "structopt",
  "tokio",
 ]

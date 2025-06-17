@@ -1,4 +1,3 @@
-mod datatypes;
 mod handlers;
 pub mod pg_catalog;
 

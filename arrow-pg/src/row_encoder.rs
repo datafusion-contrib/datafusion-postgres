@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
+#[cfg(not(feature = "datafusion"))]
 use arrow::array::RecordBatch;
+#[cfg(feature = "datafusion")]
+use datafusion::arrow::array::RecordBatch;
+
 use pgwire::{
     api::results::{DataRowEncoder, FieldInfo},
     error::PgWireResult,

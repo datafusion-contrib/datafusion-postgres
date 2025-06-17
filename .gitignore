@@ -2,3 +2,4 @@
 .direnv
 .envrc
 .vscode
+.aider*

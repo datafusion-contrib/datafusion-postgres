@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
+#[cfg(not(feature = "datafusion"))]
 use arrow::array::{Array, StructArray};
+#[cfg(feature = "datafusion")]
+use datafusion::arrow::array::{Array, StructArray};
+
 use bytes::{BufMut, BytesMut};
 use pgwire::api::results::FieldFormat;
 use pgwire::error::PgWireResult;

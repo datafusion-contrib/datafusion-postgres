@@ -3,11 +3,13 @@ use std::io::Write;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::array::*;
-use arrow::datatypes::*;
+#[cfg(not(feature = "datafusion"))]
+use arrow::{array::*, datatypes::*};
 use bytes::BufMut;
 use bytes::BytesMut;
 use chrono::{NaiveDate, NaiveDateTime};
+#[cfg(feature = "datafusion")]
+use datafusion::arrow::{array::*, datatypes::*};
 use pgwire::api::results::DataRowEncoder;
 use pgwire::api::results::FieldFormat;
 use pgwire::error::PgWireError;

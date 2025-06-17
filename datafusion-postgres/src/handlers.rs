@@ -19,7 +19,7 @@ use pgwire::api::{ClientInfo, NoopErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 use tokio::sync::Mutex;
 
-use crate::datatypes;
+use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
 
 pub struct HandlerFactory(pub Arc<DfSessionService>);
@@ -213,7 +213,7 @@ impl SimpleQueryHandler for DfSessionService {
             Ok(vec![Response::Execution(tag)])
         } else {
             // For non-INSERT queries, return a regular Query response
-            let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
+            let resp = df::encode_dataframe(df, &Format::UnifiedText).await?;
             Ok(vec![Response::Query(resp)])
         }
     }
@@ -304,8 +304,7 @@ impl ExtendedQueryHandler for DfSessionService {
         let param_types = plan
             .get_parameter_types()
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        let param_values =
-            datatypes::deserialize_parameters(portal, &ordered_param_types(&param_types))?; // Fixed: Use &param_types
+        let param_values = df::deserialize_parameters(portal, &ordered_param_types(&param_types))?; // Fixed: Use &param_types
         let plan = plan
             .clone()
             .replace_params_with_values(&param_values)
@@ -315,7 +314,7 @@ impl ExtendedQueryHandler for DfSessionService {
             .execute_logical_plan(plan)
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        let resp = datatypes::encode_dataframe(dataframe, &portal.result_column_format).await?;
+        let resp = df::encode_dataframe(dataframe, &portal.result_column_format).await?;
         Ok(Response::Query(resp))
     }
 }
