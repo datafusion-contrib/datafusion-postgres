@@ -12,10 +12,15 @@ documentation.workspace = true
 readme = "../README.md"
 rust-version.workspace = true
 
+[features]
+default = []
+datafusion = ["dep:datafusion-core"]
+
 [dependencies]
 arrow.workspace = true
 bytes.workspace = true
-chrono.workspace = true
+chrono.workspace = true 
+datafusion-core = { workspace = true, optional = true }
 futures.workspace = true
 pgwire = { workspace = true, features = ["server-api"] }
 postgres-types.workspace = true
