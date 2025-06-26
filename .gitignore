@@ -3,3 +3,4 @@
 .envrc
 .vscode
 .aider*
+/test_env
