@@ -35,12 +35,15 @@ pub fn into_pg_type(arrow_type: &DataType) -> PgWireResult<Type> {
         DataType::Time32(_) | DataType::Time64(_) => Type::TIME,
         DataType::Date32 | DataType::Date64 => Type::DATE,
         DataType::Interval(_) => Type::INTERVAL,
-        DataType::Binary | DataType::FixedSizeBinary(_) | DataType::LargeBinary => Type::BYTEA,
+        DataType::Binary
+        | DataType::FixedSizeBinary(_)
+        | DataType::LargeBinary
+        | DataType::BinaryView => Type::BYTEA,
         DataType::Float16 | DataType::Float32 => Type::FLOAT4,
         DataType::Float64 => Type::FLOAT8,
         DataType::Decimal128(_, _) => Type::NUMERIC,
         DataType::Utf8 => Type::VARCHAR,
-        DataType::LargeUtf8 => Type::TEXT,
+        DataType::LargeUtf8 | DataType::Utf8View => Type::TEXT,
         DataType::List(field) | DataType::FixedSizeList(field, _) | DataType::LargeList(field) => {
             match field.data_type() {
                 DataType::Boolean => Type::BOOL_ARRAY,
@@ -58,11 +61,14 @@ pub fn into_pg_type(arrow_type: &DataType) -> PgWireResult<Type> {
                 DataType::Time32(_) | DataType::Time64(_) => Type::TIME_ARRAY,
                 DataType::Date32 | DataType::Date64 => Type::DATE_ARRAY,
                 DataType::Interval(_) => Type::INTERVAL_ARRAY,
-                DataType::FixedSizeBinary(_) | DataType::Binary => Type::BYTEA_ARRAY,
+                DataType::FixedSizeBinary(_)
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::BinaryView => Type::BYTEA_ARRAY,
                 DataType::Float16 | DataType::Float32 => Type::FLOAT4_ARRAY,
                 DataType::Float64 => Type::FLOAT8_ARRAY,
                 DataType::Utf8 => Type::VARCHAR_ARRAY,
-                DataType::LargeUtf8 => Type::TEXT_ARRAY,
+                DataType::LargeUtf8 | DataType::Utf8View => Type::TEXT_ARRAY,
                 struct_type @ DataType::Struct(_) => Type::new(
                     Type::RECORD_ARRAY.name().into(),
                     Type::RECORD_ARRAY.oid(),
@@ -78,7 +84,6 @@ pub fn into_pg_type(arrow_type: &DataType) -> PgWireResult<Type> {
                 }
             }
         }
-        DataType::Utf8View => Type::TEXT,
         DataType::Dictionary(_, value_type) => into_pg_type(value_type)?,
         DataType::Struct(fields) => {
             let name: String = fields
