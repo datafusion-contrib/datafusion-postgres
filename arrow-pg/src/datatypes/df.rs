@@ -1,8 +1,7 @@
 use std::iter;
 use std::sync::Arc;
 
-use chrono::{DateTime, FixedOffset};
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::ParamValues;
@@ -155,7 +154,28 @@ where
                 deserialized_params
                     .push(ScalarValue::Date32(value.map(Date32Type::from_naive_date)));
             }
-            // TODO: add more types
+            Type::TIME => {
+                let value = portal.parameter::<NaiveTime>(i, &pg_type)?;
+                deserialized_params.push(ScalarValue::Time64Microsecond(value.map(|t| {
+                    t.num_seconds_from_midnight() as i64 * 1_000_000 + t.nanosecond() as i64 / 1_000
+                })));
+            }
+            Type::UUID => {
+                let value = portal.parameter::<String>(i, &pg_type)?;
+                // Store UUID as string for now
+                deserialized_params.push(ScalarValue::Utf8(value));
+            }
+            Type::JSON | Type::JSONB => {
+                let value = portal.parameter::<String>(i, &pg_type)?;
+                // Store JSON as string for now
+                deserialized_params.push(ScalarValue::Utf8(value));
+            }
+            Type::INTERVAL => {
+                let value = portal.parameter::<String>(i, &pg_type)?;
+                // Store interval as string for now (DataFusion has limited interval support)
+                deserialized_params.push(ScalarValue::Utf8(value));
+            }
+            // TODO: add array types and other advanced types
             _ => {
                 return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                     "FATAL".to_string(),

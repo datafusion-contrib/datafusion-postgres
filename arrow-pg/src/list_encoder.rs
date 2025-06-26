@@ -4,7 +4,8 @@ use std::{str::FromStr, sync::Arc};
 use arrow::{
     array::{
         timezone::Tz, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        LargeBinaryArray, PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
+        Decimal256Array, DurationMicrosecondArray, LargeBinaryArray, LargeStringArray,
+        PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
         Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
         TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
     },
@@ -19,7 +20,8 @@ use arrow::{
 use datafusion::arrow::{
     array::{
         timezone::Tz, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        LargeBinaryArray, PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
+        Decimal256Array, DurationMicrosecondArray, LargeBinaryArray, LargeStringArray,
+        PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
         Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
         TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
     },
@@ -207,7 +209,9 @@ pub(crate) fn encode_list(
                 encode_field(&value, type_, format)
             }
             _ => {
-                unimplemented!()
+                // Time32 only supports Second and Millisecond in Arrow
+                // Other units are not available, so return an error
+                Err(PgWireError::ApiError("Unsupported Time32 unit".into()))
             }
         },
         DataType::Time64(unit) => match unit {
@@ -232,7 +236,9 @@ pub(crate) fn encode_list(
                 encode_field(&value, type_, format)
             }
             _ => {
-                unimplemented!()
+                // Time64 only supports Microsecond and Nanosecond in Arrow
+                // Other units are not available, so return an error
+                Err(PgWireError::ApiError("Unsupported Time64 unit".into()))
             }
         },
         DataType::Timestamp(unit, timezone) => match unit {
@@ -406,7 +412,61 @@ pub(crate) fn encode_list(
                 .collect();
             encode_field(&values?, type_, format)
         }
-        // TODO: more types
+        DataType::LargeUtf8 => {
+            let value: Vec<Option<&str>> = arr
+                .as_any()
+                .downcast_ref::<LargeStringArray>()
+                .unwrap()
+                .iter()
+                .collect();
+            encode_field(&value, type_, format)
+        }
+        DataType::Decimal256(_, s) => {
+            // Convert Decimal256 to string representation for now
+            // since rust_decimal doesn't support 256-bit decimals
+            let decimal_array = arr.as_any().downcast_ref::<Decimal256Array>().unwrap();
+            let value: Vec<Option<String>> = (0..decimal_array.len())
+                .map(|i| {
+                    if decimal_array.is_null(i) {
+                        None
+                    } else {
+                        // Convert to string representation
+                        let raw_value = decimal_array.value(i);
+                        let scale = *s as u32;
+                        // Convert i256 to string and handle decimal placement manually
+                        let value_str = raw_value.to_string();
+                        if scale == 0 {
+                            Some(value_str)
+                        } else {
+                            // Insert decimal point
+                            let mut chars: Vec<char> = value_str.chars().collect();
+                            if chars.len() <= scale as usize {
+                                // Prepend zeros if needed
+                                let zeros_needed = scale as usize - chars.len() + 1;
+                                chars.splice(0..0, std::iter::repeat_n('0', zeros_needed));
+                                chars.insert(1, '.');
+                            } else {
+                                let decimal_pos = chars.len() - scale as usize;
+                                chars.insert(decimal_pos, '.');
+                            }
+                            Some(chars.into_iter().collect())
+                        }
+                    }
+                })
+                .collect();
+            encode_field(&value, type_, format)
+        }
+        DataType::Duration(_) => {
+            // Convert duration to microseconds for now
+            let value: Vec<Option<i64>> = arr
+                .as_any()
+                .downcast_ref::<DurationMicrosecondArray>()
+                .unwrap()
+                .iter()
+                .collect();
+            encode_field(&value, type_, format)
+        }
+        // TODO: add support for nested lists, maps, and union types
         list_type => Err(PgWireError::ApiError(ToSqlError::from(format!(
             "Unsupported List Datatype {} and array {:?}",
             list_type, &arr

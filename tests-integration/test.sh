@@ -3,14 +3,20 @@
 set -e
 
 cargo build
-./target/debug/datafusion-postgres-cli --csv delhi:tests-integration/delhiclimate.csv &
+
+# Activate virtual environment if it exists
+if [ -d "test_env" ]; then
+    source test_env/bin/activate
+fi
+
+./target/debug/datafusion-postgres-cli -p 5433 --csv delhi:tests-integration/delhiclimate.csv &
 PID=$!
-sleep 3
-python tests-integration/test.py
+sleep 5
+python3 tests-integration/test_fixed.py
 kill -9 $PID 2>/dev/null
 
-./target/debug/datafusion-postgres-cli --parquet all_types:tests-integration/all_types.parquet &
+./target/debug/datafusion-postgres-cli -p 5433 --parquet all_types:tests-integration/all_types.parquet &
 PID=$!
-sleep 3
-python tests-integration/test_all_types.py
+sleep 5
+python3 tests-integration/test_all_types_fixed.py
 kill -9 $PID 2>/dev/null

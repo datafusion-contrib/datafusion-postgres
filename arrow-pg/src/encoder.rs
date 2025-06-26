@@ -12,8 +12,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use datafusion::arrow::{array::*, datatypes::*};
 use pgwire::api::results::DataRowEncoder;
 use pgwire::api::results::FieldFormat;
-use pgwire::error::PgWireError;
-use pgwire::error::PgWireResult;
+use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::types::ToSqlText;
 use postgres_types::{ToSql, Type};
 use rust_decimal::Decimal;
@@ -253,18 +252,25 @@ fn get_numeric_128_value(
         .map_err(|e| {
             let message = match e {
                 rust_decimal::Error::ExceedsMaximumPossibleValue => {
-                    "Exceeds maximum possible value"
+                    "22003" // numeric_value_out_of_range
                 }
                 rust_decimal::Error::LessThanMinimumPossibleValue => {
-                    "Less than minimum possible value"
+                    "22003" // numeric_value_out_of_range
                 }
-                rust_decimal::Error::ScaleExceedsMaximumPrecision(_) => {
-                    "Scale exceeds maximum precision"
+                rust_decimal::Error::ScaleExceedsMaximumPrecision(scale) => {
+                    return PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "22003".to_string(),
+                        format!("Scale {} exceeds maximum precision for numeric type", scale),
+                    )));
                 }
-                _ => unreachable!(),
+                _ => "22003", // generic numeric_value_out_of_range
             };
-            // TODO: add error type in PgWireError
-            PgWireError::ApiError(ToSqlError::from(message))
+            PgWireError::UserError(Box::new(ErrorInfo::new(
+                "ERROR".to_string(),
+                message.to_string(),
+                format!("Numeric value conversion failed: {:?}", e),
+            )))
         })
         .map(Some)
 }

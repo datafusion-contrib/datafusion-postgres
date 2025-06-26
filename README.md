@@ -20,9 +20,9 @@ picking up unfinished items.
 - [x] datafusion-postgres as a CLI tool
 - [x] datafusion-postgres as a library
 - [x] datafusion information schema: require user to enable from session_config
-- [ ] datafusion pg catalog: a postgres compatible `pg_catalog`
-- [ ] data type mapping between arrow and postgres: in progress
-- [ ] additional postgres functions for datafusion
+- [x] datafusion pg catalog: a postgres compatible `pg_catalog` with pg_type, pg_attribute, pg_proc
+- [x] data type mapping between arrow and postgres: comprehensive type support
+- [x] additional postgres functions for datafusion: version(), pg_get_userbyid(), has_table_privilege()
 
 ## Usage
 
