@@ -180,7 +180,7 @@ where
                 return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                     "FATAL".to_string(),
                     "XX000".to_string(),
-                    format!("Unsupported parameter type: {}", pg_type),
+                    format!("Unsupported parameter type: {pg_type}"),
                 ))));
             }
         }

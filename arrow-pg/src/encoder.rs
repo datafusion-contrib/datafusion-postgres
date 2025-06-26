@@ -261,7 +261,7 @@ fn get_numeric_128_value(
                     return PgWireError::UserError(Box::new(ErrorInfo::new(
                         "ERROR".to_string(),
                         "22003".to_string(),
-                        format!("Scale {} exceeds maximum precision for numeric type", scale),
+                        format!("Scale {scale} exceeds maximum precision for numeric type"),
                     )));
                 }
                 _ => "22003", // generic numeric_value_out_of_range
@@ -269,7 +269,7 @@ fn get_numeric_128_value(
             PgWireError::UserError(Box::new(ErrorInfo::new(
                 "ERROR".to_string(),
                 message.to_string(),
-                format!("Numeric value conversion failed: {:?}", e),
+                format!("Numeric value conversion failed: {e:?}"),
             )))
         })
         .map(Some)
@@ -485,8 +485,7 @@ pub fn encode_value<T: Encoder>(
                 postgres_types::Kind::Composite(fields) => fields,
                 _ => {
                     return Err(PgWireError::ApiError(ToSqlError::from(format!(
-                        "Failed to unwrap a composite type from type {}",
-                        type_
+                        "Failed to unwrap a composite type from type {type_}"
                     ))));
                 }
             };
@@ -518,8 +517,7 @@ pub fn encode_value<T: Encoder>(
                 .or_else(|| get_dict_values!(UInt64Type))
                 .ok_or_else(|| {
                     ToSqlError::from(format!(
-                        "Unsupported dictionary key type for value type {}",
-                        value_type
+                        "Unsupported dictionary key type for value type {value_type}"
                     ))
                 })?;
 
