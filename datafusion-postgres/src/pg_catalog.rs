@@ -9,7 +9,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::streaming::StreamingTable;
 use datafusion::catalog::{CatalogProviderList, MemTable, SchemaProvider};
 use datafusion::common::utils::SingleRowListArrayBuilder;
-use datafusion::datasource::TableProvider;
+use datafusion::datasource::{TableProvider, ViewTable};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDF, Volatility};
@@ -24,6 +24,34 @@ const PG_CATALOG_TABLE_PG_NAMESPACE: &str = "pg_namespace";
 const PG_CATALOG_TABLE_PG_PROC: &str = "pg_proc";
 const PG_CATALOG_TABLE_PG_DATABASE: &str = "pg_database";
 const PG_CATALOG_TABLE_PG_AM: &str = "pg_am";
+
+/// Determine PostgreSQL table type (relkind) from DataFusion TableProvider
+fn get_table_type(table: &Arc<dyn TableProvider>) -> &'static str {
+    // Use Any trait to determine the actual table provider type
+    if table.as_any().is::<ViewTable>() {
+        "v" // view
+    } else if table.as_any().is::<StreamingTable>() {
+        "r" // regular table (streaming tables are treated as regular tables)
+    } else if table.as_any().is::<MemTable>() {
+        "r" // regular table (memory tables are treated as regular tables)
+    } else {
+        "r" // Default to regular table for unknown types
+    }
+}
+
+/// Determine PostgreSQL table type (relkind) with table name context
+fn get_table_type_with_name(table: &Arc<dyn TableProvider>, table_name: &str, schema_name: &str) -> &'static str {
+    // Check if this is a system catalog table
+    if schema_name == "pg_catalog" || schema_name == "information_schema" {
+        if table_name.starts_with("pg_") || table_name.contains("_table") || table_name.contains("_column") {
+            "r" // System tables are still regular tables in PostgreSQL
+        } else {
+            "v" // Some system objects might be views
+        }
+    } else {
+        get_table_type(table)
+    }
+}
 
 pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_TABLE_PG_TYPE,
@@ -1071,8 +1099,8 @@ impl PgClassTable {
                             next_oid += 1;
 
                             if let Some(table) = schema.table(&table_name).await? {
-                                // TODO: correct table type
-                                let table_type = "r";
+                                // Determine the correct table type based on the table provider and context
+                                let table_type = get_table_type_with_name(&table, &table_name, &schema_name);
 
                                 // Get column count from schema
                                 let column_count = table.schema().fields().len() as i16;

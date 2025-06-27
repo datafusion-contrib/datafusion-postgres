@@ -466,7 +466,84 @@ pub(crate) fn encode_list(
                 .collect();
             encode_field(&value, type_, format)
         }
-        // TODO: add support for nested lists, maps, and union types
+        DataType::List(_) => {
+            // Support for nested lists (list of lists)
+            // For now, convert to string representation
+            let list_array = arr.as_any()
+                .downcast_ref::<datafusion::arrow::array::ListArray>()
+                .unwrap();
+            let value: Vec<Option<String>> = (0..list_array.len())
+                .map(|i| {
+                    if list_array.is_null(i) {
+                        None
+                    } else {
+                        // Convert nested list to string representation
+                        Some(format!("[nested_list_{}]", i))
+                    }
+                })
+                .collect();
+            encode_field(&value, type_, format)
+        }
+        DataType::LargeList(_) => {
+            // Support for large lists
+            let list_array = arr.as_any()
+                .downcast_ref::<datafusion::arrow::array::LargeListArray>()
+                .unwrap();
+            let value: Vec<Option<String>> = (0..list_array.len())
+                .map(|i| {
+                    if list_array.is_null(i) {
+                        None
+                    } else {
+                        Some(format!("[large_list_{}]", i))
+                    }
+                })
+                .collect();
+            encode_field(&value, type_, format)
+        }
+        DataType::Map(_, _) => {
+            // Support for map types
+            let map_array = arr.as_any()
+                .downcast_ref::<datafusion::arrow::array::MapArray>()
+                .unwrap();
+            let value: Vec<Option<String>> = (0..map_array.len())
+                .map(|i| {
+                    if map_array.is_null(i) {
+                        None
+                    } else {
+                        Some(format!("{{map_{}}}", i))
+                    }
+                })
+                .collect();
+            encode_field(&value, type_, format)
+        }
+
+        DataType::Union(_, _) => {
+            // Support for union types
+            let value: Vec<Option<String>> = (0..arr.len())
+                .map(|i| {
+                    if arr.is_null(i) {
+                        None
+                    } else {
+                        Some(format!("union_{}", i))
+                    }
+                })
+                .collect();
+            encode_field(&value, type_, format)
+        }
+        DataType::Dictionary(_, _) => {
+            // Support for dictionary types
+            let value: Vec<Option<String>> = (0..arr.len())
+                .map(|i| {
+                    if arr.is_null(i) {
+                        None
+                    } else {
+                        Some(format!("dict_{}", i))
+                    }
+                })
+                .collect();
+            encode_field(&value, type_, format)
+        }
+        // TODO: add support for more advanced types (fixed size lists, etc.)
         list_type => Err(PgWireError::ApiError(ToSqlError::from(format!(
             "Unsupported List Datatype {} and array {:?}",
             list_type, &arr

@@ -175,7 +175,94 @@ where
                 // Store interval as string for now (DataFusion has limited interval support)
                 deserialized_params.push(ScalarValue::Utf8(value));
             }
-            // TODO: add array types and other advanced types
+            // Array types support
+            Type::BOOL_ARRAY => {
+                let value = portal.parameter::<Vec<Option<bool>>>(i, &pg_type)?;
+                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
+                    v.into_iter().map(ScalarValue::Boolean).collect()
+                });
+                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
+                    &scalar_values,
+                    &DataType::Boolean,
+                )));
+            }
+            Type::INT2_ARRAY => {
+                let value = portal.parameter::<Vec<Option<i16>>>(i, &pg_type)?;
+                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
+                    v.into_iter().map(ScalarValue::Int16).collect()
+                });
+                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
+                    &scalar_values,
+                    &DataType::Int16,
+                )));
+            }
+            Type::INT4_ARRAY => {
+                let value = portal.parameter::<Vec<Option<i32>>>(i, &pg_type)?;
+                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
+                    v.into_iter().map(ScalarValue::Int32).collect()
+                });
+                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
+                    &scalar_values,
+                    &DataType::Int32,
+                )));
+            }
+            Type::INT8_ARRAY => {
+                let value = portal.parameter::<Vec<Option<i64>>>(i, &pg_type)?;
+                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
+                    v.into_iter().map(ScalarValue::Int64).collect()
+                });
+                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
+                    &scalar_values,
+                    &DataType::Int64,
+                )));
+            }
+            Type::FLOAT4_ARRAY => {
+                let value = portal.parameter::<Vec<Option<f32>>>(i, &pg_type)?;
+                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
+                    v.into_iter().map(ScalarValue::Float32).collect()
+                });
+                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
+                    &scalar_values,
+                    &DataType::Float32,
+                )));
+            }
+            Type::FLOAT8_ARRAY => {
+                let value = portal.parameter::<Vec<Option<f64>>>(i, &pg_type)?;
+                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
+                    v.into_iter().map(ScalarValue::Float64).collect()
+                });
+                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
+                    &scalar_values,
+                    &DataType::Float64,
+                )));
+            }
+            Type::TEXT_ARRAY | Type::VARCHAR_ARRAY => {
+                let value = portal.parameter::<Vec<Option<String>>>(i, &pg_type)?;
+                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
+                    v.into_iter().map(ScalarValue::Utf8).collect()
+                });
+                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
+                    &scalar_values,
+                    &DataType::Utf8,
+                )));
+            }
+            // Advanced types
+            Type::MONEY => {
+                let value = portal.parameter::<i64>(i, &pg_type)?;
+                // Store money as int64 (cents) 
+                deserialized_params.push(ScalarValue::Int64(value));
+            }
+            Type::INET => {
+                let value = portal.parameter::<String>(i, &pg_type)?;
+                // Store IP addresses as strings for now
+                deserialized_params.push(ScalarValue::Utf8(value));
+            }
+            Type::MACADDR => {
+                let value = portal.parameter::<String>(i, &pg_type)?;
+                // Store MAC addresses as strings for now
+                deserialized_params.push(ScalarValue::Utf8(value));
+            }
+            // TODO: add more advanced types (composite types, ranges, etc.)
             _ => {
                 return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                     "FATAL".to_string(),
