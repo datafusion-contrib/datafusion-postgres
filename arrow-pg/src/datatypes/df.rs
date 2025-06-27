@@ -249,7 +249,7 @@ where
             // Advanced types
             Type::MONEY => {
                 let value = portal.parameter::<i64>(i, &pg_type)?;
-                // Store money as int64 (cents) 
+                // Store money as int64 (cents)
                 deserialized_params.push(ScalarValue::Int64(value));
             }
             Type::INET => {

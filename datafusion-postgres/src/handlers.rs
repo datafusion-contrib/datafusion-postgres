@@ -22,6 +22,13 @@ use tokio::sync::Mutex;
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TransactionState {
+    None,
+    Active,
+    Failed,
+}
+
 pub struct HandlerFactory(pub Arc<DfSessionService>);
 
 impl NoopStartupHandler for DfSessionService {}
@@ -58,6 +65,7 @@ pub struct DfSessionService {
     session_context: Arc<SessionContext>,
     parser: Arc<Parser>,
     timezone: Arc<Mutex<String>>,
+    transaction_state: Arc<Mutex<TransactionState>>,
 }
 
 impl DfSessionService {
@@ -69,6 +77,7 @@ impl DfSessionService {
             session_context,
             parser,
             timezone: Arc::new(Mutex::new("UTC".to_string())),
+            transaction_state: Arc::new(Mutex::new(TransactionState::None)),
         }
     }
 
@@ -118,6 +127,62 @@ impl DfSessionService {
             }
         } else {
             Ok(None)
+        }
+    }
+
+    async fn try_respond_transaction_statements<'a>(
+        &self,
+        query_lower: &str,
+    ) -> PgWireResult<Option<Response<'a>>> {
+        match query_lower.trim() {
+            "begin" | "begin transaction" | "begin work" | "start transaction" => {
+                let mut state = self.transaction_state.lock().await;
+                match *state {
+                    TransactionState::None => {
+                        *state = TransactionState::Active;
+                        Ok(Some(Response::Execution(Tag::new("BEGIN"))))
+                    }
+                    TransactionState::Active => {
+                        // Already in transaction, PostgreSQL allows this but issues a warning
+                        // For simplicity, we'll just return BEGIN again
+                        Ok(Some(Response::Execution(Tag::new("BEGIN"))))
+                    }
+                    TransactionState::Failed => {
+                        // Can't start new transaction from failed state
+                        Err(PgWireError::UserError(Box::new(
+                            pgwire::error::ErrorInfo::new(
+                                "ERROR".to_string(),
+                                "25P01".to_string(),
+                                "current transaction is aborted, commands ignored until end of transaction block".to_string(),
+                            ),
+                        )))
+                    }
+                }
+            }
+            "commit" | "commit transaction" | "commit work" | "end" | "end transaction" => {
+                let mut state = self.transaction_state.lock().await;
+                match *state {
+                    TransactionState::Active => {
+                        *state = TransactionState::None;
+                        Ok(Some(Response::Execution(Tag::new("COMMIT"))))
+                    }
+                    TransactionState::None => {
+                        // PostgreSQL allows COMMIT outside transaction with warning
+                        Ok(Some(Response::Execution(Tag::new("COMMIT"))))
+                    }
+                    TransactionState::Failed => {
+                        // COMMIT in failed transaction is treated as ROLLBACK
+                        *state = TransactionState::None;
+                        Ok(Some(Response::Execution(Tag::new("ROLLBACK"))))
+                    }
+                }
+            }
+            "rollback" | "rollback transaction" | "rollback work" | "abort" => {
+                let mut state = self.transaction_state.lock().await;
+                *state = TransactionState::None;
+                Ok(Some(Response::Execution(Tag::new("ROLLBACK"))))
+            }
+            _ => Ok(None),
         }
     }
 
@@ -179,15 +244,44 @@ impl SimpleQueryHandler for DfSessionService {
             return Ok(vec![resp]);
         }
 
+        if let Some(resp) = self.try_respond_transaction_statements(&query_lower).await? {
+            return Ok(vec![resp]);
+        }
+
         if let Some(resp) = self.try_respond_show_statements(&query_lower).await? {
             return Ok(vec![resp]);
         }
 
-        let df = self
-            .session_context
-            .sql(query)
-            .await
-            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+        // Check if we're in a failed transaction and block non-transaction commands
+        {
+            let state = self.transaction_state.lock().await;
+            if *state == TransactionState::Failed {
+                return Err(PgWireError::UserError(Box::new(
+                    pgwire::error::ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "25P01".to_string(),
+                        "current transaction is aborted, commands ignored until end of transaction block".to_string(),
+                    ),
+                )));
+            }
+        }
+
+        let df_result = self.session_context.sql(query).await;
+        
+        // Handle query execution errors and transaction state
+        let df = match df_result {
+            Ok(df) => df,
+            Err(e) => {
+                // If we're in a transaction and a query fails, mark transaction as failed
+                {
+                    let mut state = self.transaction_state.lock().await;
+                    if *state == TransactionState::Active {
+                        *state = TransactionState::Failed;
+                    }
+                }
+                return Err(PgWireError::ApiError(Box::new(e)));
+            }
+        };
 
         if query_lower.starts_with("insert into") {
             // For INSERT queries, we need to execute the query to get the row count

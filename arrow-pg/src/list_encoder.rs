@@ -469,7 +469,8 @@ pub(crate) fn encode_list(
         DataType::List(_) => {
             // Support for nested lists (list of lists)
             // For now, convert to string representation
-            let list_array = arr.as_any()
+            let list_array = arr
+                .as_any()
                 .downcast_ref::<datafusion::arrow::array::ListArray>()
                 .unwrap();
             let value: Vec<Option<String>> = (0..list_array.len())
@@ -486,7 +487,8 @@ pub(crate) fn encode_list(
         }
         DataType::LargeList(_) => {
             // Support for large lists
-            let list_array = arr.as_any()
+            let list_array = arr
+                .as_any()
                 .downcast_ref::<datafusion::arrow::array::LargeListArray>()
                 .unwrap();
             let value: Vec<Option<String>> = (0..list_array.len())
@@ -502,7 +504,8 @@ pub(crate) fn encode_list(
         }
         DataType::Map(_, _) => {
             // Support for map types
-            let map_array = arr.as_any()
+            let map_array = arr
+                .as_any()
                 .downcast_ref::<datafusion::arrow::array::MapArray>()
                 .unwrap();
             let value: Vec<Option<String>> = (0..map_array.len())
