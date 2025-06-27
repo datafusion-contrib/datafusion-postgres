@@ -4,10 +4,11 @@ use std::{str::FromStr, sync::Arc};
 use arrow::{
     array::{
         timezone::Tz, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        Decimal256Array, DurationMicrosecondArray, LargeBinaryArray, LargeStringArray,
-        PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
-        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+        Decimal256Array, DurationMicrosecondArray, LargeBinaryArray, LargeListArray,
+        LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray, Time32MillisecondArray,
+        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+        TimestampSecondArray,
     },
     datatypes::{
         DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,
@@ -20,10 +21,11 @@ use arrow::{
 use datafusion::arrow::{
     array::{
         timezone::Tz, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        Decimal256Array, DurationMicrosecondArray, LargeBinaryArray, LargeStringArray,
-        PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
-        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+        Decimal256Array, DurationMicrosecondArray, LargeBinaryArray, LargeListArray,
+        LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray, Time32MillisecondArray,
+        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+        TimestampSecondArray,
     },
     datatypes::{
         DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,
@@ -469,10 +471,7 @@ pub(crate) fn encode_list(
         DataType::List(_) => {
             // Support for nested lists (list of lists)
             // For now, convert to string representation
-            let list_array = arr
-                .as_any()
-                .downcast_ref::<datafusion::arrow::array::ListArray>()
-                .unwrap();
+            let list_array = arr.as_any().downcast_ref::<ListArray>().unwrap();
             let value: Vec<Option<String>> = (0..list_array.len())
                 .map(|i| {
                     if list_array.is_null(i) {
@@ -487,10 +486,7 @@ pub(crate) fn encode_list(
         }
         DataType::LargeList(_) => {
             // Support for large lists
-            let list_array = arr
-                .as_any()
-                .downcast_ref::<datafusion::arrow::array::LargeListArray>()
-                .unwrap();
+            let list_array = arr.as_any().downcast_ref::<LargeListArray>().unwrap();
             let value: Vec<Option<String>> = (0..list_array.len())
                 .map(|i| {
                     if list_array.is_null(i) {
@@ -504,10 +500,7 @@ pub(crate) fn encode_list(
         }
         DataType::Map(_, _) => {
             // Support for map types
-            let map_array = arr
-                .as_any()
-                .downcast_ref::<datafusion::arrow::array::MapArray>()
-                .unwrap();
+            let map_array = arr.as_any().downcast_ref::<MapArray>().unwrap();
             let value: Vec<Option<String>> = (0..map_array.len())
                 .map(|i| {
                     if map_array.is_null(i) {
