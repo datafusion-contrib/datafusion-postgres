@@ -1774,8 +1774,7 @@ pub fn setup_pg_catalog(
         .catalog(catalog_name)
         .ok_or_else(|| {
             DataFusionError::Configuration(format!(
-                "Catalog not found when registering pg_catalog: {}",
-                catalog_name
+                "Catalog not found when registering pg_catalog: {catalog_name}"
             ))
         })?
         .register_schema("pg_catalog", Arc::new(pg_catalog))?;

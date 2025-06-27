@@ -156,7 +156,7 @@ impl DfSessionService {
                     pgwire::error::ErrorInfo::new(
                         "ERROR".to_string(),
                         "42704".to_string(),
-                        format!("Unrecognized SHOW command: {}", query_lower),
+                        format!("Unrecognized SHOW command: {query_lower}"),
                     ),
                 ))),
             }
