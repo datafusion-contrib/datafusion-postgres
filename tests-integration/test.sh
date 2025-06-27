@@ -2,6 +2,36 @@
 
 set -e
 
+# Function to cleanup processes
+cleanup() {
+    echo "🧹 Cleaning up processes..."
+    for pid in $CSV_PID $TRANSACTION_PID $PARQUET_PID $RBAC_PID $SSL_PID; do
+        if [ ! -z "$pid" ]; then
+            kill -9 $pid 2>/dev/null || true
+        fi
+    done
+}
+
+# Trap to cleanup on exit
+trap cleanup EXIT
+
+# Function to wait for port to be available
+wait_for_port() {
+    local port=$1
+    local timeout=30
+    local count=0
+    
+    # Use netstat as fallback if lsof is not available
+    while (lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1) || (netstat -ln 2>/dev/null | grep ":$port " >/dev/null 2>&1); do
+        if [ $count -ge $timeout ]; then
+            echo "❌ Port $port still in use after ${timeout}s timeout"
+            exit 1
+        fi
+        sleep 1
+        count=$((count + 1))
+    done
+}
+
 echo "🚀 Running DataFusion PostgreSQL Integration Tests"
 echo "=================================================="
 
@@ -28,6 +58,7 @@ pip install -q psycopg
 echo ""
 echo "📊 Test 1: Enhanced CSV Data Loading & PostgreSQL Compatibility"
 echo "----------------------------------------------------------------"
+wait_for_port 5433
 ../target/debug/datafusion-postgres-cli -p 5433 --csv delhi:delhiclimate.csv &
 CSV_PID=$!
 sleep 5
@@ -53,9 +84,10 @@ sleep 3
 echo ""
 echo "🔐 Test 2: Transaction Support"
 echo "------------------------------"
+wait_for_port 5433
 ../target/debug/datafusion-postgres-cli -p 5433 --csv delhi:delhiclimate.csv &
 TRANSACTION_PID=$!
-sleep 3
+sleep 5
 
 if python3 test_transactions.py; then
     echo "✅ Transaction test passed"
@@ -72,9 +104,10 @@ sleep 3
 echo ""
 echo "📦 Test 3: Enhanced Parquet Data Loading & Advanced Data Types"
 echo "--------------------------------------------------------------"
+wait_for_port 5434
 ../target/debug/datafusion-postgres-cli -p 5434 --parquet all_types:all_types.parquet &
 PARQUET_PID=$!
-sleep 3
+sleep 5
 
 if python3 test_parquet.py; then
     echo "✅ Enhanced Parquet test passed"
@@ -85,11 +118,13 @@ else
 fi
 
 kill -9 $PARQUET_PID 2>/dev/null || true
+sleep 3
 
 # Test 4: Role-Based Access Control
 echo ""
 echo "🔐 Test 4: Role-Based Access Control (RBAC)"
 echo "--------------------------------------------"
+wait_for_port 5435
 ../target/debug/datafusion-postgres-cli -p 5435 --csv delhi:delhiclimate.csv &
 RBAC_PID=$!
 sleep 5
@@ -115,6 +150,7 @@ sleep 3
 echo ""
 echo "🔒 Test 5: SSL/TLS Security Features"
 echo "------------------------------------"
+wait_for_port 5436
 ../target/debug/datafusion-postgres-cli -p 5436 --csv delhi:delhiclimate.csv &
 SSL_PID=$!
 sleep 5
