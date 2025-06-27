@@ -479,7 +479,7 @@ pub(crate) fn encode_list(
                         None
                     } else {
                         // Convert nested list to string representation
-                        Some(format!("[nested_list_{}]", i))
+                        Some(format!("[nested_list_{i}]"))
                     }
                 })
                 .collect();
@@ -496,7 +496,7 @@ pub(crate) fn encode_list(
                     if list_array.is_null(i) {
                         None
                     } else {
-                        Some(format!("[large_list_{}]", i))
+                        Some(format!("[large_list_{i}]"))
                     }
                 })
                 .collect();
@@ -513,7 +513,7 @@ pub(crate) fn encode_list(
                     if map_array.is_null(i) {
                         None
                     } else {
-                        Some(format!("{{map_{}}}", i))
+                        Some(format!("{{map_{i}}}"))
                     }
                 })
                 .collect();
@@ -527,7 +527,7 @@ pub(crate) fn encode_list(
                     if arr.is_null(i) {
                         None
                     } else {
-                        Some(format!("union_{}", i))
+                        Some(format!("union_{i}"))
                     }
                 })
                 .collect();
@@ -540,7 +540,7 @@ pub(crate) fn encode_list(
                     if arr.is_null(i) {
                         None
                     } else {
-                        Some(format!("dict_{}", i))
+                        Some(format!("dict_{i}"))
                     }
                 })
                 .collect();
