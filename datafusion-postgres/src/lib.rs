@@ -85,14 +85,11 @@ pub async fn serve(
         if let (Some(cert_path), Some(key_path)) = (&opts.tls_cert_path, &opts.tls_key_path) {
             match setup_tls(cert_path, key_path) {
                 Ok(acceptor) => {
-                    println!(
-                        "TLS enabled using cert: {} and key: {}",
-                        cert_path, key_path
-                    );
+                    println!("TLS enabled using cert: {cert_path} and key: {key_path}");
                     Some(acceptor)
                 }
                 Err(e) => {
-                    eprintln!("Failed to setup TLS: {}. Running without encryption.", e);
+                    eprintln!("Failed to setup TLS: {e}. Running without encryption.");
                     None
                 }
             }
@@ -106,9 +103,9 @@ pub async fn serve(
     let listener = TcpListener::bind(&server_addr).await?;
 
     if tls_acceptor.is_some() {
-        println!("Listening on {} with TLS encryption", server_addr);
+        println!("Listening on {server_addr} with TLS encryption");
     } else {
-        println!("Listening on {} (unencrypted)", server_addr);
+        println!("Listening on {server_addr} (unencrypted)");
     }
 
     // Accept incoming connections

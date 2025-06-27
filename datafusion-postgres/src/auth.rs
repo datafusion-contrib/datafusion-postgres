@@ -182,7 +182,7 @@ impl AuthManager {
 
                 // Create predefined roles
                 if let Err(e) = auth_manager_spawn.create_predefined_roles().await {
-                    eprintln!("Failed to create predefined roles: {:?}", e);
+                    eprintln!("Failed to create predefined roles: {e:?}");
                 }
             }
         });
@@ -282,7 +282,7 @@ impl AuthManager {
                 pgwire::error::ErrorInfo::new(
                     "ERROR".to_string(),
                     "42704".to_string(), // undefined_object
-                    format!("role \"{}\" does not exist", role_name),
+                    format!("role \"{role_name}\" does not exist"),
                 ),
             )))
         }
@@ -306,7 +306,7 @@ impl AuthManager {
                 pgwire::error::ErrorInfo::new(
                     "ERROR".to_string(),
                     "42704".to_string(), // undefined_object
-                    format!("role \"{}\" does not exist", role_name),
+                    format!("role \"{role_name}\" does not exist"),
                 ),
             )))
         }
@@ -410,7 +410,7 @@ impl AuthManager {
             // Schema grants access to all tables in that schema
             (ResourceType::Schema(schema), ResourceType::Table(table)) => {
                 // For simplicity, assume table names are schema.table format
-                table.starts_with(&format!("{}.", schema))
+                table.starts_with(&format!("{schema}."))
             }
             _ => false,
         }
@@ -434,7 +434,7 @@ impl AuthManager {
                 pgwire::error::ErrorInfo::new(
                     "ERROR".to_string(),
                     "42704".to_string(), // undefined_object
-                    format!("role \"{}\" does not exist", child_role),
+                    format!("role \"{child_role}\" does not exist"),
                 ),
             )))
         }
@@ -456,7 +456,7 @@ impl AuthManager {
                 pgwire::error::ErrorInfo::new(
                     "ERROR".to_string(),
                     "42704".to_string(), // undefined_object
-                    format!("role \"{}\" does not exist", child_role),
+                    format!("role \"{child_role}\" does not exist"),
                 ),
             )))
         }
@@ -623,7 +623,7 @@ impl StartupHandler for AuthStartupHandler {
                     pgwire::error::ErrorInfo::new(
                         "FATAL".to_string(),
                         "28P01".to_string(), // invalid_password
-                        format!("password authentication failed for user \"{}\"", username),
+                        format!("password authentication failed for user \"{username}\""),
                     ),
                 )));
             }
@@ -670,7 +670,7 @@ impl AuthSource for SimpleAuthSource {
             pgwire::error::ErrorInfo::new(
                 "FATAL".to_string(),
                 "28P01".to_string(), // invalid_password
-                format!("password authentication failed for user \"{}\"", username),
+                format!("password authentication failed for user \"{username}\""),
             ),
         )))
     }

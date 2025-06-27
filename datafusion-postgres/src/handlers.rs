@@ -146,7 +146,7 @@ impl DfSessionService {
                 pgwire::error::ErrorInfo::new(
                     "ERROR".to_string(),
                     "42501".to_string(), // insufficient_privilege
-                    format!("permission denied for user \"{}\"", username),
+                    format!("permission denied for user \"{username}\""),
                 ),
             )));
         }
