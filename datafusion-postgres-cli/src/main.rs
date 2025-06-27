@@ -111,7 +111,7 @@ impl Opt {
                     }
                 }
                 Err(e) => {
-                    return Err(format!("Failed to load directory {}: {}", directory, e).into());
+                    return Err(format!("Failed to load directory {directory}: {e}").into());
                 }
             }
         }
@@ -128,8 +128,8 @@ async fn setup_session_context(
         session_context
             .register_csv(table_name, table_path, CsvReadOptions::default())
             .await
-            .map_err(|e| format!("Failed to register CSV table '{}': {}", table_name, e))?;
-        println!("Loaded {} as table {}", table_path, table_name);
+            .map_err(|e| format!("Failed to register CSV table '{table_name}': {e}"))?;
+        println!("Loaded {table_path} as table {table_name}");
     }
 
     // Register JSON tables
@@ -137,8 +137,8 @@ async fn setup_session_context(
         session_context
             .register_json(table_name, table_path, NdJsonReadOptions::default())
             .await
-            .map_err(|e| format!("Failed to register JSON table '{}': {}", table_name, e))?;
-        println!("Loaded {} as table {}", table_path, table_name);
+            .map_err(|e| format!("Failed to register JSON table '{table_name}': {e}"))?;
+        println!("Loaded {table_path} as table {table_name}");
     }
 
     // Register Arrow tables
@@ -150,8 +150,8 @@ async fn setup_session_context(
         session_context
             .register_arrow(table_name, table_path, ArrowReadOptions::default())
             .await
-            .map_err(|e| format!("Failed to register Arrow table '{}': {}", table_name, e))?;
-        println!("Loaded {} as table {}", table_path, table_name);
+            .map_err(|e| format!("Failed to register Arrow table '{table_name}': {e}"))?;
+        println!("Loaded {table_path} as table {table_name}");
     }
 
     // Register Parquet tables
@@ -163,8 +163,8 @@ async fn setup_session_context(
         session_context
             .register_parquet(table_name, table_path, ParquetReadOptions::default())
             .await
-            .map_err(|e| format!("Failed to register Parquet table '{}': {}", table_name, e))?;
-        println!("Loaded {} as table {}", table_path, table_name);
+            .map_err(|e| format!("Failed to register Parquet table '{table_name}': {e}"))?;
+        println!("Loaded {table_path} as table {table_name}");
     }
 
     // Register Avro tables
@@ -172,8 +172,8 @@ async fn setup_session_context(
         session_context
             .register_avro(table_name, table_path, AvroReadOptions::default())
             .await
-            .map_err(|e| format!("Failed to register Avro table '{}': {}", table_name, e))?;
-        println!("Loaded {} as table {}", table_path, table_name);
+            .map_err(|e| format!("Failed to register Avro table '{table_name}': {e}"))?;
+        println!("Loaded {table_path} as table {table_name}");
     }
 
     // Register pg_catalog
@@ -202,7 +202,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     serve(Arc::new(session_context), &server_options)
         .await
-        .map_err(|e| format!("Failed to run server: {}", e))?;
+        .map_err(|e| format!("Failed to run server: {e}"))?;
 
     Ok(())
 }
