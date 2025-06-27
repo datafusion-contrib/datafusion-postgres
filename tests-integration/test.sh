@@ -7,10 +7,11 @@ echo "=================================================="
 
 # Build the project
 echo "Building datafusion-postgres..."
+cd ..
 cargo build
+cd tests-integration
 
 # Set up test environment
-cd tests-integration
 
 # Create virtual environment if it doesn't exist
 if [ ! -d "test_env" ]; then
@@ -29,7 +30,13 @@ echo "📊 Test 1: Enhanced CSV Data Loading & PostgreSQL Compatibility"
 echo "----------------------------------------------------------------"
 ../target/debug/datafusion-postgres-cli -p 5433 --csv delhi:delhiclimate.csv &
 CSV_PID=$!
-sleep 3
+sleep 5
+
+# Check if server is actually running
+if ! ps -p $CSV_PID > /dev/null 2>&1; then
+    echo "❌ Server failed to start"
+    exit 1
+fi
 
 if python3 test_csv.py; then
     echo "✅ Enhanced CSV test passed"
@@ -79,6 +86,55 @@ fi
 
 kill -9 $PARQUET_PID 2>/dev/null || true
 
+# Test 4: Role-Based Access Control
+echo ""
+echo "🔐 Test 4: Role-Based Access Control (RBAC)"
+echo "--------------------------------------------"
+../target/debug/datafusion-postgres-cli -p 5435 --csv delhi:delhiclimate.csv &
+RBAC_PID=$!
+sleep 5
+
+# Check if server is actually running
+if ! ps -p $RBAC_PID > /dev/null 2>&1; then
+    echo "❌ RBAC server failed to start"
+    exit 1
+fi
+
+if python3 test_rbac.py; then
+    echo "✅ RBAC test passed"
+else
+    echo "❌ RBAC test failed"
+    kill -9 $RBAC_PID 2>/dev/null || true
+    exit 1
+fi
+
+kill -9 $RBAC_PID 2>/dev/null || true
+sleep 3
+
+# Test 5: SSL/TLS Security
+echo ""
+echo "🔒 Test 5: SSL/TLS Security Features"
+echo "------------------------------------"
+../target/debug/datafusion-postgres-cli -p 5436 --csv delhi:delhiclimate.csv &
+SSL_PID=$!
+sleep 5
+
+# Check if server is actually running
+if ! ps -p $SSL_PID > /dev/null 2>&1; then
+    echo "❌ SSL server failed to start"
+    exit 1
+fi
+
+if python3 test_ssl.py; then
+    echo "✅ SSL/TLS test passed"
+else
+    echo "❌ SSL/TLS test failed"
+    kill -9 $SSL_PID 2>/dev/null || true
+    exit 1
+fi
+
+kill -9 $SSL_PID 2>/dev/null || true
+
 echo ""
 echo "🎉 All enhanced integration tests passed!"
 echo "=========================================="
@@ -90,5 +146,7 @@ echo "  ✅ Enhanced Parquet data loading with advanced data types"
 echo "  ✅ Array types and complex data type support"
 echo "  ✅ Improved pg_catalog system tables"
 echo "  ✅ PostgreSQL function compatibility"
+echo "  ✅ Role-based access control (RBAC)"
+echo "  ✅ SSL/TLS encryption support"
 echo ""
-echo "🚀 Ready for production PostgreSQL workloads!"
+echo "🚀 Ready for secure production PostgreSQL workloads!"

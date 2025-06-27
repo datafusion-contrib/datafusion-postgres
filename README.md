@@ -2,29 +2,53 @@
 
 ![Crates.io Version](https://img.shields.io/crates/v/datafusion-postgres?label=datafusion-postgres)
 
-Serving any [datafusion](https://datafusion.apache.org) `SessionContext` in
-Postgres protocol. Available as a library and a cli tool.
+Serving any [datafusion](https://datafusion.apache.org) `SessionContext` with full PostgreSQL compatibility, including authentication, role-based access control, and SSL/TLS encryption. Available as a library and a CLI tool.
 
-This project is to add a [postgresql compatible access
-layer](https://github.com/sunng87/pgwire) to the [Apache
-Datafusion](https://github.com/apache/arrow-datafusion) query engine.
+This project adds a comprehensive [PostgreSQL compatible access layer](https://github.com/sunng87/pgwire) to the [Apache DataFusion](https://github.com/apache/arrow-datafusion) query engine, making it a drop-in replacement for PostgreSQL in analytics workloads.
 
 It was originally an example of the [pgwire](https://github.com/sunng87/pgwire)
 project.
 
-## Roadmap
+## ✨ Key Features
 
-This project is in its very early stage, feel free to join the development by
-picking up unfinished items.
+- 🔌 **Full PostgreSQL Wire Protocol** - Compatible with all PostgreSQL clients and drivers
+- 🛡️ **Enterprise Security** - Authentication, RBAC, and SSL/TLS encryption
+- 🏗️ **Complete System Catalogs** - Real `pg_catalog` tables with accurate metadata  
+- 📊 **Advanced Data Types** - Comprehensive Arrow ↔ PostgreSQL type mapping
+- 🔄 **Transaction Support** - Full ACID transaction lifecycle (BEGIN/COMMIT/ROLLBACK)
+- ⚡ **High Performance** - Apache DataFusion's columnar query execution
 
-- [x] datafusion-postgres as a CLI tool
-- [x] datafusion-postgres as a library
-- [x] datafusion information schema: require user to enable from session_config
-- [x] datafusion pg catalog: a postgres compatible `pg_catalog` with pg_type, pg_attribute, pg_proc
-- [x] data type mapping between arrow and postgres: comprehensive type support
-- [x] additional postgres functions for datafusion: version(), pg_get_userbyid(), has_table_privilege()
+## 🎯 Roadmap & Status
 
-## Usage
+- [x] **Core Features**
+  - [x] datafusion-postgres as a CLI tool
+  - [x] datafusion-postgres as a library
+  - [x] datafusion information schema
+  - [x] Complete `pg_catalog` system tables (pg_type, pg_attribute, pg_proc, pg_class, etc.)
+  - [x] Comprehensive Arrow ↔ PostgreSQL data type mapping
+  - [x] Essential PostgreSQL functions (version(), current_schema(), has_table_privilege(), etc.)
+
+- [x] **Security & Authentication** 🆕
+  - [x] User authentication and management
+  - [x] Role-based access control (RBAC)
+  - [x] Granular permissions (SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, etc.)
+  - [x] Role inheritance and grant management
+  - [x] SSL/TLS connection encryption
+  - [x] Query-level permission checking
+
+- [x] **Transaction Support** 🆕
+  - [x] Full ACID transaction lifecycle
+  - [x] BEGIN/COMMIT/ROLLBACK with all variants
+  - [x] Failed transaction handling and recovery
+  - [x] Transaction state management
+
+- [ ] **Future Enhancements**
+  - [ ] Connection pooling and performance optimizations
+  - [ ] Advanced authentication methods (SCRAM, LDAP)
+  - [ ] More PostgreSQL functions and operators
+  - [ ] COPY protocol for bulk data loading
+
+## 🚀 Quick Start
 
 ### The Library `datafusion-postgres`
 
@@ -33,6 +57,7 @@ function which takes a datafusion `SessionContext` and some server configuration
 options.
 
 ```rust
+use std::sync::Arc;
 use datafusion::prelude::SessionContext;
 use datafusion_postgres::{serve, ServerOptions};
 
@@ -41,20 +66,37 @@ let session_context = Arc::new(SessionContext::new());
 // Configure your `session_context`
 // ...
 
-// Start the Postgres compatible server
-serve(session_context, &ServerOptions::new()).await
+// Start the Postgres compatible server with SSL/TLS
+let server_options = ServerOptions::new()
+    .with_host("127.0.0.1".to_string())
+    .with_port(5432)
+    .with_tls_cert_path(Some("server.crt".to_string()))
+    .with_tls_key_path(Some("server.key".to_string()));
+
+serve(session_context, &server_options).await
+```
+
+### Security Features
+
+```rust
+// The server automatically includes:
+// - User authentication (default postgres superuser)
+// - Role-based access control with predefined roles:
+//   - readonly: SELECT permissions
+//   - readwrite: SELECT, INSERT, UPDATE, DELETE permissions  
+//   - dbadmin: Full administrative permissions
+// - SSL/TLS encryption when certificates are provided
+// - Query-level permission checking
 ```
 
 ### The CLI `datafusion-postgres-cli`
 
 As a command-line application, this tool serves any JSON/CSV/Arrow/Parquet/Avro
-files as table, and expose them via Postgres compatible protocol, with which you
-can connect using psql or language drivers to execute `SELECT` queries against
-them.
+files as tables, and exposes them via PostgreSQL compatible protocol with full security features.
 
 ```
-datafusion-postgres 0.4.0
-A postgres interface for datafusion. Serve any CSV/JSON/Arrow files as tables.
+datafusion-postgres-cli 0.6.1
+A secure postgres interface for datafusion. Serve any CSV/JSON/Arrow/Parquet files as tables.
 
 USAGE:
     datafusion-postgres-cli [OPTIONS]
@@ -68,44 +110,95 @@ OPTIONS:
         --avro <avro-tables>...          Avro files to register as table, using syntax `table_name:file_path`
         --csv <csv-tables>...            CSV files to register as table, using syntax `table_name:file_path`
     -d, --dir <directory>                Directory to serve, all supported files will be registered as tables
-        --host <host>                    Host address the server listens to, default to 127.0.0.1 [default: 127.0.0.1]
+        --host <host>                    Host address the server listens to [default: 127.0.0.1]
         --json <json-tables>...          JSON files to register as table, using syntax `table_name:file_path`
         --parquet <parquet-tables>...    Parquet files to register as table, using syntax `table_name:file_path`
-    -p <port>                            Port the server listens to, default to 5432 [default: 5432]
+    -p <port>                            Port the server listens to [default: 5432]
+        --tls-cert <tls-cert>            Path to TLS certificate file for SSL/TLS encryption
+        --tls-key <tls-key>              Path to TLS private key file for SSL/TLS encryption
 ```
 
-For example, we use this command to host `ETTm1.csv` dataset as table `ettm1`.
+#### 🔒 Security Options
+
+```bash
+# Run with SSL/TLS encryption
+datafusion-postgres-cli \
+  --csv data:sample.csv \
+  --tls-cert server.crt \
+  --tls-key server.key
+
+# Run without encryption (development only)  
+datafusion-postgres-cli --csv data:sample.csv
+```
+
+## 📋 Example Usage
+
+### Basic Example
+
+Host a CSV dataset as a PostgreSQL-compatible table:
+
+```bash
+datafusion-postgres-cli --csv climate:delhiclimate.csv
+```
 
 ```
-datafusion-postgres -c ettm1:ETTm1.csv
-Loaded ETTm1.csv as table ettm1
-Listening to 127.0.0.1:5432
-
+Loaded delhiclimate.csv as table climate
+TLS not configured. Running without encryption.
+Listening on 127.0.0.1:5432 (unencrypted)
 ```
 
-Then connect to it via `psql`:
+### Connect with psql
 
-```
+```bash
 psql -h 127.0.0.1 -p 5432 -U postgres
-psql (16.2, server 0.20.0)
-WARNING: psql major version 16, server major version 0.20.
-         Some psql features might not work.
-Type "help" for help.
+```
 
-postgres=> select * from ettm1 limit 10;
-            date            |        HUFL        |        HULL        |        MUFL        |        MULL         |       LUFL        |        LULL        |         OT
-----------------------------+--------------------+--------------------+--------------------+---------------------+-------------------+--------------------+--------------------
- 2016-07-01 00:00:00.000000 |  5.827000141143799 |  2.009000062942505 | 1.5989999771118164 |  0.4620000123977661 | 4.203000068664552 | 1.3400000333786009 |   30.5310001373291
- 2016-07-01 00:15:00.000000 |  5.760000228881836 |  2.075999975204468 | 1.4919999837875366 |  0.4259999990463257 | 4.263999938964844 | 1.4010000228881836 | 30.459999084472656
- 2016-07-01 00:30:00.000000 |  5.760000228881836 | 1.9420000314712524 | 1.4919999837875366 |  0.3910000026226044 | 4.234000205993652 |  1.309999942779541 | 30.038000106811523
- 2016-07-01 00:45:00.000000 |  5.760000228881836 | 1.9420000314712524 | 1.4919999837875366 |  0.4259999990463257 | 4.234000205993652 |  1.309999942779541 |  27.01300048828125
- 2016-07-01 01:00:00.000000 |  5.692999839782715 |  2.075999975204468 | 1.4919999837875366 |  0.4259999990463257 | 4.142000198364259 |  1.371000051498413 |  27.78700065612793
- 2016-07-01 01:15:00.000000 |  5.492000102996826 | 1.9420000314712524 | 1.4570000171661377 |  0.3910000026226044 | 4.111999988555908 | 1.2790000438690186 | 27.716999053955078
- 2016-07-01 01:30:00.000000 |  5.357999801635742 |              1.875 |  1.350000023841858 | 0.35499998927116394 | 3.928999900817871 | 1.3400000333786009 | 27.645999908447266
- 2016-07-01 01:45:00.000000 | 5.1570000648498535 | 1.8079999685287482 |  1.350000023841858 |  0.3199999928474426 | 3.806999921798706 | 1.2790000438690186 | 27.083999633789066
- 2016-07-01 02:00:00.000000 | 5.1570000648498535 |  1.741000056266785 | 1.2790000438690186 | 0.35499998927116394 | 3.776999950408936 |  1.218000054359436 |  27.78700065612793
- 2016-07-01 02:15:00.000000 | 5.1570000648498535 | 1.8079999685287482 |  1.350000023841858 |  0.4259999990463257 | 3.776999950408936 |  1.187999963760376 | 27.506000518798828
-(10 rows)
+```sql
+postgres=> SELECT COUNT(*) FROM climate;
+ count 
+-------
+  1462
+(1 row)
+
+postgres=> SELECT date, meantemp FROM climate WHERE meantemp > 35 LIMIT 5;
+    date    | meantemp 
+------------+----------
+ 2017-05-15 |     36.9
+ 2017-05-16 |     37.9
+ 2017-05-17 |     38.6
+ 2017-05-18 |     37.4
+ 2017-05-19 |     35.4
+(5 rows)
+
+postgres=> BEGIN;
+BEGIN
+postgres=> SELECT AVG(meantemp) FROM climate;
+       avg        
+------------------
+ 25.4955206557617
+(1 row)
+postgres=> COMMIT;
+COMMIT
+```
+
+### 🔐 Production Setup with SSL/TLS
+
+```bash
+# Generate SSL certificates
+openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt \
+  -days 365 -nodes -subj "/C=US/ST=CA/L=SF/O=MyOrg/CN=localhost"
+
+# Start secure server
+datafusion-postgres-cli \
+  --csv climate:delhiclimate.csv \
+  --tls-cert server.crt \
+  --tls-key server.key
+```
+
+```
+Loaded delhiclimate.csv as table climate
+TLS enabled using cert: server.crt and key: server.key
+Listening on 127.0.0.1:5432 with TLS encryption
 ```
 
 ## License

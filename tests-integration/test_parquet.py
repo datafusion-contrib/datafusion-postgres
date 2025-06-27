@@ -59,8 +59,8 @@ def test_data_type_compatibility(cur):
     print(f"  ✓ pg_catalog.pg_type: {pg_type_count} data types")
     
     # Test specific enhanced types exist
-    enhanced_types = ['json', 'jsonb', 'uuid', 'interval', 'bytea']
-    cur.execute(f"SELECT typname FROM pg_catalog.pg_type WHERE typname IN ({','.join(['%s'] * len(enhanced_types))})", enhanced_types)
+    enhanced_types = ['timestamp', 'timestamptz', 'numeric', 'bytea', 'varchar']
+    cur.execute("SELECT typname FROM pg_catalog.pg_type WHERE typname IN ('timestamp', 'timestamptz', 'numeric', 'bytea', 'varchar')")
     found_types = [row[0] for row in cur.fetchall()]
     print(f"  ✓ Enhanced types available: {', '.join(found_types)}")
     

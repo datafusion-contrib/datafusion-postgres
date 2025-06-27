@@ -1770,8 +1770,8 @@ pub fn create_pg_get_userbyid_udf() -> ScalarUDF {
     )
 }
 
-pub fn create_has_table_privilege_udf() -> ScalarUDF {
-    // Define the function implementation
+pub fn create_has_table_privilege_3param_udf() -> ScalarUDF {
+    // Define the function implementation for 3-parameter version
     let func = move |args: &[ColumnarValue]| {
         let args = ColumnarValue::values_to_arrays(args)?;
         let _user = &args[0]; // User (can be name or OID)
@@ -1790,6 +1790,31 @@ pub fn create_has_table_privilege_udf() -> ScalarUDF {
     create_udf(
         "has_table_privilege",
         vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],
+        DataType::Boolean,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_has_table_privilege_2param_udf() -> ScalarUDF {
+    // Define the function implementation for 2-parameter version (current user, table, privilege)
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let _table = &args[0]; // Table (can be name or OID)
+        let _privilege = &args[1]; // Privilege type (SELECT, INSERT, etc.)
+
+        // For now, always return true (full access for current user)
+        let mut builder = BooleanArray::builder(1);
+        builder.append_value(true);
+        let array: ArrayRef = Arc::new(builder.finish());
+
+        Ok(ColumnarValue::Array(array))
+    };
+
+    // Wrap the implementation in a scalar function
+    create_udf(
+        "has_table_privilege",
+        vec![DataType::Utf8, DataType::Utf8],
         DataType::Boolean,
         Volatility::Stable,
         Arc::new(func),
@@ -1815,7 +1840,7 @@ pub fn setup_pg_catalog(
     session_context.register_udf(create_current_schemas_udf());
     session_context.register_udf(create_version_udf());
     session_context.register_udf(create_pg_get_userbyid_udf());
-    session_context.register_udf(create_has_table_privilege_udf());
+    session_context.register_udf(create_has_table_privilege_2param_udf());
 
     Ok(())
 }

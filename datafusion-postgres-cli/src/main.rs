@@ -40,6 +40,12 @@ struct Opt {
     /// Host address the server listens to, default to 127.0.0.1
     #[structopt(long("host"), default_value = "127.0.0.1")]
     host: String,
+    /// Path to TLS certificate file
+    #[structopt(long("tls-cert"))]
+    tls_cert: Option<String>,
+    /// Path to TLS private key file
+    #[structopt(long("tls-key"))]
+    tls_key: Option<String>,
 }
 
 fn parse_table_def(table_def: &str) -> (&str, &str) {
@@ -190,7 +196,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let server_options = ServerOptions::new()
         .with_host(opts.host)
-        .with_port(opts.port);
+        .with_port(opts.port)
+        .with_tls_cert_path(opts.tls_cert)
+        .with_tls_key_path(opts.tls_key);
 
     serve(Arc::new(session_context), &server_options)
         .await

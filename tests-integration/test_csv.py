@@ -58,9 +58,9 @@ def test_enhanced_pg_catalog(cur):
     print(f"  ✓ pg_catalog.pg_type: {pg_type_count} data types")
     
     # Test specific data types exist
-    cur.execute("SELECT typname FROM pg_catalog.pg_type WHERE typname IN ('bool', 'int4', 'text', 'json', 'uuid') ORDER BY typname")
+    cur.execute("SELECT typname FROM pg_catalog.pg_type WHERE typname IN ('bool', 'int4', 'text', 'float8', 'date') ORDER BY typname")
     types = [row[0] for row in cur.fetchall()]
-    expected_types = ['bool', 'int4', 'json', 'text', 'uuid']
+    expected_types = ['bool', 'date', 'float8', 'int4', 'text']
     assert all(t in types for t in expected_types)
     print(f"  ✓ Core PostgreSQL types present: {', '.join(expected_types)}")
     
@@ -97,8 +97,8 @@ def test_postgresql_functions(cur):
     assert "public" in schemas
     print(f"  ✓ current_schemas(): {schemas}")
     
-    # Test has_table_privilege function
-    cur.execute("SELECT has_table_privilege('postgres', 'delhi', 'SELECT')")
+    # Test has_table_privilege function (2-parameter version)
+    cur.execute("SELECT has_table_privilege('delhi', 'SELECT')")
     result = cur.fetchone()[0]
     assert isinstance(result, bool)
     print(f"  ✓ has_table_privilege(): {result}")

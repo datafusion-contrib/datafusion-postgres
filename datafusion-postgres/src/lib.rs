@@ -1,13 +1,22 @@
 mod handlers;
 pub mod pg_catalog;
 
+use std::fs::File;
+use std::io::{BufReader, Error as IOError, ErrorKind};
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
+
+pub mod auth;
 use getset::{Getters, Setters, WithSetters};
 use pgwire::tokio::process_socket;
+use rustls_pemfile::{certs, pkcs8_private_keys};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::net::TcpListener;
+use tokio_rustls::rustls::{self, ServerConfig};
+use tokio_rustls::TlsAcceptor;
 
+use crate::auth::AuthManager;
 use handlers::HandlerFactory;
 pub use handlers::{DfSessionService, Parser};
 
@@ -16,6 +25,8 @@ pub use handlers::{DfSessionService, Parser};
 pub struct ServerOptions {
     host: String,
     port: u16,
+    tls_cert_path: Option<String>,
+    tls_key_path: Option<String>,
 }
 
 impl ServerOptions {
@@ -29,8 +40,33 @@ impl Default for ServerOptions {
         ServerOptions {
             host: "127.0.0.1".to_string(),
             port: 5432,
+            tls_cert_path: None,
+            tls_key_path: None,
         }
     }
+}
+
+/// Set up TLS configuration if certificate and key paths are provided
+fn setup_tls(cert_path: &str, key_path: &str) -> Result<TlsAcceptor, IOError> {
+    // Install default crypto provider for rustls
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let cert = certs(&mut BufReader::new(File::open(cert_path)?))
+        .collect::<Result<Vec<CertificateDer>, IOError>>()?;
+
+    let key = pkcs8_private_keys(&mut BufReader::new(File::open(key_path)?))
+        .map(|key| key.map(PrivateKeyDer::from))
+        .collect::<Result<Vec<PrivateKeyDer>, IOError>>()?
+        .into_iter()
+        .next()
+        .ok_or_else(|| IOError::new(ErrorKind::InvalidInput, "No private key found"))?;
+
+    let config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(cert, key)
+        .map_err(|err| IOError::new(ErrorKind::InvalidInput, err))?;
+
+    Ok(TlsAcceptor::from(Arc::new(config)))
 }
 
 /// Serve the Datafusion `SessionContext` with Postgres protocol.
@@ -38,25 +74,53 @@ pub async fn serve(
     session_context: Arc<SessionContext>,
     opts: &ServerOptions,
 ) -> Result<(), std::io::Error> {
-    // Create the handler factory with the session context and catalog name
-    let factory = Arc::new(HandlerFactory(Arc::new(DfSessionService::new(
-        session_context,
-    ))));
+    // Create authentication manager
+    let auth_manager = Arc::new(AuthManager::new());
+
+    // Create the handler factory with authentication
+    let factory = Arc::new(HandlerFactory::new(session_context, auth_manager));
+
+    // Set up TLS if configured
+    let tls_acceptor =
+        if let (Some(cert_path), Some(key_path)) = (&opts.tls_cert_path, &opts.tls_key_path) {
+            match setup_tls(cert_path, key_path) {
+                Ok(acceptor) => {
+                    println!(
+                        "TLS enabled using cert: {} and key: {}",
+                        cert_path, key_path
+                    );
+                    Some(acceptor)
+                }
+                Err(e) => {
+                    eprintln!("Failed to setup TLS: {}. Running without encryption.", e);
+                    None
+                }
+            }
+        } else {
+            println!("TLS not configured. Running without encryption.");
+            None
+        };
 
     // Bind to the specified host and port
     let server_addr = format!("{}:{}", opts.host, opts.port);
     let listener = TcpListener::bind(&server_addr).await?;
-    println!("Listening on {server_addr}");
+
+    if tls_acceptor.is_some() {
+        println!("Listening on {} with TLS encryption", server_addr);
+    } else {
+        println!("Listening on {} (unencrypted)", server_addr);
+    }
 
     // Accept incoming connections
     loop {
         match listener.accept().await {
             Ok((socket, addr)) => {
                 let factory_ref = factory.clone();
+                let tls_acceptor_ref = tls_acceptor.clone();
                 println!("Accepted connection from {addr}");
 
                 tokio::spawn(async move {
-                    if let Err(e) = process_socket(socket, None, factory_ref).await {
+                    if let Err(e) = process_socket(socket, tls_acceptor_ref, factory_ref).await {
                         eprintln!("Error processing socket: {e}");
                     }
                 });
