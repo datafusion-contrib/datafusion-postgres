@@ -119,7 +119,6 @@ pub async fn serve(
                 tokio::spawn(async move {
                     if let Err(e) = process_socket(socket, tls_acceptor_ref, factory_ref).await {
                         eprintln!("Error processing socket: {e}");
-
                     }
                 });
             }

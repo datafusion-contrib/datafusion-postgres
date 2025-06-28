@@ -534,8 +534,7 @@ pub fn encode_value<T: Encoder>(
                 .or_else(|| get_dict_values!(UInt64Type))
                 .ok_or_else(|| {
                     ToSqlError::from(format!(
-                      "Unsupported dictionary key type for value type {value_type}"
-
+                        "Unsupported dictionary key type for value type {value_type}"
                     ))
                 })?;
 
