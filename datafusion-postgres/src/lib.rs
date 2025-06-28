@@ -9,7 +9,7 @@ use datafusion::prelude::SessionContext;
 
 pub mod auth;
 use getset::{Getters, Setters, WithSetters};
-use log::{info, warn};
+
 use pgwire::tokio::process_socket;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
