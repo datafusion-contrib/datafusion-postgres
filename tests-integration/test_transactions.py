@@ -5,7 +5,6 @@ Tests BEGIN, COMMIT, ROLLBACK, and failed transaction handling.
 """
 
 import psycopg
-import pytest
 
 
 def main():
