@@ -25,3 +25,6 @@ pgwire = { workspace = true, features = ["server-api-ring", "scram"] }
 postgres-types.workspace = true
 rust_decimal.workspace = true
 tokio = { version = "1.45", features = ["sync", "net"] }
+tokio-rustls = "0.26"
+rustls-pemfile = "2.0"
+rustls-pki-types = "1.0"

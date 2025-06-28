@@ -70,7 +70,9 @@ jobs:
         override: true
     - run: |
         pip install psycopg
-    - run: ./tests-integration/test.sh
+    - run: |
+        cd tests-integration
+        ./test.sh
 
   msrv:
     name: MSRV
