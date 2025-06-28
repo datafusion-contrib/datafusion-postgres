@@ -9,6 +9,7 @@ use datafusion::prelude::SessionContext;
 
 pub mod auth;
 use getset::{Getters, Setters, WithSetters};
+use log::{info, warn};
 use pgwire::tokio::process_socket;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
@@ -101,7 +102,6 @@ pub async fn serve(
     // Bind to the specified host and port
     let server_addr = format!("{}:{}", opts.host, opts.port);
     let listener = TcpListener::bind(&server_addr).await?;
-
     if tls_acceptor.is_some() {
         println!("Listening on {server_addr} with TLS encryption");
     } else {
@@ -119,6 +119,7 @@ pub async fn serve(
                 tokio::spawn(async move {
                     if let Err(e) = process_socket(socket, tls_acceptor_ref, factory_ref).await {
                         eprintln!("Error processing socket: {e}");
+
                     }
                 });
             }

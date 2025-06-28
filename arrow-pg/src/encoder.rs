@@ -142,6 +142,15 @@ fn get_utf8_view_value(arr: &Arc<dyn Array>, idx: usize) -> Option<&str> {
     })
 }
 
+fn get_binary_view_value(arr: &Arc<dyn Array>, idx: usize) -> Option<&[u8]> {
+    (!arr.is_null(idx)).then(|| {
+        arr.as_any()
+            .downcast_ref::<BinaryViewArray>()
+            .unwrap()
+            .value(idx)
+    })
+}
+
 fn get_utf8_value(arr: &Arc<dyn Array>, idx: usize) -> Option<&str> {
     (!arr.is_null(idx)).then(|| {
         arr.as_any()
@@ -160,12 +169,15 @@ fn get_large_utf8_value(arr: &Arc<dyn Array>, idx: usize) -> Option<&str> {
     })
 }
 
-fn get_binary_value(arr: &Arc<dyn Array>, idx: usize) -> Option<&[u8]> {
+fn get_binary_value(arr: &Arc<dyn Array>, idx: usize) -> Option<String> {
     (!arr.is_null(idx)).then(|| {
-        arr.as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap()
-            .value(idx)
+        String::from_utf8_lossy(
+            arr.as_any()
+                .downcast_ref::<BinaryArray>()
+                .unwrap()
+                .value(idx),
+        )
+        .to_string()
     })
 }
 
@@ -333,6 +345,11 @@ pub fn encode_value<T: Encoder>(
         }
         DataType::Utf8View => encoder.encode_field_with_type_and_format(
             &get_utf8_view_value(arr, idx),
+            type_,
+            format,
+        )?,
+        DataType::BinaryView => encoder.encode_field_with_type_and_format(
+            &get_binary_view_value(arr, idx),
             type_,
             format,
         )?,
@@ -517,7 +534,8 @@ pub fn encode_value<T: Encoder>(
                 .or_else(|| get_dict_values!(UInt64Type))
                 .ok_or_else(|| {
                     ToSqlError::from(format!(
-                        "Unsupported dictionary key type for value type {value_type}"
+                      "Unsupported dictionary key type for value type {value_type}"
+
                     ))
                 })?;
 

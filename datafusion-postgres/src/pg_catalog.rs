@@ -1830,7 +1830,7 @@ pub fn setup_pg_catalog(
     session_context
         .catalog(catalog_name)
         .ok_or_else(|| {
-            DataFusionError::Configuration(format!(
+            DataFusionError::Configuration(format!(              
                 "Catalog not found when registering pg_catalog: {catalog_name}"
             ))
         })?
