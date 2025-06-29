@@ -111,14 +111,14 @@ pub async fn serve(
     // Accept incoming connections
     loop {
         match listener.accept().await {
-            Ok((socket, addr)) => {
+            Ok((socket, _addr)) => {
                 let factory_ref = factory.clone();
                 let tls_acceptor_ref = tls_acceptor.clone();
-                println!("Accepted connection from {addr}");
+                // Connection accepted from {addr} - log appropriately based on your logging strategy
 
                 tokio::spawn(async move {
-                    if let Err(e) = process_socket(socket, tls_acceptor_ref, factory_ref).await {
-                        eprintln!("Error processing socket: {e}");
+                    if let Err(_e) = process_socket(socket, tls_acceptor_ref, factory_ref).await {
+                        // Log error or handle appropriately based on your logging strategy
                     }
                 });
             }

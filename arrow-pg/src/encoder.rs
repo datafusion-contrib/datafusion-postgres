@@ -262,7 +262,7 @@ fn get_numeric_128_value(
     let value = array.value(idx);
     Decimal::try_from_i128_with_scale(value, scale)
         .map_err(|e| {
-            let message = match e {
+            let error_code = match e {
                 rust_decimal::Error::ExceedsMaximumPossibleValue => {
                     "22003" // numeric_value_out_of_range
                 }
@@ -280,8 +280,8 @@ fn get_numeric_128_value(
             };
             PgWireError::UserError(Box::new(ErrorInfo::new(
                 "ERROR".to_string(),
-                message.to_string(),
-                format!("Numeric value conversion failed: {e:?}"),
+                error_code.to_string(),
+                format!("Numeric value conversion failed: {e}"),
             )))
         })
         .map(Some)

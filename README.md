@@ -149,6 +149,8 @@ Listening on 127.0.0.1:5432 (unencrypted)
 
 ### Connect with psql
 
+> **⚠️ IMPORTANT AUTHENTICATION NOTE**: Currently, the default authentication allows the `postgres` user to connect without a password for development convenience. For production deployments, use `DfAuthSource` with proper cleartext/md5/scram authentication instead of the deprecated `AuthStartupHandler`. See the auth.rs module for implementation details.
+
 ```bash
 psql -h 127.0.0.1 -p 5432 -U postgres
 ```

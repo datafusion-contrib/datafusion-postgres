@@ -226,18 +226,20 @@ impl DfSessionService {
         &self,
         query_lower: &str,
     ) -> PgWireResult<Option<Response<'a>>> {
+        // Transaction handling based on pgwire example:
+        // https://github.com/sunng87/pgwire/blob/master/examples/transaction.rs#L57
         match query_lower.trim() {
             "begin" | "begin transaction" | "begin work" | "start transaction" => {
                 let mut state = self.transaction_state.lock().await;
                 match *state {
                     TransactionState::None => {
                         *state = TransactionState::Active;
-                        Ok(Some(Response::Execution(Tag::new("BEGIN"))))
+                        Ok(Some(Response::TransactionStart(Tag::new("BEGIN"))))
                     }
                     TransactionState::Active => {
                         // Already in transaction, PostgreSQL allows this but issues a warning
                         // For simplicity, we'll just return BEGIN again
-                        Ok(Some(Response::Execution(Tag::new("BEGIN"))))
+                        Ok(Some(Response::TransactionStart(Tag::new("BEGIN"))))
                     }
                     TransactionState::Failed => {
                         // Can't start new transaction from failed state
@@ -256,23 +258,23 @@ impl DfSessionService {
                 match *state {
                     TransactionState::Active => {
                         *state = TransactionState::None;
-                        Ok(Some(Response::Execution(Tag::new("COMMIT"))))
+                        Ok(Some(Response::TransactionEnd(Tag::new("COMMIT"))))
                     }
                     TransactionState::None => {
                         // PostgreSQL allows COMMIT outside transaction with warning
-                        Ok(Some(Response::Execution(Tag::new("COMMIT"))))
+                        Ok(Some(Response::TransactionEnd(Tag::new("COMMIT"))))
                     }
                     TransactionState::Failed => {
                         // COMMIT in failed transaction is treated as ROLLBACK
                         *state = TransactionState::None;
-                        Ok(Some(Response::Execution(Tag::new("ROLLBACK"))))
+                        Ok(Some(Response::TransactionEnd(Tag::new("ROLLBACK"))))
                     }
                 }
             }
             "rollback" | "rollback transaction" | "rollback work" | "abort" => {
                 let mut state = self.transaction_state.lock().await;
                 *state = TransactionState::None;
-                Ok(Some(Response::Execution(Tag::new("ROLLBACK"))))
+                Ok(Some(Response::TransactionEnd(Tag::new("ROLLBACK"))))
             }
             _ => Ok(None),
         }
