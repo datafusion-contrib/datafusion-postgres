@@ -177,7 +177,6 @@ impl AuthManager {
                 // Create predefined roles
                 if let Err(e) = auth_manager_spawn.create_predefined_roles().await {
                     warn!("Failed to create predefined roles: {e:?}");
-
                 }
             }
         });
