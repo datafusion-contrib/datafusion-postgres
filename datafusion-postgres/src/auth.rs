@@ -2,15 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::sink::Sink;
-use pgwire::api::auth::{
-    finish_authentication, save_startup_parameters_to_metadata, AuthSource,
-    DefaultServerParameterProvider, LoginInfo, Password, StartupHandler,
-};
-use pgwire::api::ClientInfo;
+use pgwire::api::auth::{AuthSource, LoginInfo, Password};
 use pgwire::error::{PgWireError, PgWireResult};
-use pgwire::messages::{PgWireBackendMessage, PgWireFrontendMessage};
-use std::fmt::Debug;
 use tokio::sync::RwLock;
 
 /// User information stored in the authentication system
@@ -575,66 +568,96 @@ impl AuthManager {
     }
 }
 
-/// Custom startup handler that performs authentication
-pub struct AuthStartupHandler {
-    auth_manager: Arc<AuthManager>,
+/// AuthSource implementation for integration with pgwire authentication
+/// Provides proper password-based authentication instead of custom startup handler
+#[derive(Clone)]
+pub struct DfAuthSource {
+    pub auth_manager: Arc<AuthManager>,
 }
 
-impl AuthStartupHandler {
+impl DfAuthSource {
     pub fn new(auth_manager: Arc<AuthManager>) -> Self {
-        AuthStartupHandler { auth_manager }
+        DfAuthSource { auth_manager }
     }
 }
 
 #[async_trait]
-impl StartupHandler for AuthStartupHandler {
-    async fn on_startup<C>(
-        &self,
-        client: &mut C,
-        message: PgWireFrontendMessage,
-    ) -> PgWireResult<()>
-    where
-        C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send,
-        C::Error: Debug,
-        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
-    {
-        if let PgWireFrontendMessage::Startup(ref startup) = message {
-            save_startup_parameters_to_metadata(client, startup);
-
-            // Extract username from startup message
-            let username = startup
-                .parameters
-                .get("user")
-                .unwrap_or(&"anonymous".to_string())
-                .clone();
-
-            // For now, we'll do basic authentication
-            // In a full implementation, this would involve password authentication
-            let is_authenticated = if username == "postgres" {
-                // Always allow postgres user for compatibility
-                true
+impl AuthSource for DfAuthSource {
+    async fn get_password(&self, login: &LoginInfo) -> PgWireResult<Password> {
+        if let Some(username) = login.user() {
+            // Check if user exists in our RBAC system
+            if let Some(user) = self.auth_manager.get_user(username).await {
+                if user.can_login {
+                    // Return the stored password hash for authentication
+                    // The pgwire authentication handlers (cleartext/md5/scram) will
+                    // handle the actual password verification process
+                    Ok(Password::new(None, user.password_hash.into_bytes()))
+                } else {
+                    Err(PgWireError::UserError(Box::new(
+                        pgwire::error::ErrorInfo::new(
+                            "FATAL".to_string(),
+                            "28000".to_string(), // invalid_authorization_specification
+                            format!("User \"{username}\" is not allowed to login"),
+                        ),
+                    )))
+                }
             } else {
-                // Check if user exists in our system
-                self.auth_manager.get_user(&username).await.is_some()
-            };
-
-            if !is_authenticated {
-                return Err(PgWireError::UserError(Box::new(
+                Err(PgWireError::UserError(Box::new(
                     pgwire::error::ErrorInfo::new(
                         "FATAL".to_string(),
                         "28P01".to_string(), // invalid_password
                         format!("password authentication failed for user \"{username}\""),
                     ),
-                )));
+                )))
             }
-
-            // Complete authentication process
-            finish_authentication(client, &DefaultServerParameterProvider::default()).await?;
+        } else {
+            Err(PgWireError::UserError(Box::new(
+                pgwire::error::ErrorInfo::new(
+                    "FATAL".to_string(),
+                    "28P01".to_string(), // invalid_password
+                    "No username provided in login request".to_string(),
+                ),
+            )))
         }
-
-        Ok(())
     }
 }
+
+// REMOVED: Custom startup handler approach
+//
+// Instead of implementing a custom StartupHandler, use the proper pgwire authentication:
+//
+// For cleartext authentication:
+// ```rust
+// use pgwire::api::auth::cleartext::CleartextStartupHandler;
+//
+// let auth_source = Arc::new(DfAuthSource::new(auth_manager));
+// let authenticator = CleartextStartupHandler::new(
+//     auth_source,
+//     Arc::new(DefaultServerParameterProvider::default())
+// );
+// ```
+//
+// For MD5 authentication:
+// ```rust
+// use pgwire::api::auth::md5::MD5StartupHandler;
+//
+// let auth_source = Arc::new(DfAuthSource::new(auth_manager));
+// let authenticator = MD5StartupHandler::new(
+//     auth_source,
+//     Arc::new(DefaultServerParameterProvider::default())
+// );
+// ```
+//
+// For SCRAM authentication (requires "server-api-scram" feature):
+// ```rust
+// use pgwire::api::auth::scram::SASLScramAuthStartupHandler;
+//
+// let auth_source = Arc::new(DfAuthSource::new(auth_manager));
+// let authenticator = SASLScramAuthStartupHandler::new(
+//     auth_source,
+//     Arc::new(DefaultServerParameterProvider::default())
+// );
+// ```
 
 /// Simple AuthSource implementation that accepts any user with empty password
 pub struct SimpleAuthSource {

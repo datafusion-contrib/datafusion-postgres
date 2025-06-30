@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::auth::{AuthManager, AuthStartupHandler, Permission, ResourceType};
+use crate::auth::{AuthManager, Permission, ResourceType};
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
+use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::copy::NoopCopyHandler;
 use pgwire::api::portal::{Format, Portal};
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
@@ -29,24 +30,27 @@ pub enum TransactionState {
     Failed,
 }
 
+/// Simple startup handler that does no authentication
+/// For production, use DfAuthSource with proper pgwire authentication handlers
+pub struct SimpleStartupHandler;
+
+#[async_trait::async_trait]
+impl NoopStartupHandler for SimpleStartupHandler {}
+
 pub struct HandlerFactory {
     pub session_service: Arc<DfSessionService>,
-    pub auth_handler: Arc<AuthStartupHandler>,
 }
 
 impl HandlerFactory {
     pub fn new(session_context: Arc<SessionContext>, auth_manager: Arc<AuthManager>) -> Self {
         let session_service =
             Arc::new(DfSessionService::new(session_context, auth_manager.clone()));
-        HandlerFactory {
-            session_service,
-            auth_handler: Arc::new(AuthStartupHandler::new(auth_manager)),
-        }
+        HandlerFactory { session_service }
     }
 }
 
 impl PgWireServerHandlers for HandlerFactory {
-    type StartupHandler = AuthStartupHandler;
+    type StartupHandler = SimpleStartupHandler;
     type SimpleQueryHandler = DfSessionService;
     type ExtendedQueryHandler = DfSessionService;
     type CopyHandler = NoopCopyHandler;
@@ -61,7 +65,7 @@ impl PgWireServerHandlers for HandlerFactory {
     }
 
     fn startup_handler(&self) -> Arc<Self::StartupHandler> {
-        self.auth_handler.clone()
+        Arc::new(SimpleStartupHandler)
     }
 
     fn copy_handler(&self) -> Arc<Self::CopyHandler> {
@@ -226,18 +230,20 @@ impl DfSessionService {
         &self,
         query_lower: &str,
     ) -> PgWireResult<Option<Response<'a>>> {
+        // Transaction handling based on pgwire example:
+        // https://github.com/sunng87/pgwire/blob/master/examples/transaction.rs#L57
         match query_lower.trim() {
             "begin" | "begin transaction" | "begin work" | "start transaction" => {
                 let mut state = self.transaction_state.lock().await;
                 match *state {
                     TransactionState::None => {
                         *state = TransactionState::Active;
-                        Ok(Some(Response::Execution(Tag::new("BEGIN"))))
+                        Ok(Some(Response::TransactionStart(Tag::new("BEGIN"))))
                     }
                     TransactionState::Active => {
                         // Already in transaction, PostgreSQL allows this but issues a warning
                         // For simplicity, we'll just return BEGIN again
-                        Ok(Some(Response::Execution(Tag::new("BEGIN"))))
+                        Ok(Some(Response::TransactionStart(Tag::new("BEGIN"))))
                     }
                     TransactionState::Failed => {
                         // Can't start new transaction from failed state
@@ -256,23 +262,23 @@ impl DfSessionService {
                 match *state {
                     TransactionState::Active => {
                         *state = TransactionState::None;
-                        Ok(Some(Response::Execution(Tag::new("COMMIT"))))
+                        Ok(Some(Response::TransactionEnd(Tag::new("COMMIT"))))
                     }
                     TransactionState::None => {
                         // PostgreSQL allows COMMIT outside transaction with warning
-                        Ok(Some(Response::Execution(Tag::new("COMMIT"))))
+                        Ok(Some(Response::TransactionEnd(Tag::new("COMMIT"))))
                     }
                     TransactionState::Failed => {
                         // COMMIT in failed transaction is treated as ROLLBACK
                         *state = TransactionState::None;
-                        Ok(Some(Response::Execution(Tag::new("ROLLBACK"))))
+                        Ok(Some(Response::TransactionEnd(Tag::new("ROLLBACK"))))
                     }
                 }
             }
             "rollback" | "rollback transaction" | "rollback work" | "abort" => {
                 let mut state = self.transaction_state.lock().await;
                 *state = TransactionState::None;
-                Ok(Some(Response::Execution(Tag::new("ROLLBACK"))))
+                Ok(Some(Response::TransactionEnd(Tag::new("ROLLBACK"))))
             }
             _ => Ok(None),
         }
