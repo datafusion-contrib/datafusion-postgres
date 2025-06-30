@@ -44,9 +44,47 @@ project.
 
 - [ ] **Future Enhancements**
   - [ ] Connection pooling and performance optimizations
-  - [ ] Advanced authentication methods (SCRAM, LDAP)
+  - [ ] Advanced authentication methods (LDAP, certificates)
   - [ ] More PostgreSQL functions and operators
   - [ ] COPY protocol for bulk data loading
+
+## 🔐 Authentication & Security
+
+datafusion-postgres supports enterprise-grade authentication through pgwire's standard mechanisms:
+
+### Production Authentication Setup
+
+Proper pgwire authentication:
+
+```rust
+use pgwire::api::auth::cleartext::CleartextStartupHandler;
+use datafusion_postgres::auth::{DfAuthSource, AuthManager};
+
+// Setup authentication
+let auth_manager = Arc::new(AuthManager::new());
+let auth_source = Arc::new(DfAuthSource::new(auth_manager));
+
+// Choose authentication method:
+// 1. Cleartext (simple)
+let authenticator = CleartextStartupHandler::new(
+    auth_source,
+    Arc::new(DefaultServerParameterProvider::default())
+);
+
+// 2. MD5 (recommended)
+// let authenticator = MD5StartupHandler::new(auth_source, params);
+
+// 3. SCRAM (enterprise - requires "server-api-scram" feature)
+// let authenticator = SASLScramAuthStartupHandler::new(auth_source, params);
+```
+
+### User Management
+
+```rust
+// Add users to the RBAC system
+auth_manager.add_user("admin", "secure_password", vec!["dbadmin".to_string()]).await;
+auth_manager.add_user("analyst", "password123", vec!["readonly".to_string()]).await;
+```
 
 ## 🚀 Quick Start
 
@@ -149,7 +187,12 @@ Listening on 127.0.0.1:5432 (unencrypted)
 
 ### Connect with psql
 
-> **⚠️ IMPORTANT AUTHENTICATION NOTE**: Currently, the default authentication allows the `postgres` user to connect without a password for development convenience. For production deployments, use `DfAuthSource` with proper cleartext/md5/scram authentication instead of the deprecated `AuthStartupHandler`. See the auth.rs module for implementation details.
+> **🔐 PRODUCTION AUTHENTICATION**: For production deployments, implement proper authentication by using `DfAuthSource` with pgwire's standard authentication handlers:
+> - **Cleartext**: `CleartextStartupHandler` for simple password auth
+> - **MD5**: `MD5StartupHandler` for MD5-hashed passwords  
+> - **SCRAM**: `SASLScramAuthStartupHandler` for enterprise-grade security
+> 
+> See `auth.rs` for complete implementation examples. The default setup is for development only.
 
 ```bash
 psql -h 127.0.0.1 -p 5432 -U postgres

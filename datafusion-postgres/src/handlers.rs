@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::auth::{AuthManager, AuthStartupHandler, Permission, ResourceType};
+use crate::auth::{AuthManager, Permission, ResourceType};
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::LogicalPlan;
@@ -15,6 +15,7 @@ use pgwire::api::results::{
 };
 use pgwire::api::stmt::QueryParser;
 use pgwire::api::stmt::StoredStatement;
+use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::{ClientInfo, NoopErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 use tokio::sync::Mutex;
@@ -29,24 +30,27 @@ pub enum TransactionState {
     Failed,
 }
 
+/// Simple startup handler that does no authentication
+/// For production, use DfAuthSource with proper pgwire authentication handlers
+pub struct SimpleStartupHandler;
+
+#[async_trait::async_trait]
+impl NoopStartupHandler for SimpleStartupHandler {}
+
 pub struct HandlerFactory {
     pub session_service: Arc<DfSessionService>,
-    pub auth_handler: Arc<AuthStartupHandler>,
 }
 
 impl HandlerFactory {
     pub fn new(session_context: Arc<SessionContext>, auth_manager: Arc<AuthManager>) -> Self {
         let session_service =
             Arc::new(DfSessionService::new(session_context, auth_manager.clone()));
-        HandlerFactory {
-            session_service,
-            auth_handler: Arc::new(AuthStartupHandler::new(auth_manager)),
-        }
+        HandlerFactory { session_service }
     }
 }
 
 impl PgWireServerHandlers for HandlerFactory {
-    type StartupHandler = AuthStartupHandler;
+    type StartupHandler = SimpleStartupHandler;
     type SimpleQueryHandler = DfSessionService;
     type ExtendedQueryHandler = DfSessionService;
     type CopyHandler = NoopCopyHandler;
@@ -61,7 +65,7 @@ impl PgWireServerHandlers for HandlerFactory {
     }
 
     fn startup_handler(&self) -> Arc<Self::StartupHandler> {
-        self.auth_handler.clone()
+        Arc::new(SimpleStartupHandler)
     }
 
     fn copy_handler(&self) -> Arc<Self::CopyHandler> {
