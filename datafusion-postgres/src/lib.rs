@@ -49,8 +49,8 @@ impl Default for ServerOptions {
 
 /// Set up TLS configuration if certificate and key paths are provided
 fn setup_tls(cert_path: &str, key_path: &str) -> Result<TlsAcceptor, IOError> {
-    // Install default crypto provider for rustls
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    // Install ring crypto provider for rustls
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     let cert = certs(&mut BufReader::new(File::open(cert_path)?))
         .collect::<Result<Vec<CertificateDer>, IOError>>()?;
