@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
+use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::copy::NoopCopyHandler;
 use pgwire::api::portal::{Format, Portal};
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
@@ -15,7 +16,6 @@ use pgwire::api::results::{
 };
 use pgwire::api::stmt::QueryParser;
 use pgwire::api::stmt::StoredStatement;
-use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::{ClientInfo, NoopErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 use tokio::sync::Mutex;

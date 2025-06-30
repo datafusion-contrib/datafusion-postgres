@@ -2,89 +2,56 @@
 
 ![Crates.io Version](https://img.shields.io/crates/v/datafusion-postgres?label=datafusion-postgres)
 
-Serving any [datafusion](https://datafusion.apache.org) `SessionContext` with full PostgreSQL compatibility, including authentication, role-based access control, and SSL/TLS encryption. Available as a library and a CLI tool.
+A PostgreSQL-compatible server for [Apache DataFusion](https://datafusion.apache.org), supporting authentication, role-based access control, and SSL/TLS encryption. Available as both a library and CLI tool.
 
-This project adds a comprehensive [PostgreSQL compatible access layer](https://github.com/sunng87/pgwire) to the [Apache DataFusion](https://github.com/apache/arrow-datafusion) query engine, making it a drop-in replacement for PostgreSQL in analytics workloads.
-
+Built on [pgwire](https://github.com/sunng87/pgwire) to provide PostgreSQL wire protocol compatibility for analytical workloads.
 It was originally an example of the [pgwire](https://github.com/sunng87/pgwire)
 project.
 
 ## ✨ Key Features
 
 - 🔌 **Full PostgreSQL Wire Protocol** - Compatible with all PostgreSQL clients and drivers
-- 🛡️ **Enterprise Security** - Authentication, RBAC, and SSL/TLS encryption
+- 🛡️ **Security Features** - Authentication, RBAC, and SSL/TLS encryption
 - 🏗️ **Complete System Catalogs** - Real `pg_catalog` tables with accurate metadata  
 - 📊 **Advanced Data Types** - Comprehensive Arrow ↔ PostgreSQL type mapping
-- 🔄 **Transaction Support** - Full ACID transaction lifecycle (BEGIN/COMMIT/ROLLBACK)
+- 🔄 **Transaction Support** - ACID transaction lifecycle (BEGIN/COMMIT/ROLLBACK)
 - ⚡ **High Performance** - Apache DataFusion's columnar query execution
 
-## 🎯 Roadmap & Status
+## 🎯 Features
 
-- [x] **Core Features**
-  - [x] datafusion-postgres as a CLI tool
-  - [x] datafusion-postgres as a library
-  - [x] datafusion information schema
-  - [x] Complete `pg_catalog` system tables (pg_type, pg_attribute, pg_proc, pg_class, etc.)
-  - [x] Comprehensive Arrow ↔ PostgreSQL data type mapping
-  - [x] Essential PostgreSQL functions (version(), current_schema(), has_table_privilege(), etc.)
+### Core Functionality
+- ✅ Library and CLI tool
+- ✅ PostgreSQL wire protocol compatibility  
+- ✅ Complete `pg_catalog` system tables
+- ✅ Arrow ↔ PostgreSQL data type mapping
+- ✅ PostgreSQL functions (version, current_schema, has_table_privilege, etc.)
 
-- [x] **Security & Authentication** 🆕
-  - [x] User authentication and management
-  - [x] Role-based access control (RBAC)
-  - [x] Granular permissions (SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, etc.)
-  - [x] Role inheritance and grant management
-  - [x] SSL/TLS connection encryption
-  - [x] Query-level permission checking
+### Security & Authentication
+- ✅ User authentication and RBAC
+- ✅ Granular permissions (SELECT, INSERT, UPDATE, DELETE, CREATE, DROP)
+- ✅ Role inheritance and grant management
+- ✅ SSL/TLS encryption
+- ✅ Query-level permission checking
 
-- [x] **Transaction Support** 🆕
-  - [x] Full ACID transaction lifecycle
-  - [x] BEGIN/COMMIT/ROLLBACK with all variants
-  - [x] Failed transaction handling and recovery
-  - [x] Transaction state management
+### Transaction Support
+- ✅ ACID transaction lifecycle
+- ✅ BEGIN/COMMIT/ROLLBACK with all variants
+- ✅ Failed transaction handling and recovery
 
-- [ ] **Future Enhancements**
-  - [ ] Connection pooling and performance optimizations
-  - [ ] Advanced authentication methods (LDAP, certificates)
-  - [ ] More PostgreSQL functions and operators
-  - [ ] COPY protocol for bulk data loading
+### Future Enhancements
+- ⏳ Connection pooling optimizations
+- ⏳ Advanced authentication (LDAP, certificates)
+- ⏳ COPY protocol for bulk data loading
 
-## 🔐 Authentication & Security
+## 🔐 Authentication
 
-datafusion-postgres supports enterprise-grade authentication through pgwire's standard mechanisms:
+Supports standard pgwire authentication methods:
 
-### Production Authentication Setup
+- **Cleartext**: `CleartextStartupHandler` for simple password authentication
+- **MD5**: `MD5StartupHandler` for MD5-hashed passwords  
+- **SCRAM**: `SASLScramAuthStartupHandler` for secure authentication
 
-Proper pgwire authentication:
-
-```rust
-use pgwire::api::auth::cleartext::CleartextStartupHandler;
-use datafusion_postgres::auth::{DfAuthSource, AuthManager};
-
-// Setup authentication
-let auth_manager = Arc::new(AuthManager::new());
-let auth_source = Arc::new(DfAuthSource::new(auth_manager));
-
-// Choose authentication method:
-// 1. Cleartext (simple)
-let authenticator = CleartextStartupHandler::new(
-    auth_source,
-    Arc::new(DefaultServerParameterProvider::default())
-);
-
-// 2. MD5 (recommended)
-// let authenticator = MD5StartupHandler::new(auth_source, params);
-
-// 3. SCRAM (enterprise - requires "server-api-scram" feature)
-// let authenticator = SASLScramAuthStartupHandler::new(auth_source, params);
-```
-
-### User Management
-
-```rust
-// Add users to the RBAC system
-auth_manager.add_user("admin", "secure_password", vec!["dbadmin".to_string()]).await;
-auth_manager.add_user("analyst", "password123", vec!["readonly".to_string()]).await;
-```
+See `auth.rs` for complete implementation examples using `DfAuthSource`.
 
 ## 🚀 Quick Start
 
@@ -129,12 +96,11 @@ serve(session_context, &server_options).await
 
 ### The CLI `datafusion-postgres-cli`
 
-As a command-line application, this tool serves any JSON/CSV/Arrow/Parquet/Avro
-files as tables, and exposes them via PostgreSQL compatible protocol with full security features.
+Command-line tool to serve JSON/CSV/Arrow/Parquet/Avro files as PostgreSQL-compatible tables.
 
 ```
 datafusion-postgres-cli 0.6.1
-A secure postgres interface for datafusion. Serve any CSV/JSON/Arrow/Parquet files as tables.
+A PostgreSQL interface for DataFusion. Serve CSV/JSON/Arrow/Parquet files as tables.
 
 USAGE:
     datafusion-postgres-cli [OPTIONS]
@@ -187,12 +153,7 @@ Listening on 127.0.0.1:5432 (unencrypted)
 
 ### Connect with psql
 
-> **🔐 PRODUCTION AUTHENTICATION**: For production deployments, implement proper authentication by using `DfAuthSource` with pgwire's standard authentication handlers:
-> - **Cleartext**: `CleartextStartupHandler` for simple password auth
-> - **MD5**: `MD5StartupHandler` for MD5-hashed passwords  
-> - **SCRAM**: `SASLScramAuthStartupHandler` for enterprise-grade security
-> 
-> See `auth.rs` for complete implementation examples. The default setup is for development only.
+> **🔐 Authentication**: The default setup allows connections without authentication for development. For secure deployments, use `DfAuthSource` with standard pgwire authentication handlers (cleartext, MD5, or SCRAM). See `auth.rs` for implementation examples.
 
 ```bash
 psql -h 127.0.0.1 -p 5432 -U postgres

@@ -623,13 +623,13 @@ impl AuthSource for DfAuthSource {
 }
 
 // REMOVED: Custom startup handler approach
-// 
+//
 // Instead of implementing a custom StartupHandler, use the proper pgwire authentication:
 //
 // For cleartext authentication:
 // ```rust
 // use pgwire::api::auth::cleartext::CleartextStartupHandler;
-// 
+//
 // let auth_source = Arc::new(DfAuthSource::new(auth_manager));
 // let authenticator = CleartextStartupHandler::new(
 //     auth_source,
@@ -640,7 +640,7 @@ impl AuthSource for DfAuthSource {
 // For MD5 authentication:
 // ```rust
 // use pgwire::api::auth::md5::MD5StartupHandler;
-// 
+//
 // let auth_source = Arc::new(DfAuthSource::new(auth_manager));
 // let authenticator = MD5StartupHandler::new(
 //     auth_source,
@@ -651,7 +651,7 @@ impl AuthSource for DfAuthSource {
 // For SCRAM authentication (requires "server-api-scram" feature):
 // ```rust
 // use pgwire::api::auth::scram::SASLScramAuthStartupHandler;
-// 
+//
 // let auth_source = Arc::new(DfAuthSource::new(auth_manager));
 // let authenticator = SASLScramAuthStartupHandler::new(
 //     auth_source,
