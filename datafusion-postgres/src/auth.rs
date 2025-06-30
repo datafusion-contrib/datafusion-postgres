@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use log::warn;
 use pgwire::api::auth::{AuthSource, LoginInfo, Password};
 use pgwire::error::{PgWireError, PgWireResult};
 use tokio::sync::RwLock;
@@ -175,7 +176,8 @@ impl AuthManager {
 
                 // Create predefined roles
                 if let Err(e) = auth_manager_spawn.create_predefined_roles().await {
-                    eprintln!("Failed to create predefined roles: {e:?}");
+                    warn!("Failed to create predefined roles: {e:?}");
+
                 }
             }
         });

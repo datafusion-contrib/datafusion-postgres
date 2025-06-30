@@ -9,7 +9,7 @@ use datafusion::prelude::SessionContext;
 
 pub mod auth;
 use getset::{Getters, Setters, WithSetters};
-
+use log::{info, warn};
 use pgwire::tokio::process_socket;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
@@ -86,16 +86,16 @@ pub async fn serve(
         if let (Some(cert_path), Some(key_path)) = (&opts.tls_cert_path, &opts.tls_key_path) {
             match setup_tls(cert_path, key_path) {
                 Ok(acceptor) => {
-                    println!("TLS enabled using cert: {cert_path} and key: {key_path}");
+                    info!("TLS enabled using cert: {cert_path} and key: {key_path}");
                     Some(acceptor)
                 }
                 Err(e) => {
-                    eprintln!("Failed to setup TLS: {e}. Running without encryption.");
+                    warn!("Failed to setup TLS: {e}. Running without encryption.");
                     None
                 }
             }
         } else {
-            println!("TLS not configured. Running without encryption.");
+            info!("TLS not configured. Running without encryption.");
             None
         };
 
@@ -103,9 +103,9 @@ pub async fn serve(
     let server_addr = format!("{}:{}", opts.host, opts.port);
     let listener = TcpListener::bind(&server_addr).await?;
     if tls_acceptor.is_some() {
-        println!("Listening on {server_addr} with TLS encryption");
+        info!("Listening on {server_addr} with TLS encryption");
     } else {
-        println!("Listening on {server_addr} (unencrypted)");
+        info!("Listening on {server_addr} (unencrypted)");
     }
 
     // Accept incoming connections
@@ -117,13 +117,13 @@ pub async fn serve(
                 // Connection accepted from {addr} - log appropriately based on your logging strategy
 
                 tokio::spawn(async move {
-                    if let Err(_e) = process_socket(socket, tls_acceptor_ref, factory_ref).await {
-                        // Log error or handle appropriately based on your logging strategy
+                    if let Err(e) = process_socket(socket, tls_acceptor_ref, factory_ref).await {
+                        warn!("Error processing socket: {e}");
                     }
                 });
             }
             Err(e) => {
-                eprintln!("Error accept socket: {e}");
+                warn!("Error accept socket: {e}");
             }
         }
     }
