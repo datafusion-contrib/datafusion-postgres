@@ -597,7 +597,7 @@ impl AuthSource for DfAuthSource {
                         pgwire::error::ErrorInfo::new(
                             "FATAL".to_string(),
                             "28000".to_string(), // invalid_authorization_specification
-                            format!("User \"{}\" is not allowed to login", username),
+                            format!("User \"{username}\" is not allowed to login"),
                         ),
                     )))
                 }
@@ -606,7 +606,7 @@ impl AuthSource for DfAuthSource {
                     pgwire::error::ErrorInfo::new(
                         "FATAL".to_string(),
                         "28P01".to_string(), // invalid_password
-                        format!("password authentication failed for user \"{}\"", username),
+                        format!("password authentication failed for user \"{username}\""),
                     ),
                 )))
             }
