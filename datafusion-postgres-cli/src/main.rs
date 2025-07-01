@@ -7,7 +7,9 @@ use datafusion::execution::options::{
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_postgres::pg_catalog::setup_pg_catalog;
-use datafusion_postgres::{serve, ServerOptions}; // Assuming the crate name is `datafusion_postgres`
+use datafusion_postgres::{serve, ServerOptions};
+use env_logger::Env;
+use log::info;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
@@ -129,7 +131,7 @@ async fn setup_session_context(
             .register_csv(table_name, table_path, CsvReadOptions::default())
             .await
             .map_err(|e| format!("Failed to register CSV table '{table_name}': {e}"))?;
-        println!("Loaded {table_path} as table {table_name}");
+        info!("Loaded {table_path} as table {table_name}");
     }
 
     // Register JSON tables
@@ -138,7 +140,7 @@ async fn setup_session_context(
             .register_json(table_name, table_path, NdJsonReadOptions::default())
             .await
             .map_err(|e| format!("Failed to register JSON table '{table_name}': {e}"))?;
-        println!("Loaded {table_path} as table {table_name}");
+        info!("Loaded {table_path} as table {table_name}");
     }
 
     // Register Arrow tables
@@ -151,7 +153,7 @@ async fn setup_session_context(
             .register_arrow(table_name, table_path, ArrowReadOptions::default())
             .await
             .map_err(|e| format!("Failed to register Arrow table '{table_name}': {e}"))?;
-        println!("Loaded {table_path} as table {table_name}");
+        info!("Loaded {table_path} as table {table_name}");
     }
 
     // Register Parquet tables
@@ -164,7 +166,7 @@ async fn setup_session_context(
             .register_parquet(table_name, table_path, ParquetReadOptions::default())
             .await
             .map_err(|e| format!("Failed to register Parquet table '{table_name}': {e}"))?;
-        println!("Loaded {table_path} as table {table_name}");
+        info!("Loaded {table_path} as table {table_name}");
     }
 
     // Register Avro tables
@@ -173,7 +175,7 @@ async fn setup_session_context(
             .register_avro(table_name, table_path, AvroReadOptions::default())
             .await
             .map_err(|e| format!("Failed to register Avro table '{table_name}': {e}"))?;
-        println!("Loaded {table_path} as table {table_name}");
+        info!("Loaded {table_path} as table {table_name}");
     }
 
     // Register pg_catalog
@@ -184,7 +186,10 @@ async fn setup_session_context(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+    env_logger::Builder::from_env(
+        Env::default().default_filter_or("datafusion_postgres=info,,datafusion_postgres_cli=info"),
+    )
+    .init();
 
     let mut opts = Opt::from_args();
     opts.include_directory_files()?;
