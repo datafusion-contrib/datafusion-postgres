@@ -63,6 +63,7 @@ impl PgWireServerHandlers for HandlerFactory {
     }
 }
 
+/// The pgwire handler backed by a datafusion `SessionContext`
 pub struct DfSessionService {
     session_context: Arc<SessionContext>,
     parser: Arc<Parser>,
