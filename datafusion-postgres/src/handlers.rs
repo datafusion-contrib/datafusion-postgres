@@ -7,7 +7,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
 use pgwire::api::auth::noop::NoopStartupHandler;
-use pgwire::api::copy::NoopCopyHandler;
+use pgwire::api::auth::StartupHandler;
 use pgwire::api::portal::{Format, Portal};
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
 use pgwire::api::results::{
@@ -16,7 +16,7 @@ use pgwire::api::results::{
 };
 use pgwire::api::stmt::QueryParser;
 use pgwire::api::stmt::StoredStatement;
-use pgwire::api::{ClientInfo, NoopErrorHandler, PgWireServerHandlers, Type};
+use pgwire::api::{ClientInfo, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 use tokio::sync::Mutex;
 
@@ -50,30 +50,16 @@ impl HandlerFactory {
 }
 
 impl PgWireServerHandlers for HandlerFactory {
-    type StartupHandler = SimpleStartupHandler;
-    type SimpleQueryHandler = DfSessionService;
-    type ExtendedQueryHandler = DfSessionService;
-    type CopyHandler = NoopCopyHandler;
-    type ErrorHandler = NoopErrorHandler;
-
-    fn simple_query_handler(&self) -> Arc<Self::SimpleQueryHandler> {
+    fn simple_query_handler(&self) -> Arc<impl SimpleQueryHandler> {
         self.session_service.clone()
     }
 
-    fn extended_query_handler(&self) -> Arc<Self::ExtendedQueryHandler> {
+    fn extended_query_handler(&self) -> Arc<impl ExtendedQueryHandler> {
         self.session_service.clone()
     }
 
-    fn startup_handler(&self) -> Arc<Self::StartupHandler> {
+    fn startup_handler(&self) -> Arc<impl StartupHandler> {
         Arc::new(SimpleStartupHandler)
-    }
-
-    fn copy_handler(&self) -> Arc<Self::CopyHandler> {
-        Arc::new(NoopCopyHandler)
-    }
-
-    fn error_handler(&self) -> Arc<Self::ErrorHandler> {
-        Arc::new(NoopErrorHandler)
     }
 }
 
