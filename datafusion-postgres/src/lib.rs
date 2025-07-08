@@ -22,6 +22,11 @@ use crate::auth::AuthManager;
 use handlers::HandlerFactory;
 pub use handlers::{DfSessionService, Parser};
 
+
+/// re-exports
+pub use arrow_pg;
+pub use pgwire;
+
 #[derive(Getters, Setters, WithSetters, Debug)]
 #[getset(get = "pub", set = "pub", set_with = "pub")]
 pub struct ServerOptions {
