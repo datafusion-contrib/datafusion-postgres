@@ -24,6 +24,7 @@ const PG_CATALOG_TABLE_PG_NAMESPACE: &str = "pg_namespace";
 const PG_CATALOG_TABLE_PG_PROC: &str = "pg_proc";
 const PG_CATALOG_TABLE_PG_DATABASE: &str = "pg_database";
 const PG_CATALOG_TABLE_PG_AM: &str = "pg_am";
+const PG_CATALOG_TABLE_PG_RANGE: &str = "pg_range";
 
 /// Determine PostgreSQL table type (relkind) from DataFusion TableProvider
 fn get_table_type(table: &Arc<dyn TableProvider>) -> &'static str {
@@ -64,6 +65,7 @@ pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_TABLE_PG_PROC,
     PG_CATALOG_TABLE_PG_DATABASE,
     PG_CATALOG_TABLE_PG_AM,
+    PG_CATALOG_TABLE_PG_RANGE,
 ];
 
 // Data structure to hold pg_type table data
@@ -249,6 +251,7 @@ impl SchemaProvider for PgCatalogSchemaProvider {
                 )))
             }
             PG_CATALOG_TABLE_PG_PROC => Ok(Some(self.create_pg_proc_table())),
+            PG_CATALOG_TABLE_PG_RANGE => Ok(Some(self.create_pg_range_table())),
             _ => Ok(None),
         }
     }
@@ -712,6 +715,25 @@ impl PgCatalogSchemaProvider {
         // Create memory table with schema
         let provider = MemTable::try_new(schema, vec![]).unwrap();
 
+        Arc::new(provider)
+    }
+
+    /// Create a mock empty table for pg_range
+    fn create_pg_range_table(&self) -> Arc<dyn TableProvider> {
+        // Define the schema for pg_range
+        // This matches PostgreSQL's pg_range table columns
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("rngtypid", DataType::Int32, false), // OID of the range type
+            Field::new("rngsubtype", DataType::Int32, false), // OID of the element type (subtype) of this range type
+            Field::new("rngmultitypid", DataType::Int32, false), // OID of the multirange type for this range type
+            Field::new("rngcollation", DataType::Int32, false), // OID of the collation used for range comparisons, or zero if none
+            Field::new("rngsubopc", DataType::Int32, false), // OID of the subtype's operator class used for range comparisons
+            Field::new("rngcanonical", DataType::Int32, false), // OID of the function to convert a range value into canonical form, or zero if none
+            Field::new("rngsubdiff", DataType::Int32, false), // OID of the function to return the difference between two element values as double precision, or zero if none
+        ]));
+
+        // Create memory table with schema
+        let provider = MemTable::try_new(schema, vec![]).unwrap();
         Arc::new(provider)
     }
 
