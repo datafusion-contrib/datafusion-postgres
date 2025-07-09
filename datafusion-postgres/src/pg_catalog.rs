@@ -25,6 +25,7 @@ const PG_CATALOG_TABLE_PG_PROC: &str = "pg_proc";
 const PG_CATALOG_TABLE_PG_DATABASE: &str = "pg_database";
 const PG_CATALOG_TABLE_PG_AM: &str = "pg_am";
 const PG_CATALOG_TABLE_PG_RANGE: &str = "pg_range";
+const PG_CATALOG_TABLE_PG_ENUM: &str = "pg_enum";
 
 /// Determine PostgreSQL table type (relkind) from DataFusion TableProvider
 fn get_table_type(table: &Arc<dyn TableProvider>) -> &'static str {
@@ -66,6 +67,7 @@ pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_TABLE_PG_DATABASE,
     PG_CATALOG_TABLE_PG_AM,
     PG_CATALOG_TABLE_PG_RANGE,
+    PG_CATALOG_TABLE_PG_ENUM,
 ];
 
 // Data structure to hold pg_type table data
@@ -252,6 +254,7 @@ impl SchemaProvider for PgCatalogSchemaProvider {
             }
             PG_CATALOG_TABLE_PG_PROC => Ok(Some(self.create_pg_proc_table())),
             PG_CATALOG_TABLE_PG_RANGE => Ok(Some(self.create_pg_range_table())),
+            PG_CATALOG_TABLE_PG_ENUM => Ok(Some(self.create_pg_enum_table())),
             _ => Ok(None),
         }
     }
@@ -733,6 +736,18 @@ impl PgCatalogSchemaProvider {
         ]));
 
         // Create memory table with schema
+        let provider = MemTable::try_new(schema, vec![]).unwrap();
+        Arc::new(provider)
+    }
+
+    /// Create a mock empty table for pg_enum
+    fn create_pg_enum_table(&self) -> Arc<dyn TableProvider> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("oid", DataType::Int32, false), // Row identifier
+            Field::new("enumtypid", DataType::Int32, false), // The OID of the pg_type entry owning this enum value
+            Field::new("enumsortorder", DataType::Float32, false), // The sort position of this enum value within its enum type
+            Field::new("enumlabel", DataType::Utf8, false), // The textual label for this enum value
+        ]));
         let provider = MemTable::try_new(schema, vec![]).unwrap();
         Arc::new(provider)
     }
