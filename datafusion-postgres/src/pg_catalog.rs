@@ -716,7 +716,7 @@ impl PgCatalogSchemaProvider {
         ]));
 
         // Create memory table with schema
-        let provider = MemTable::try_new(schema, vec![]).unwrap();
+        let provider = MemTable::try_new(schema, vec![vec![]]).unwrap();
 
         Arc::new(provider)
     }
@@ -736,7 +736,7 @@ impl PgCatalogSchemaProvider {
         ]));
 
         // Create memory table with schema
-        let provider = MemTable::try_new(schema, vec![]).unwrap();
+        let provider = MemTable::try_new(schema, vec![vec![]]).unwrap();
         Arc::new(provider)
     }
 
@@ -748,7 +748,7 @@ impl PgCatalogSchemaProvider {
             Field::new("enumsortorder", DataType::Float32, false), // The sort position of this enum value within its enum type
             Field::new("enumlabel", DataType::Utf8, false), // The textual label for this enum value
         ]));
-        let provider = MemTable::try_new(schema, vec![]).unwrap();
+        let provider = MemTable::try_new(schema, vec![vec![]]).unwrap();
         Arc::new(provider)
     }
 
