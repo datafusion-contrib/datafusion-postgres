@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{
-    as_boolean_array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-    RecordBatch, StringArray, StringBuilder,
+    as_boolean_array, ArrayRef, BooleanArray, BooleanBuilder, Float32Array, Float64Array,
+    Int16Array, Int32Array, RecordBatch, StringArray, StringBuilder,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::streaming::StreamingTable;
@@ -1807,6 +1807,30 @@ pub fn create_pg_get_userbyid_udf() -> ScalarUDF {
     )
 }
 
+pub fn create_pg_table_is_visible() -> ScalarUDF {
+    // Define the function implementation
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let _input = &args[0]; // Table OID
+
+        // Always return true
+        let mut builder = BooleanBuilder::new();
+        builder.append_value(true);
+        let array: ArrayRef = Arc::new(builder.finish());
+
+        Ok(ColumnarValue::Array(array))
+    };
+
+    // Wrap the implementation in a scalar function
+    create_udf(
+        "pg_table_is_visible",
+        vec![DataType::Int32],
+        DataType::Boolean,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
 pub fn create_has_table_privilege_3param_udf() -> ScalarUDF {
     // Define the function implementation for 3-parameter version
     let func = move |args: &[ColumnarValue]| {
@@ -1878,6 +1902,7 @@ pub fn setup_pg_catalog(
     session_context.register_udf(create_version_udf());
     session_context.register_udf(create_pg_get_userbyid_udf());
     session_context.register_udf(create_has_table_privilege_2param_udf());
+    session_context.register_udf(create_pg_table_is_visible());
 
     Ok(())
 }
