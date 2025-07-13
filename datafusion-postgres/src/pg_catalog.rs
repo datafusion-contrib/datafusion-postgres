@@ -1788,11 +1788,14 @@ pub fn create_pg_get_userbyid_udf() -> ScalarUDF {
     // Define the function implementation
     let func = move |args: &[ColumnarValue]| {
         let args = ColumnarValue::values_to_arrays(args)?;
-        let _input = &args[0]; // User OID, but we'll ignore for now
+        let input = &args[0]; // User OID, but we'll ignore for now
 
         // Create a UTF8 array with default user name
         let mut builder = StringBuilder::new();
-        builder.append_value("postgres");
+        for _ in 0..input.len() {
+            builder.append_value("postgres");
+        }
+
         let array: ArrayRef = Arc::new(builder.finish());
 
         Ok(ColumnarValue::Array(array))
