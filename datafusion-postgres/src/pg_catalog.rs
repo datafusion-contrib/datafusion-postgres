@@ -1766,6 +1766,7 @@ pub fn create_version_udf() -> ScalarUDF {
     let func = move |_args: &[ColumnarValue]| {
         // Create a UTF8 array with version information
         let mut builder = StringBuilder::new();
+        // TODO: improve version string generation
         builder
             .append_value("DataFusion PostgreSQL 48.0.0 on x86_64-pc-linux-gnu, compiled by Rust");
         let array: ArrayRef = Arc::new(builder.finish());
@@ -1799,7 +1800,7 @@ pub fn create_pg_get_userbyid_udf() -> ScalarUDF {
 
     // Wrap the implementation in a scalar function
     create_udf(
-        "pg_get_userbyid",
+        "pg_catalog.pg_get_userbyid",
         vec![DataType::Int32],
         DataType::Utf8,
         Volatility::Stable,
@@ -1811,11 +1812,14 @@ pub fn create_pg_table_is_visible() -> ScalarUDF {
     // Define the function implementation
     let func = move |args: &[ColumnarValue]| {
         let args = ColumnarValue::values_to_arrays(args)?;
-        let _input = &args[0]; // Table OID
+        let input = &args[0]; // Table OID
 
         // Always return true
         let mut builder = BooleanBuilder::new();
-        builder.append_value(true);
+        for _ in 0..input.len() {
+            builder.append_value(true);
+        }
+
         let array: ArrayRef = Arc::new(builder.finish());
 
         Ok(ColumnarValue::Array(array))
@@ -1823,7 +1827,7 @@ pub fn create_pg_table_is_visible() -> ScalarUDF {
 
     // Wrap the implementation in a scalar function
     create_udf(
-        "pg_table_is_visible",
+        "pg_catalog.pg_table_is_visible",
         vec![DataType::Int32],
         DataType::Boolean,
         Volatility::Stable,
