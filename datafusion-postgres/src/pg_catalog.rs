@@ -289,7 +289,7 @@ impl PgCatalogSchemaProvider {
     pub fn new(catalog_list: Arc<dyn CatalogProviderList>) -> PgCatalogSchemaProvider {
         Self {
             catalog_list,
-            oid_counter: Arc::new(AtomicU32::new(0)),
+            oid_counter: Arc::new(AtomicU32::new(16384)),
             oid_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
