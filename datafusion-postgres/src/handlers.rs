@@ -205,8 +205,15 @@ impl DfSessionService {
                     )))
                 }
             } else {
-                // noop: skip any unsupported set statements
-                Ok(Some(Response::Execution(Tag::new("SET"))))
+                // pass SET query to datafusion
+                let df = self
+                    .session_context
+                    .sql(query_lower)
+                    .await
+                    .map_err(|err| PgWireError::ApiError(Box::new(err)))?;
+
+                let resp = df::encode_dataframe(df, &Format::UnifiedText).await?;
+                Ok(Some(Response::Query(resp)))
             }
         } else {
             Ok(None)
