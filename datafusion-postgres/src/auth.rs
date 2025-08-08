@@ -107,11 +107,30 @@ pub struct RoleConfig {
     pub can_replication: bool,
 }
 
+/// Authentication configuration options
+#[derive(Debug, Clone)]
+pub struct AuthConfig {
+    /// Whether to require passwords for all users (including postgres)
+    pub require_passwords: bool,
+    /// Whether to allow empty passwords (when require_passwords is false)
+    pub allow_empty_passwords: bool,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        AuthConfig {
+            require_passwords: false,
+            allow_empty_passwords: true,
+        }
+    }
+}
+
 /// Authentication manager that handles users and roles
 #[derive(Debug)]
 pub struct AuthManager {
     users: Arc<RwLock<HashMap<String, User>>>,
     roles: Arc<RwLock<HashMap<String, Role>>>,
+    config: AuthConfig,
 }
 
 impl Default for AuthManager {
@@ -122,9 +141,14 @@ impl Default for AuthManager {
 
 impl AuthManager {
     pub fn new() -> Self {
+        Self::new_with_config(AuthConfig::default())
+    }
+
+    pub fn new_with_config(config: AuthConfig) -> Self {
         let auth_manager = AuthManager {
             users: Arc::new(RwLock::new(HashMap::new())),
             roles: Arc::new(RwLock::new(HashMap::new())),
+            config,
         };
 
         // Initialize with default postgres superuser
@@ -158,6 +182,7 @@ impl AuthManager {
         let auth_manager_clone = AuthManager {
             users: auth_manager.users.clone(),
             roles: auth_manager.roles.clone(),
+            config: auth_manager.config.clone(),
         };
 
         tokio::spawn({
@@ -207,15 +232,29 @@ impl AuthManager {
                 return Ok(false);
             }
 
-            // For now, accept empty password or any password for existing users
-            // In production, this should use proper password hashing (bcrypt, etc.)
-            if user.password_hash.is_empty() || password == user.password_hash {
-                return Ok(true);
+            // Check password requirements based on configuration
+            if self.config.require_passwords {
+                // When passwords are required, reject empty passwords
+                if password.is_empty() {
+                    return Ok(false);
+                }
+                // Also require that the user has a non-empty password hash
+                if user.password_hash.is_empty() {
+                    return Ok(false);
+                }
+                // Check password match
+                return Ok(password == user.password_hash);
+            } else {
+                // Legacy behavior: allow empty passwords if configured
+                if user.password_hash.is_empty() {
+                    return Ok(self.config.allow_empty_passwords || password.is_empty());
+                }
+                // Check password match for users with passwords
+                return Ok(password == user.password_hash);
             }
         }
 
-        // If user doesn't exist, check if we should create them dynamically
-        // For now, only accept known users
+        // If user doesn't exist, reject
         Ok(false)
     }
 
@@ -567,6 +606,64 @@ impl AuthManager {
 
         Ok(())
     }
+
+    /// Get the current authentication configuration
+    pub fn get_config(&self) -> &AuthConfig {
+        &self.config
+    }
+
+    /// Enable password requirements for all users
+    pub fn require_passwords(&mut self) {
+        self.config.require_passwords = true;
+        self.config.allow_empty_passwords = false;
+    }
+
+    /// Disable password requirements (allow passwordless login)
+    pub fn allow_passwordless_login(&mut self) {
+        self.config.require_passwords = false;
+        self.config.allow_empty_passwords = true;
+    }
+
+    /// Set whether empty passwords are allowed when password requirements are disabled
+    pub fn set_allow_empty_passwords(&mut self, allow: bool) {
+        if !self.config.require_passwords {
+            self.config.allow_empty_passwords = allow;
+        }
+    }
+
+    /// Wait for initialization to complete (postgres user to be created)
+    pub async fn wait_for_initialization(&self) {
+        // Wait for postgres user to be created
+        let max_wait = 100; // 100 * 10ms = 1 second max wait
+        for _ in 0..max_wait {
+            let users = self.users.read().await;
+            if users.contains_key("postgres") {
+                return;
+            }
+            drop(users);
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Update the postgres user to require a password
+    pub async fn set_postgres_password(&self, password: &str) -> PgWireResult<()> {
+        // Wait for initialization to complete
+        self.wait_for_initialization().await;
+        
+        let mut users = self.users.write().await;
+        if let Some(postgres_user) = users.get_mut("postgres") {
+            postgres_user.password_hash = password.to_string();
+            Ok(())
+        } else {
+            Err(PgWireError::UserError(Box::new(
+                pgwire::error::ErrorInfo::new(
+                    "ERROR".to_string(),
+                    "42704".to_string(),
+                    "postgres user not found".to_string(),
+                ),
+            )))
+        }
+    }
 }
 
 /// AuthSource implementation for integration with pgwire authentication
@@ -676,17 +773,48 @@ impl AuthSource for SimpleAuthSource {
     async fn get_password(&self, login: &LoginInfo) -> PgWireResult<Password> {
         let username = login.user().unwrap_or("anonymous");
 
+        // Wait for initialization to complete
+        self.auth_manager.wait_for_initialization().await;
+
         // Check if user exists and can login
         if let Some(user) = self.auth_manager.get_user(username).await {
             if user.can_login {
-                // Return empty password for now (no authentication required)
-                return Ok(Password::new(None, vec![]));
+                let config = self.auth_manager.get_config();
+                
+                // If password requirements are enforced, user must have a password
+                if config.require_passwords {
+                    if user.password_hash.is_empty() {
+                        // User has no password but passwords are required
+                        return Err(PgWireError::UserError(Box::new(
+                            pgwire::error::ErrorInfo::new(
+                                "FATAL".to_string(),
+                                "28P01".to_string(), // invalid_password
+                                format!("User \"{username}\" requires a password"),
+                            ),
+                        )));
+                    }
+                    // Return the user's password hash for verification
+                    return Ok(Password::new(None, user.password_hash.into_bytes()));
+                } else {
+                    // Legacy mode: allow empty passwords based on configuration
+                    if user.password_hash.is_empty() {
+                        if config.allow_empty_passwords {
+                            return Ok(Password::new(None, vec![]));
+                        } else {
+                            return Err(PgWireError::UserError(Box::new(
+                                pgwire::error::ErrorInfo::new(
+                                    "FATAL".to_string(),
+                                    "28P01".to_string(), // invalid_password
+                                    format!("Empty passwords not allowed for user \"{username}\""),
+                                ),
+                            )));
+                        }
+                    } else {
+                        // User has a password, return it for verification
+                        return Ok(Password::new(None, user.password_hash.into_bytes()));
+                    }
+                }
             }
-        }
-
-        // For postgres user, always allow
-        if username == "postgres" {
-            return Ok(Password::new(None, vec![]));
         }
 
         // User not found or cannot login

@@ -32,7 +32,16 @@ rustls-pki-types = "1.0"
 # Examples need additional dependencies
 [dev-dependencies]
 env_logger = "0.10"
+tokio = { version = "1.47", features = ["rt-multi-thread", "macros"] }
 
 [[example]]
 name = "custom_auth_server"
 path = "../examples/custom_auth_server.rs"
+
+[[example]]
+name = "secure_auth_server"
+path = "../examples/secure_auth_server.rs"
+
+[[example]]
+name = "test_basic_auth"
+path = "../examples/test_basic_auth.rs"

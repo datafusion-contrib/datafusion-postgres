@@ -7,7 +7,9 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
 use pgwire::api::auth::noop::NoopStartupHandler;
-use pgwire::api::auth::StartupHandler;
+use pgwire::api::auth::{StartupHandler, DefaultServerParameterProvider};
+use pgwire::messages::{PgWireFrontendMessage, PgWireBackendMessage};
+use futures::Sink;
 use pgwire::api::portal::{Format, Portal};
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
 use pgwire::api::results::{
@@ -31,21 +33,68 @@ pub enum TransactionState {
 }
 
 /// Simple startup handler that does no authentication
-/// For production, use DfAuthSource with proper pgwire authentication handlers
+/// This is the original behavior before password enforcement was added
 pub struct SimpleStartupHandler;
 
 #[async_trait::async_trait]
 impl NoopStartupHandler for SimpleStartupHandler {}
 
+/// Unified startup handler that can do both password enforcement and simple authentication
+/// Uses the proper pgwire authentication handlers internally
+pub struct UnifiedStartupHandler {
+    auth_manager: Arc<AuthManager>,
+}
+
+impl UnifiedStartupHandler {
+    pub fn new(auth_manager: Arc<AuthManager>) -> Self {
+        UnifiedStartupHandler {
+            auth_manager,
+        }
+    }
+}
+
+#[async_trait::async_trait] 
+impl StartupHandler for UnifiedStartupHandler {
+    async fn on_startup<C>(
+        &self,
+        client: &mut C,
+        message: PgWireFrontendMessage,
+    ) -> PgWireResult<()>
+    where
+        C: pgwire::api::ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send,
+        C::Error: std::fmt::Debug,
+        PgWireError: From<C::Error>,
+    {
+        let config = self.auth_manager.get_config();
+        
+        if !config.require_passwords {
+            // For non-password mode, use the simple noop handler
+            let simple_handler = SimpleStartupHandler;
+            return simple_handler.on_startup(client, message).await;
+        }
+        
+        // For password enforcement, use the cleartext password authentication
+        use pgwire::api::auth::cleartext::CleartextPasswordAuthStartupHandler;
+        let auth_source = crate::auth::SimpleAuthSource::new(self.auth_manager.clone());
+        let server_params = DefaultServerParameterProvider::default();
+        
+        let cleartext_handler = CleartextPasswordAuthStartupHandler::new(auth_source, server_params);
+        // The trait StartupHandler is already in scope, so this should work
+        cleartext_handler.on_startup(client, message).await
+    }
+}
+
+
 pub struct HandlerFactory {
     pub session_service: Arc<DfSessionService>,
+    pub auth_manager: Arc<AuthManager>,
 }
 
 impl HandlerFactory {
     pub fn new(session_context: Arc<SessionContext>, auth_manager: Arc<AuthManager>) -> Self {
         let session_service =
             Arc::new(DfSessionService::new(session_context, auth_manager.clone()));
-        HandlerFactory { session_service }
+        HandlerFactory { session_service, auth_manager }
     }
 }
 
@@ -59,7 +108,8 @@ impl PgWireServerHandlers for HandlerFactory {
     }
 
     fn startup_handler(&self) -> Arc<impl StartupHandler> {
-        Arc::new(SimpleStartupHandler)
+        // Create a unified handler that can do both password enforcement and simple authentication
+        Arc::new(UnifiedStartupHandler::new(self.auth_manager.clone()))
     }
 }
 

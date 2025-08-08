@@ -4,7 +4,12 @@ This document describes how to use the custom authentication manager feature in 
 
 ## Overview
 
-The datafusion-postgres library now supports custom authentication managers, allowing you to provide your own user authentication and authorization logic instead of relying on the default empty authentication manager.
+The datafusion-postgres library now supports custom authentication managers with configurable password requirements, allowing you to:
+
+- Provide your own user authentication and authorization logic
+- **Require passwords for all users** (including the default postgres user)
+- Configure whether empty passwords are allowed
+- Enforce secure authentication policies
 
 ## API Changes
 
@@ -56,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```rust
 use std::sync::Arc;
 use datafusion::prelude::SessionContext;
-use datafusion_postgres::auth::{AuthManager, User, RoleConfig};
+use datafusion_postgres::auth::{AuthManager, AuthConfig, User, RoleConfig};
 use datafusion_postgres::{serve_with_auth, ServerOptions};
 
 #[tokio::main]
@@ -107,6 +112,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Secure Authentication with Password Requirements
+
+```rust
+use std::sync::Arc;
+use datafusion::prelude::SessionContext;
+use datafusion_postgres::auth::{AuthManager, AuthConfig, User};
+use datafusion_postgres::{serve_with_auth, ServerOptions};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create secure auth configuration requiring passwords
+    let secure_config = AuthConfig {
+        require_passwords: true,
+        allow_empty_passwords: false,
+    };
+
+    // Create auth manager with secure configuration
+    let auth_manager = AuthManager::new_with_config(secure_config);
+
+    // Set a password for the default postgres user
+    auth_manager.set_postgres_password("secure_postgres_password").await?;
+
+    // Add custom users with required passwords
+    let admin_user = User {
+        username: "admin".to_string(),
+        password_hash: "admin_secure_pass".to_string(),
+        roles: vec!["dbadmin".to_string()],
+        is_superuser: true,
+        can_login: true,
+        connection_limit: None,
+    };
+
+    auth_manager.add_user(admin_user).await?;
+
+    let session_context = Arc::new(SessionContext::new());
+    let server_options = ServerOptions::new();
+    
+    // Use secure auth manager - passwords now required for ALL users
+    serve_with_auth(session_context, Some(Arc::new(auth_manager)), &server_options).await?;
+    Ok(())
+}
+```
+
 ## Authentication Manager Features
 
 The `AuthManager` provides comprehensive user and role management:
@@ -129,6 +177,12 @@ The `AuthManager` provides comprehensive user and role management:
 - Role-based access control (RBAC)
 - Grant and revoke permissions
 - WITH GRANT OPTION support
+
+### Password Enforcement
+- **Configurable password requirements** - require passwords for all users
+- **Secure postgres user** - can require password for default postgres user
+- **Empty password control** - allow or disallow empty passwords
+- **Authentication policies** - flexible security configuration
 
 ## Security Features
 
@@ -197,8 +251,47 @@ The authentication system can be extended to support:
 - Audit logging
 - Session management
 
+## Examples and Testing
+
+### **Basic Custom Auth Demo**
+```bash
+# Build and run custom auth server (allows passwordless postgres)
+cargo run --example custom_auth_server --manifest-path datafusion-postgres/Cargo.toml
+
+# Connect with different users
+psql -h 127.0.0.1 -p 5439 -U postgres   # Default superuser (no password)
+psql -h 127.0.0.1 -p 5439 -U admin      # Custom admin (password: admin_password)
+psql -h 127.0.0.1 -p 5439 -U reader     # Custom reader (password: reader_password)
+```
+
+### **Secure Auth Demo (Passwords Required)**
+```bash
+# Build and run secure auth server (requires passwords for ALL users)
+cargo run --example secure_auth_server --manifest-path datafusion-postgres/Cargo.toml
+
+# Connect with required passwords
+psql -h 127.0.0.1 -p 5440 -U postgres   # Requires password: secure_postgres_password
+psql -h 127.0.0.1 -p 5440 -U admin      # Requires password: admin_secure_pass
+psql -h 127.0.0.1 -p 5440 -U reader     # Requires password: reader_secure_pass
+
+# Test password enforcement
+python3 tests-integration/test_password_enforcement.py
+```
+
+### **Quick Testing Scripts**
+```bash
+# Test basic custom auth functionality
+./test_custom_auth_example.sh
+
+# Test secure auth with password requirements  
+./test_secure_auth_example.sh
+
+# Run integration tests
+./tests-integration/test.sh
+```
+
 ## See Also
 
 - [Integration Tests](tests-integration/README.md) - Comprehensive test documentation
-- [Examples](examples/custom_auth.rs) - Example implementation
+- [Examples](examples/) - Custom and secure auth server examples
 - [API Documentation](datafusion-postgres/src/auth.rs) - Full API reference
