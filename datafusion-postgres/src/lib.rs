@@ -133,8 +133,17 @@ pub async fn serve_with_handlers(
                 let tls_acceptor_ref = tls_acceptor.clone();
 
                 tokio::spawn(async move {
-                    if let Err(e) = process_socket(socket, tls_acceptor_ref, factory_ref).await {
-                        warn!("Error processing socket: {e}");
+                    // Add connection timeout to prevent hanging connections
+                    let timeout_duration = std::time::Duration::from_secs(300); // 5 minutes
+                    match tokio::time::timeout(timeout_duration, process_socket(socket, tls_acceptor_ref, factory_ref)).await {
+                        Ok(result) => {
+                            if let Err(e) = result {
+                                warn!("Error processing socket: {e}");
+                            }
+                        }
+                        Err(_) => {
+                            warn!("Connection timed out after {} seconds", timeout_duration.as_secs());
+                        }
                     }
                 });
             }
