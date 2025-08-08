@@ -666,96 +666,9 @@ impl AuthManager {
     }
 }
 
-/// AuthSource implementation for integration with pgwire authentication
-/// Provides proper password-based authentication instead of custom startup handler
-#[derive(Clone)]
-pub struct DfAuthSource {
-    pub auth_manager: Arc<AuthManager>,
-}
 
-impl DfAuthSource {
-    pub fn new(auth_manager: Arc<AuthManager>) -> Self {
-        DfAuthSource { auth_manager }
-    }
-}
-
-#[async_trait]
-impl AuthSource for DfAuthSource {
-    async fn get_password(&self, login: &LoginInfo) -> PgWireResult<Password> {
-        if let Some(username) = login.user() {
-            // Check if user exists in our RBAC system
-            if let Some(user) = self.auth_manager.get_user(username).await {
-                if user.can_login {
-                    // Return the stored password hash for authentication
-                    // The pgwire authentication handlers (cleartext/md5/scram) will
-                    // handle the actual password verification process
-                    Ok(Password::new(None, user.password_hash.into_bytes()))
-                } else {
-                    Err(PgWireError::UserError(Box::new(
-                        pgwire::error::ErrorInfo::new(
-                            "FATAL".to_string(),
-                            "28000".to_string(), // invalid_authorization_specification
-                            format!("User \"{username}\" is not allowed to login"),
-                        ),
-                    )))
-                }
-            } else {
-                Err(PgWireError::UserError(Box::new(
-                    pgwire::error::ErrorInfo::new(
-                        "FATAL".to_string(),
-                        "28P01".to_string(), // invalid_password
-                        format!("password authentication failed for user \"{username}\""),
-                    ),
-                )))
-            }
-        } else {
-            Err(PgWireError::UserError(Box::new(
-                pgwire::error::ErrorInfo::new(
-                    "FATAL".to_string(),
-                    "28P01".to_string(), // invalid_password
-                    "No username provided in login request".to_string(),
-                ),
-            )))
-        }
-    }
-}
-
-// REMOVED: Custom startup handler approach
-//
-// Instead of implementing a custom StartupHandler, use the proper pgwire authentication:
-//
-// For cleartext authentication:
-// ```rust
-// use pgwire::api::auth::cleartext::CleartextStartupHandler;
-//
-// let auth_source = Arc::new(DfAuthSource::new(auth_manager));
-// let authenticator = CleartextStartupHandler::new(
-//     auth_source,
-//     Arc::new(DefaultServerParameterProvider::default())
-// );
-// ```
-//
-// For MD5 authentication:
-// ```rust
-// use pgwire::api::auth::md5::MD5StartupHandler;
-//
-// let auth_source = Arc::new(DfAuthSource::new(auth_manager));
-// let authenticator = MD5StartupHandler::new(
-//     auth_source,
-//     Arc::new(DefaultServerParameterProvider::default())
-// );
-// ```
-//
-// For SCRAM authentication (requires "server-api-scram" feature):
-// ```rust
-// use pgwire::api::auth::scram::SASLScramAuthStartupHandler;
-//
-// let auth_source = Arc::new(DfAuthSource::new(auth_manager));
-// let authenticator = SASLScramAuthStartupHandler::new(
-//     auth_source,
-//     Arc::new(DefaultServerParameterProvider::default())
-// );
-// ```
+// Password authentication is implemented using pgwire handlers.
+// See handlers.rs UnifiedStartupHandler for the actual implementation.
 
 /// Simple AuthSource implementation that accepts any user with empty password
 pub struct SimpleAuthSource {

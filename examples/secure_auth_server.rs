@@ -73,14 +73,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("");
     println!("⚠️  This example demonstrates password enforcement configuration!");
     println!("");
-    println!("📚 NOTE: Full password enforcement requires proper pgwire authentication handlers.");
-    println!("         This example shows the AuthConfig API and password requirement setup.");
-    println!("         For production, integrate with pgwire CleartextStartupHandler or MD5StartupHandler.");
+    println!("📚 NOTE: Full password enforcement is implemented using pgwire authentication handlers.");
+    println!("         Wrong passwords will be rejected at the connection level.");
     println!("");
-    println!("💡 Test connections (will show password configuration):");
-    println!("  psql -h 127.0.0.1 -p 5440 -U postgres      # Shows secure auth manager setup");
-    println!("  psql -h 127.0.0.1 -p 5440 -U admin         # Shows custom user with password");
-    println!("  psql -h 127.0.0.1 -p 5440 -U reader        # Shows readonly user with password");
+    println!("💡 Test connections:");
+    println!("  psql -h 127.0.0.1 -p 5440 -U postgres -W   # Enter: secure_postgres_password");
+    println!("  psql -h 127.0.0.1 -p 5440 -U admin -W      # Enter: admin_secure_pass");
+    println!("  psql -h 127.0.0.1 -p 5440 -U reader -W     # Enter: reader_secure_pass");
     
     // Start server with secure auth manager
     serve_with_auth(session_context, Some(auth_manager), &server_options).await?;
