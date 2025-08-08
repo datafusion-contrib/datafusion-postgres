@@ -374,7 +374,23 @@ impl SimpleQueryHandler for DfSessionService {
             }
         }
 
-        let df_result = self.session_context.sql(query).await;
+        // Add query timeout for simple queries
+        let query_timeout = std::time::Duration::from_secs(60); // 60 seconds
+        let df_result = match tokio::time::timeout(
+            query_timeout,
+            self.session_context.sql(query)
+        ).await {
+            Ok(result) => result,
+            Err(_) => {
+                return Err(PgWireError::UserError(Box::new(
+                    pgwire::error::ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "57014".to_string(), // PostgreSQL query_canceled error code
+                        format!("Query execution timeout after {} seconds", query_timeout.as_secs()),
+                    ),
+                )));
+            }
+        };
 
         // Handle query execution errors and transaction state
         let df = match df_result {
@@ -509,19 +525,93 @@ impl ExtendedQueryHandler for DfSessionService {
 
         let (_, plan) = &portal.statement.statement;
 
-        let param_types = plan
-            .get_parameter_types()
-            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+        // Enhanced parameter type inference with fallback for NULL + NULL scenarios
+        let param_types = match plan.get_parameter_types() {
+            Ok(types) => types,
+            Err(e) => {
+                let error_msg = e.to_string();
+                if error_msg.contains("Cannot get result type for arithmetic operation Null + Null") 
+                    || error_msg.contains("Invalid arithmetic operation: Null + Null") {
+                    // Fallback: assume all parameters are integers for arithmetic operations
+                    log::warn!("DataFusion type inference failed for arithmetic operation, using integer fallback");
+                    let param_count = portal.statement.parameter_types.len();
+                    std::collections::HashMap::from_iter(
+                        (0..param_count).map(|i| (format!("${}", i + 1), Some(datafusion::arrow::datatypes::DataType::Int32)))
+                    )
+                } else {
+                    return Err(PgWireError::ApiError(Box::new(e)));
+                }
+            }
+        };
         let param_values = df::deserialize_parameters(portal, &ordered_param_types(&param_types))?; // Fixed: Use &param_types
-        let plan = plan
-            .clone()
-            .replace_params_with_values(&param_values)
-            .map_err(|e| PgWireError::ApiError(Box::new(e)))?; // Fixed: Use &param_values
-        let dataframe = self
-            .session_context
-            .execute_logical_plan(plan)
-            .await
-            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+        
+        // Replace parameters with values, with automatic retry for type inference failures
+        let plan = match plan.clone().replace_params_with_values(&param_values) {
+            Ok(plan) => plan,
+            Err(e) => {
+                let error_msg = e.to_string();
+                if error_msg.contains("Cannot get result type for arithmetic operation Null + Null") 
+                    || error_msg.contains("Invalid arithmetic operation: Null + Null") {
+                    log::info!("Retrying query with enhanced type casting for arithmetic operations");
+                    
+                    // Attempt to reparse the query with explicit type casting
+                    let original_query = &portal.statement.statement.0;
+                    let enhanced_query = enhance_query_with_type_casting(original_query);
+                    
+                    // Try to create a new plan with the enhanced query
+                    match self.session_context.sql(&enhanced_query).await {
+                        Ok(new_plan_df) => {
+                            // Get the logical plan from the new dataframe
+                            let new_plan = new_plan_df.logical_plan().clone();
+                            
+                            // Try parameter substitution again with the new plan
+                            match new_plan.replace_params_with_values(&param_values) {
+                                Ok(final_plan) => final_plan,
+                                Err(_) => {
+                                    // If it still fails, return helpful error message
+                                    return Err(PgWireError::UserError(Box::new(
+                                        pgwire::error::ErrorInfo::new(
+                                            "ERROR".to_string(),
+                                            "42804".to_string(),
+                                            "Cannot infer parameter types for arithmetic operation. Please use explicit type casting like $1::integer + $2::integer".to_string(),
+                                        ),
+                                    )));
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // If enhanced query fails, return helpful error message
+                            return Err(PgWireError::UserError(Box::new(
+                                pgwire::error::ErrorInfo::new(
+                                    "ERROR".to_string(),
+                                    "42804".to_string(),
+                                    "Cannot infer parameter types for arithmetic operation. Please use explicit type casting like $1::integer + $2::integer".to_string(),
+                                ),
+                            )));
+                        }
+                    }
+                } else {
+                    return Err(PgWireError::ApiError(Box::new(e)));
+                }
+            }
+        };
+        // Add query timeout to prevent long-running queries from hanging connections
+        let query_timeout = std::time::Duration::from_secs(60); // 60 seconds
+        let dataframe = match tokio::time::timeout(
+            query_timeout,
+            self.session_context.execute_logical_plan(plan)
+        ).await {
+            Ok(result) => result.map_err(|e| PgWireError::ApiError(Box::new(e)))?,
+            Err(_) => {
+                return Err(PgWireError::UserError(Box::new(
+                    pgwire::error::ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "57014".to_string(), // PostgreSQL query_canceled error code
+                        format!("Query execution timeout after {} seconds", query_timeout.as_secs()),
+                    ),
+                )));
+            }
+        };
         let resp = df::encode_dataframe(dataframe, &portal.result_column_format).await?;
         Ok(Response::Query(resp))
     }
@@ -553,6 +643,27 @@ impl QueryParser for Parser {
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
         Ok((sql.to_string(), optimised))
     }
+}
+
+/// Enhance a SQL query by adding type casting to parameters in arithmetic operations
+/// This helps DataFusion's type inference when it encounters ambiguous parameter types
+fn enhance_query_with_type_casting(query: &str) -> String {
+    use regex::Regex;
+    
+    // Pattern to match arithmetic operations with parameters: $1 + $2, $1 - $2, etc.
+    let arithmetic_pattern = Regex::new(r"\$(\d+)\s*([+\-*/])\s*\$(\d+)").unwrap();
+    
+    // Replace untyped parameters in arithmetic operations with integer-cast parameters
+    let enhanced = arithmetic_pattern.replace_all(query, "$$$1::integer $2 $$$3::integer");
+    
+    // Pattern to match single parameters in potentially ambiguous contexts
+    let single_param_pattern = Regex::new(r"\$(\d+)(?!::)(?=\s*[+\-*/=<>]|\s*\))").unwrap();
+    
+    // Add integer casting to remaining untyped parameters in arithmetic contexts
+    let enhanced = single_param_pattern.replace_all(&enhanced, "$$$1::integer");
+    
+    log::debug!("Enhanced query: {} -> {}", query, enhanced);
+    enhanced.to_string()
 }
 
 fn ordered_param_types(types: &HashMap<String, Option<DataType>>) -> Vec<Option<&DataType>> {
