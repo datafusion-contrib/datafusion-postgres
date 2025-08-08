@@ -28,3 +28,11 @@ tokio = { version = "1.47", features = ["sync", "net"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 rustls-pemfile = "2.0"
 rustls-pki-types = "1.0"
+
+# Examples need additional dependencies
+[dev-dependencies]
+env_logger = "0.10"
+
+[[example]]
+name = "custom_auth_server"
+path = "../examples/custom_auth_server.rs"

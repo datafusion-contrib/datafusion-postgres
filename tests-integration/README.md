@@ -37,6 +37,13 @@ This directory contains comprehensive integration tests for the DataFusion Postg
 - **Connection security** - Encrypted and unencrypted connections
 - **Feature availability** - Command-line TLS options
 
+### 6. Custom Authentication Manager (`test_custom_auth.py`)
+- **Custom auth manager integration** - User-provided authentication services
+- **Custom user management** - Admin and readonly user configurations
+- **Authentication validation** - Proper user/password verification
+- **Access control** - Different permission levels for different users
+- **Concurrent connections** - Multiple simultaneous authenticated connections
+
 ## Key Features Tested
 
 ### PostgreSQL Compatibility
@@ -94,6 +101,9 @@ python3 test_rbac.py
 
 # SSL/TLS encryption tests
 python3 test_ssl.py
+
+# Custom authentication manager tests
+python3 test_custom_auth.py
 ```
 
 ### SSL/TLS Testing
@@ -162,6 +172,7 @@ When all tests pass, you should see:
   ✅ PostgreSQL function compatibility
   ✅ Role-based access control system
   ✅ SSL/TLS encryption support
+  ✅ Custom authentication manager integration
 
 🚀 Ready for production PostgreSQL workloads!
 ```

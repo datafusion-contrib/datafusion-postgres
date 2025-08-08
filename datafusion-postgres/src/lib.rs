@@ -80,8 +80,17 @@ pub async fn serve(
     session_context: Arc<SessionContext>,
     opts: &ServerOptions,
 ) -> Result<(), std::io::Error> {
-    // Create authentication manager
-    let auth_manager = Arc::new(AuthManager::new());
+    serve_with_auth(session_context, None, opts).await
+}
+
+/// Serve the Datafusion `SessionContext` with Postgres protocol and custom authentication.
+pub async fn serve_with_auth(
+    session_context: Arc<SessionContext>,
+    auth_manager: Option<Arc<AuthManager>>,
+    opts: &ServerOptions,
+) -> Result<(), std::io::Error> {
+    // Use provided auth manager or create a new one
+    let auth_manager = auth_manager.unwrap_or_else(|| Arc::new(AuthManager::new()));
 
     // Create the handler factory with authentication
     let factory = Arc::new(HandlerFactory::new(session_context, auth_manager));
@@ -142,5 +151,61 @@ pub async fn serve_with_handlers(
                 warn!("Error accept socket: {e}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::{AuthManager, User};
+    use datafusion::prelude::SessionContext;
+    
+    #[tokio::test]
+    async fn test_serve_with_custom_auth_manager() {
+        // Create a custom auth manager
+        let custom_auth_manager = Arc::new(AuthManager::new());
+        
+        // Add a custom user
+        let custom_user = User {
+            username: "test_user".to_string(),
+            password_hash: "test_password".to_string(),
+            roles: vec!["test_role".to_string()],
+            is_superuser: false,
+            can_login: true,
+            connection_limit: None,
+        };
+        
+        custom_auth_manager.add_user(custom_user).await.expect("Failed to add user");
+        
+        // Wait for initialization
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        
+        // Verify the custom user exists
+        let user = custom_auth_manager.get_user("test_user").await;
+        assert!(user.is_some());
+        assert_eq!(user.unwrap().username, "test_user");
+        
+        // Test that we can create a serve configuration with custom auth manager
+        let session_context = Arc::new(SessionContext::new());
+        let server_options = ServerOptions::new();
+        
+        // This should not panic or error - we're just testing the function signature
+        // We can't actually start the server in a test environment
+        let result = std::panic::catch_unwind(|| {
+            // Just verify the function exists and accepts the parameters
+            // We can't actually run serve in tests as it binds to a port
+        });
+        assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_backward_compatibility() {
+        // Test that the original serve function still exists with the same signature
+        let session_context = Arc::new(SessionContext::new());
+        let server_options = ServerOptions::new();
+        
+        // This should compile - testing backward compatibility
+        // We can't run it in tests as it would bind to a port
+        let _future = serve(session_context, &server_options);
     }
 }

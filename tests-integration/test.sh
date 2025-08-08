@@ -10,6 +10,10 @@ cleanup() {
             kill -9 $pid 2>/dev/null || true
         fi
     done
+    
+    # Clean up any remaining custom auth test processes
+    pkill -f "custom_auth_server" 2>/dev/null || true
+    pkill -f "custom-auth-test-server" 2>/dev/null || true
 }
 
 # Trap to cleanup on exit
@@ -170,6 +174,19 @@ else
 fi
 
 kill -9 $SSL_PID 2>/dev/null || true
+sleep 3
+
+# Test 6: Custom Authentication Manager
+echo ""
+echo "🔑 Test 6: Custom Authentication Manager"
+echo "---------------------------------------"
+
+if python3 test_custom_auth_simple.py; then
+    echo "✅ Custom auth manager test passed"
+else
+    echo "❌ Custom auth manager test failed"
+    exit 1
+fi
 
 echo ""
 echo "🎉 All enhanced integration tests passed!"
@@ -184,5 +201,6 @@ echo "  ✅ Improved pg_catalog system tables"
 echo "  ✅ PostgreSQL function compatibility"
 echo "  ✅ Role-based access control (RBAC)"
 echo "  ✅ SSL/TLS encryption support"
+echo "  ✅ Custom authentication manager integration"
 echo ""
-echo "🚀 Ready for secure production PostgreSQL workloads!"
+echo "🚀 Ready for secure production PostgreSQL workloads with custom auth!"
