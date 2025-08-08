@@ -135,14 +135,22 @@ pub async fn serve_with_handlers(
                 tokio::spawn(async move {
                     // Add connection timeout to prevent hanging connections
                     let timeout_duration = std::time::Duration::from_secs(300); // 5 minutes
-                    match tokio::time::timeout(timeout_duration, process_socket(socket, tls_acceptor_ref, factory_ref)).await {
+                    match tokio::time::timeout(
+                        timeout_duration,
+                        process_socket(socket, tls_acceptor_ref, factory_ref),
+                    )
+                    .await
+                    {
                         Ok(result) => {
                             if let Err(e) = result {
                                 warn!("Error processing socket: {e}");
                             }
                         }
                         Err(_) => {
-                            warn!("Connection timed out after {} seconds", timeout_duration.as_secs());
+                            warn!(
+                                "Connection timed out after {} seconds",
+                                timeout_duration.as_secs()
+                            );
                         }
                     }
                 });
