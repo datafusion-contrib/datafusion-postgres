@@ -935,7 +935,7 @@ impl PgCatalogSchemaProvider {
             None,
             None,
         );
-        
+
         // current_setting(setting_name) function
         data.add_function(
             2077,
@@ -956,7 +956,7 @@ impl PgCatalogSchemaProvider {
             "s",
             1,
             0,
-            25,  // returns TEXT
+            25,   // returns TEXT
             "25", // takes TEXT parameter
             None,
             None,
@@ -2059,20 +2059,20 @@ pub fn create_current_setting_udf() -> ScalarUDF {
     let func = move |args: &[ColumnarValue]| {
         let args = ColumnarValue::values_to_arrays(args)?;
         let setting_names = &args[0];
-        
+
         // Handle different setting name requests with reasonable defaults
         let mut builder = StringBuilder::new();
-        
+
         for i in 0..setting_names.len() {
             let setting_name = setting_names
                 .as_any()
                 .downcast_ref::<StringArray>()
                 .ok_or_else(|| DataFusionError::Internal("Expected string array".to_string()))?
                 .value(i);
-            
+
             // Provide reasonable defaults for common PostgreSQL settings
             let value = match setting_name.to_lowercase().as_str() {
-                "server_version" => "16.0",  // Match modern PostgreSQL version
+                "server_version" => "16.0", // Match modern PostgreSQL version
                 "server_version_num" => "160000",
                 "client_encoding" => "UTF8",
                 "timezone" => "UTC",
@@ -2093,7 +2093,7 @@ pub fn create_current_setting_udf() -> ScalarUDF {
                 "default_text_search_config" => "pg_catalog.english",
                 _ => "", // Return empty string for unknown settings
             };
-            
+
             builder.append_value(value);
         }
 
