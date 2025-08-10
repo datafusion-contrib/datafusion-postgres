@@ -669,11 +669,11 @@ fn enhance_query_with_type_casting(query: &str) -> String {
     // Replace untyped parameters in arithmetic operations with integer-cast parameters
     let enhanced = arithmetic_pattern.replace_all(query, "$$$1::integer $2 $$$3::integer");
 
-    // Pattern to match single parameters in potentially ambiguous contexts
-    let single_param_pattern = Regex::new(r"\$(\d+)(?!::)(?=\s*[+\-*/=<>]|\s*\))").unwrap();
+    // Pattern to match single parameters followed by arithmetic operators (avoiding lookaround)
+    let single_param_pattern = Regex::new(r"\$(\d+)(\s*[+\-*/=<>])").unwrap();
 
     // Add integer casting to remaining untyped parameters in arithmetic contexts
-    let enhanced = single_param_pattern.replace_all(&enhanced, "$$$1::integer");
+    let enhanced = single_param_pattern.replace_all(&enhanced, "$$$1::integer$2");
 
     log::debug!("Enhanced query: {} -> {}", query, enhanced);
     enhanced.to_string()
