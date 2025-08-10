@@ -935,6 +935,40 @@ impl PgCatalogSchemaProvider {
             None,
             None,
         );
+        
+        // current_setting(setting_name) function
+        data.add_function(
+            2077,
+            "current_setting",
+            11,
+            10,
+            12,
+            1.0,
+            0.0,
+            0,
+            0,
+            "f",
+            false,
+            true,
+            true,
+            false,
+            "s",
+            "s",
+            1,
+            0,
+            25,  // returns TEXT
+            "25", // takes TEXT parameter
+            None,
+            None,
+            None,
+            None,
+            None,
+            "current_setting",
+            None,
+            None,
+            None,
+            None,
+        );
 
         data
     }
@@ -2020,6 +2054,63 @@ pub fn create_format_type_udf() -> ScalarUDF {
     )
 }
 
+pub fn create_current_setting_udf() -> ScalarUDF {
+    // Define the function implementation for current_setting(setting_name)
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let setting_names = &args[0];
+        
+        // Handle different setting name requests with reasonable defaults
+        let mut builder = StringBuilder::new();
+        
+        for i in 0..setting_names.len() {
+            let setting_name = setting_names
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| DataFusionError::Internal("Expected string array".to_string()))?
+                .value(i);
+            
+            // Provide reasonable defaults for common PostgreSQL settings
+            let value = match setting_name.to_lowercase().as_str() {
+                "server_version" => "16.0",  // Match modern PostgreSQL version
+                "server_version_num" => "160000",
+                "client_encoding" => "UTF8",
+                "timezone" => "UTC",
+                "datestyle" => "ISO, MDY",
+                "default_transaction_isolation" => "read committed",
+                "application_name" => "datafusion-postgres",
+                "session_authorization" => "postgres",
+                "is_superuser" => "on",
+                "integer_datetimes" => "on",
+                "search_path" => "\"$user\", public",
+                "standard_conforming_strings" => "on",
+                "synchronous_commit" => "on",
+                "wal_level" => "replica",
+                "max_connections" => "100",
+                "shared_preload_libraries" => "",
+                "log_statement" => "none",
+                "log_min_messages" => "warning",
+                "default_text_search_config" => "pg_catalog.english",
+                _ => "", // Return empty string for unknown settings
+            };
+            
+            builder.append_value(value);
+        }
+
+        let array: ArrayRef = Arc::new(builder.finish());
+        Ok(ColumnarValue::Array(array))
+    };
+
+    // Wrap the implementation in a scalar function
+    create_udf(
+        "current_setting",
+        vec![DataType::Utf8],
+        DataType::Utf8,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
 /// Install pg_catalog and postgres UDFs to current `SessionContext`
 pub fn setup_pg_catalog(
     session_context: &SessionContext,
@@ -2042,6 +2133,7 @@ pub fn setup_pg_catalog(
     session_context.register_udf(create_has_table_privilege_2param_udf());
     session_context.register_udf(create_pg_table_is_visible());
     session_context.register_udf(create_format_type_udf());
+    session_context.register_udf(create_current_setting_udf());
 
     Ok(())
 }
