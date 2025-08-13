@@ -4,3 +4,7 @@
 .vscode
 .aider*
 /test_env
+
+# OS
+.DS_Store
+Thumbs.db

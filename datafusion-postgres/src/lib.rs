@@ -33,6 +33,7 @@ pub struct ServerOptions {
     port: u16,
     tls_cert_path: Option<String>,
     tls_key_path: Option<String>,
+    query_timeout_seconds: u64,
 }
 
 impl ServerOptions {
@@ -48,6 +49,7 @@ impl Default for ServerOptions {
             port: 5432,
             tls_cert_path: None,
             tls_key_path: None,
+            query_timeout_seconds: 300, // 5 minutes default
         }
     }
 }
@@ -83,8 +85,13 @@ pub async fn serve(
     // Create authentication manager
     let auth_manager = Arc::new(AuthManager::new());
 
-    // Create the handler factory with authentication
-    let factory = Arc::new(HandlerFactory::new(session_context, auth_manager));
+    // Create the handler factory with authentication and timeout
+    let query_timeout = std::time::Duration::from_secs(opts.query_timeout_seconds);
+    let factory = Arc::new(HandlerFactory::new(
+        session_context,
+        auth_manager,
+        query_timeout,
+    ));
 
     serve_with_handlers(factory, opts).await
 }
@@ -133,25 +140,8 @@ pub async fn serve_with_handlers(
                 let tls_acceptor_ref = tls_acceptor.clone();
 
                 tokio::spawn(async move {
-                    // Add connection timeout to prevent hanging connections
-                    let timeout_duration = std::time::Duration::from_secs(300); // 5 minutes
-                    match tokio::time::timeout(
-                        timeout_duration,
-                        process_socket(socket, tls_acceptor_ref, factory_ref),
-                    )
-                    .await
-                    {
-                        Ok(result) => {
-                            if let Err(e) = result {
-                                warn!("Error processing socket: {e}");
-                            }
-                        }
-                        Err(_) => {
-                            warn!(
-                                "Connection timed out after {} seconds",
-                                timeout_duration.as_secs()
-                            );
-                        }
+                    if let Err(e) = process_socket(socket, tls_acceptor_ref, factory_ref).await {
+                        warn!("Error processing socket: {e}");
                     }
                 });
             }

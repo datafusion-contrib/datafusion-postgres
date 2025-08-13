@@ -42,9 +42,16 @@ pub struct HandlerFactory {
 }
 
 impl HandlerFactory {
-    pub fn new(session_context: Arc<SessionContext>, auth_manager: Arc<AuthManager>) -> Self {
-        let session_service =
-            Arc::new(DfSessionService::new(session_context, auth_manager.clone()));
+    pub fn new(
+        session_context: Arc<SessionContext>,
+        auth_manager: Arc<AuthManager>,
+        query_timeout: std::time::Duration,
+    ) -> Self {
+        let session_service = Arc::new(DfSessionService::new(
+            session_context,
+            auth_manager.clone(),
+            query_timeout,
+        ));
         HandlerFactory { session_service }
     }
 }
@@ -70,12 +77,14 @@ pub struct DfSessionService {
     timezone: Arc<Mutex<String>>,
     transaction_state: Arc<Mutex<TransactionState>>,
     auth_manager: Arc<AuthManager>,
+    query_timeout: std::time::Duration,
 }
 
 impl DfSessionService {
     pub fn new(
         session_context: Arc<SessionContext>,
         auth_manager: Arc<AuthManager>,
+        query_timeout: std::time::Duration,
     ) -> DfSessionService {
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
@@ -86,6 +95,7 @@ impl DfSessionService {
             timezone: Arc::new(Mutex::new("UTC".to_string())),
             transaction_state: Arc::new(Mutex::new(TransactionState::None)),
             auth_manager,
+            query_timeout,
         }
     }
 
@@ -305,8 +315,8 @@ impl DfSessionService {
                     Ok(Some(Response::Query(resp)))
                 }
                 "show search_path" => {
-                    let default_catalog = "datafusion";
-                    let resp = Self::mock_show_response("search_path", default_catalog)?;
+                    let search_path = "\"$user\", public, pg_catalog";
+                    let resp = Self::mock_show_response("search_path", search_path)?;
                     Ok(Some(Response::Query(resp)))
                 }
                 _ => Err(PgWireError::UserError(Box::new(
@@ -319,6 +329,57 @@ impl DfSessionService {
             }
         } else {
             Ok(None)
+        }
+    }
+
+    async fn try_respond_maintenance_statements<'a>(
+        &self,
+        query_lower: &str,
+    ) -> PgWireResult<Option<Response<'a>>> {
+        let query_trimmed = query_lower.trim().trim_end_matches(';');
+        match query_trimmed {
+            // Commands that asyncpg commonly sends during cleanup/reset
+            "unlisten *" | "unlisten" => {
+                // UNLISTEN is for PostgreSQL LISTEN/NOTIFY feature
+                // Return success but do nothing
+                Ok(Some(Response::Execution(Tag::new("UNLISTEN"))))
+            }
+            "reset all" => {
+                // RESET ALL clears all session settings
+                // Return success but do nothing (we don't persist session settings anyway)
+                Ok(Some(Response::Execution(Tag::new("RESET"))))
+            }
+            "discard all" => {
+                // DISCARD ALL cleans up session state
+                // Return success but do nothing
+                Ok(Some(Response::Execution(Tag::new("DISCARD"))))
+            }
+            "deallocate all" => {
+                // DEALLOCATE ALL removes all prepared statements
+                // Return success but do nothing (we don't persist prepared statements)
+                Ok(Some(Response::Execution(Tag::new("DEALLOCATE"))))
+            }
+            _ if query_trimmed.starts_with("listen ") => {
+                // LISTEN is for PostgreSQL LISTEN/NOTIFY feature
+                // Return success but do nothing
+                Ok(Some(Response::Execution(Tag::new("LISTEN"))))
+            }
+            _ if query_trimmed.starts_with("unlisten ") => {
+                // UNLISTEN for specific channel
+                // Return success but do nothing
+                Ok(Some(Response::Execution(Tag::new("UNLISTEN"))))
+            }
+            _ if query_trimmed.starts_with("deallocate ") => {
+                // DEALLOCATE for specific prepared statement
+                // Return success but do nothing
+                Ok(Some(Response::Execution(Tag::new("DEALLOCATE"))))
+            }
+            _ if query_trimmed.starts_with("reset ") => {
+                // RESET for specific setting
+                // Return success but do nothing
+                Ok(Some(Response::Execution(Tag::new("RESET"))))
+            }
+            _ => Ok(None),
         }
     }
 }
@@ -360,6 +421,14 @@ impl SimpleQueryHandler for DfSessionService {
             return Ok(vec![resp]);
         }
 
+        // Handle PostgreSQL cleanup/maintenance commands that can be safely ignored
+        if let Some(resp) = self
+            .try_respond_maintenance_statements(&query_lower)
+            .await?
+        {
+            return Ok(vec![resp]);
+        }
+
         // Check if we're in a failed transaction and block non-transaction commands
         {
             let state = self.transaction_state.lock().await;
@@ -375,9 +444,8 @@ impl SimpleQueryHandler for DfSessionService {
         }
 
         // Add query timeout for simple queries
-        let query_timeout = std::time::Duration::from_secs(60); // 60 seconds
         let df_result =
-            match tokio::time::timeout(query_timeout, self.session_context.sql(query)).await {
+            match tokio::time::timeout(self.query_timeout, self.session_context.sql(query)).await {
                 Ok(result) => result,
                 Err(_) => {
                     return Err(PgWireError::UserError(Box::new(
@@ -386,7 +454,7 @@ impl SimpleQueryHandler for DfSessionService {
                             "57014".to_string(), // PostgreSQL query_canceled error code
                             format!(
                                 "Query execution timeout after {} seconds",
-                                query_timeout.as_secs()
+                                self.query_timeout.as_secs()
                             ),
                         ),
                     )));
@@ -530,19 +598,25 @@ impl ExtendedQueryHandler for DfSessionService {
         let param_types = match plan.get_parameter_types() {
             Ok(types) => types,
             Err(e) => {
-                let error_msg = e.to_string();
-                if error_msg.contains("Cannot get result type for arithmetic operation Null + Null")
-                    || error_msg.contains("Invalid arithmetic operation: Null + Null")
-                {
-                    // Fallback: assume all parameters are integers for arithmetic operations
-                    log::warn!("DataFusion type inference failed for arithmetic operation, using integer fallback");
-                    let param_count = portal.statement.parameter_types.len();
-                    std::collections::HashMap::from_iter((0..param_count).map(|i| {
-                        (
-                            format!("${}", i + 1),
-                            Some(datafusion::arrow::datatypes::DataType::Int32),
-                        )
-                    }))
+                // Check for specific planning errors related to NULL arithmetic operations
+                if matches!(e, datafusion::error::DataFusionError::Plan(_)) {
+                    let error_msg = e.to_string();
+                    if error_msg
+                        .contains("Cannot get result type for arithmetic operation Null + Null")
+                        || error_msg.contains("Invalid arithmetic operation: Null + Null")
+                    {
+                        // Fallback: assume all parameters are integers for arithmetic operations
+                        log::warn!("DataFusion type inference failed for arithmetic operation, using integer fallback");
+                        let param_count = portal.statement.parameter_types.len();
+                        std::collections::HashMap::from_iter((0..param_count).map(|i| {
+                            (
+                                format!("${}", i + 1),
+                                Some(datafusion::arrow::datatypes::DataType::Int32),
+                            )
+                        }))
+                    } else {
+                        return Err(PgWireError::ApiError(Box::new(e)));
+                    }
                 } else {
                     return Err(PgWireError::ApiError(Box::new(e)));
                 }
@@ -554,49 +628,55 @@ impl ExtendedQueryHandler for DfSessionService {
         let plan = match plan.clone().replace_params_with_values(&param_values) {
             Ok(plan) => plan,
             Err(e) => {
-                let error_msg = e.to_string();
-                if error_msg.contains("Cannot get result type for arithmetic operation Null + Null")
-                    || error_msg.contains("Invalid arithmetic operation: Null + Null")
-                {
-                    log::info!(
-                        "Retrying query with enhanced type casting for arithmetic operations"
-                    );
+                // Check for specific planning errors related to NULL arithmetic operations
+                if matches!(e, datafusion::error::DataFusionError::Plan(_)) {
+                    let error_msg = e.to_string();
+                    if error_msg
+                        .contains("Cannot get result type for arithmetic operation Null + Null")
+                        || error_msg.contains("Invalid arithmetic operation: Null + Null")
+                    {
+                        log::info!(
+                            "Retrying query with enhanced type casting for arithmetic operations"
+                        );
 
-                    // Attempt to reparse the query with explicit type casting
-                    let original_query = &portal.statement.statement.0;
-                    let enhanced_query = enhance_query_with_type_casting(original_query);
+                        // Attempt to reparse the query with explicit type casting
+                        let original_query = &portal.statement.statement.0;
+                        let enhanced_query = enhance_query_with_type_casting(original_query);
 
-                    // Try to create a new plan with the enhanced query
-                    match self.session_context.sql(&enhanced_query).await {
-                        Ok(new_plan_df) => {
-                            // Get the logical plan from the new dataframe
-                            let new_plan = new_plan_df.logical_plan().clone();
+                        // Try to create a new plan with the enhanced query
+                        match self.session_context.sql(&enhanced_query).await {
+                            Ok(new_plan_df) => {
+                                // Get the logical plan from the new dataframe
+                                let new_plan = new_plan_df.logical_plan().clone();
 
-                            // Try parameter substitution again with the new plan
-                            match new_plan.replace_params_with_values(&param_values) {
-                                Ok(final_plan) => final_plan,
-                                Err(_) => {
-                                    // If it still fails, return helpful error message
-                                    return Err(PgWireError::UserError(Box::new(
+                                // Try parameter substitution again with the new plan
+                                match new_plan.replace_params_with_values(&param_values) {
+                                    Ok(final_plan) => final_plan,
+                                    Err(_) => {
+                                        // If it still fails, return helpful error message
+                                        return Err(PgWireError::UserError(Box::new(
                                         pgwire::error::ErrorInfo::new(
                                             "ERROR".to_string(),
                                             "42804".to_string(),
                                             "Cannot infer parameter types for arithmetic operation. Please use explicit type casting like $1::integer + $2::integer".to_string(),
                                         ),
                                     )));
+                                    }
                                 }
                             }
-                        }
-                        Err(_) => {
-                            // If enhanced query fails, return helpful error message
-                            return Err(PgWireError::UserError(Box::new(
+                            Err(_) => {
+                                // If enhanced query fails, return helpful error message
+                                return Err(PgWireError::UserError(Box::new(
                                 pgwire::error::ErrorInfo::new(
                                     "ERROR".to_string(),
                                     "42804".to_string(),
                                     "Cannot infer parameter types for arithmetic operation. Please use explicit type casting like $1::integer + $2::integer".to_string(),
                                 ),
                             )));
+                            }
                         }
+                    } else {
+                        return Err(PgWireError::ApiError(Box::new(e)));
                     }
                 } else {
                     return Err(PgWireError::ApiError(Box::new(e)));
@@ -604,9 +684,8 @@ impl ExtendedQueryHandler for DfSessionService {
             }
         };
         // Add query timeout to prevent long-running queries from hanging connections
-        let query_timeout = std::time::Duration::from_secs(60); // 60 seconds
         let dataframe = match tokio::time::timeout(
-            query_timeout,
+            self.query_timeout,
             self.session_context.execute_logical_plan(plan),
         )
         .await
@@ -619,7 +698,7 @@ impl ExtendedQueryHandler for DfSessionService {
                         "57014".to_string(), // PostgreSQL query_canceled error code
                         format!(
                             "Query execution timeout after {} seconds",
-                            query_timeout.as_secs()
+                            self.query_timeout.as_secs()
                         ),
                     ),
                 )));
@@ -659,24 +738,56 @@ impl QueryParser for Parser {
 }
 
 /// Enhance a SQL query by adding type casting to parameters in arithmetic operations
+/// and translating PostgreSQL-specific types to DataFusion-compatible types
 /// This helps DataFusion's type inference when it encounters ambiguous parameter types
 fn enhance_query_with_type_casting(query: &str) -> String {
     use regex::Regex;
+
+    let mut enhanced = query.to_string();
+
+    // First, handle PostgreSQL-specific type translations
+    // Translate 'oid' type to 'integer' (oid is a 32-bit unsigned integer in PostgreSQL)
+    let oid_pattern = Regex::new(r"\boid\b").unwrap();
+    enhanced = oid_pattern.replace_all(&enhanced, "integer").to_string();
+
+    // Translate other PostgreSQL types to DataFusion equivalents
+    let regtype_pattern = Regex::new(r"\bregtype\b").unwrap();
+    enhanced = regtype_pattern
+        .replace_all(&enhanced, "integer")
+        .to_string();
+
+    let regclass_pattern = Regex::new(r"\bregclass\b").unwrap();
+    enhanced = regclass_pattern
+        .replace_all(&enhanced, "integer")
+        .to_string();
+
+    let regproc_pattern = Regex::new(r"\bregproc\b").unwrap();
+    enhanced = regproc_pattern
+        .replace_all(&enhanced, "integer")
+        .to_string();
+
+    // Handle pg_catalog schema references more explicitly
+    let pg_catalog_pattern = Regex::new(r"\bpg_catalog\.(\w+)").unwrap();
+    enhanced = pg_catalog_pattern.replace_all(&enhanced, "$1").to_string();
 
     // Pattern to match arithmetic operations with parameters: $1 + $2, $1 - $2, etc.
     let arithmetic_pattern = Regex::new(r"\$(\d+)\s*([+\-*/])\s*\$(\d+)").unwrap();
 
     // Replace untyped parameters in arithmetic operations with integer-cast parameters
-    let enhanced = arithmetic_pattern.replace_all(query, "$$$1::integer $2 $$$3::integer");
+    enhanced = arithmetic_pattern
+        .replace_all(&enhanced, "$$$1::integer $2 $$$3::integer")
+        .to_string();
 
     // Pattern to match single parameters followed by arithmetic operators (avoiding lookaround)
     let single_param_pattern = Regex::new(r"\$(\d+)(\s*[+\-*/=<>])").unwrap();
 
     // Add integer casting to remaining untyped parameters in arithmetic contexts
-    let enhanced = single_param_pattern.replace_all(&enhanced, "$$$1::integer$2");
+    enhanced = single_param_pattern
+        .replace_all(&enhanced, "$$$1::integer$2")
+        .to_string();
 
     log::debug!("Enhanced query: {} -> {}", query, enhanced);
-    enhanced.to_string()
+    enhanced
 }
 
 fn ordered_param_types(types: &HashMap<String, Option<DataType>>) -> Vec<Option<&DataType>> {
@@ -685,4 +796,56 @@ fn ordered_param_types(types: &HashMap<String, Option<DataType>>) -> Vec<Option<
     let mut types = types.iter().collect::<Vec<_>>();
     types.sort_by(|a, b| a.0.cmp(b.0));
     types.into_iter().map(|pt| pt.1.as_ref()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_enhance_query_with_type_casting() {
+        // Test oid type translation
+        let query = "SELECT oid, typname FROM pg_type WHERE oid = $1";
+        let enhanced = enhance_query_with_type_casting(query);
+        assert_eq!(
+            enhanced,
+            "SELECT integer, typname FROM pg_type WHERE integer = $1"
+        );
+
+        // Test arithmetic parameter casting
+        let query = "SELECT $1 + $2";
+        let enhanced = enhance_query_with_type_casting(query);
+        assert_eq!(enhanced, "SELECT $1::integer + $2::integer");
+
+        // Test regtype translation
+        let query = "SELECT regtype FROM information_schema.columns";
+        let enhanced = enhance_query_with_type_casting(query);
+        assert_eq!(enhanced, "SELECT integer FROM information_schema.columns");
+
+        // Test pg_catalog schema removal
+        let query = "SELECT pg_catalog.pg_type.oid FROM pg_catalog.pg_type";
+        let enhanced = enhance_query_with_type_casting(query);
+        assert_eq!(enhanced, "SELECT pg_type.integer FROM pg_type");
+
+        // Test complex query with multiple transformations
+        let query = "SELECT t.oid, t.typname FROM pg_catalog.pg_type t WHERE t.oid = $1 + $2";
+        let enhanced = enhance_query_with_type_casting(query);
+        assert_eq!(enhanced, "SELECT t.integer, t.typname FROM pg_type t WHERE t.integer = $1::integer + $2::integer");
+
+        // Test parameter with equals operator - the regex looks for parameter followed by operator
+        // In "WHERE id = $1", the $1 is not followed by an operator, so no casting applied
+        let query = "SELECT * FROM table WHERE id = $1";
+        let enhanced = enhance_query_with_type_casting(query);
+        assert_eq!(enhanced, "SELECT * FROM table WHERE id = $1");
+
+        // Test parameter that IS followed by an operator
+        let query = "SELECT * FROM table WHERE id = $1 + 5";
+        let enhanced = enhance_query_with_type_casting(query);
+        assert_eq!(enhanced, "SELECT * FROM table WHERE id = $1::integer + 5");
+
+        // Test query without parameters should remain unchanged
+        let query = "SELECT name FROM users";
+        let enhanced = enhance_query_with_type_casting(query);
+        assert_eq!(enhanced, "SELECT name FROM users");
+    }
 }
