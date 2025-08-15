@@ -104,7 +104,12 @@ where
                 let value = portal.parameter::<i64>(i, &pg_type)?;
                 deserialized_params.push(ScalarValue::Int64(value));
             }
-            Type::TEXT | Type::VARCHAR => {
+            Type::TEXT => {
+                let value = portal.parameter::<String>(i, &pg_type)?;
+                // Use Utf8View for TEXT type to match DataFusion's internal schema expectations
+                deserialized_params.push(ScalarValue::Utf8View(value));
+            }
+            Type::VARCHAR => {
                 let value = portal.parameter::<String>(i, &pg_type)?;
                 deserialized_params.push(ScalarValue::Utf8(value));
             }
@@ -236,7 +241,17 @@ where
                     &DataType::Float64,
                 )));
             }
-            Type::TEXT_ARRAY | Type::VARCHAR_ARRAY => {
+            Type::TEXT_ARRAY => {
+                let value = portal.parameter::<Vec<Option<String>>>(i, &pg_type)?;
+                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
+                    v.into_iter().map(ScalarValue::Utf8View).collect()
+                });
+                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
+                    &scalar_values,
+                    &DataType::Utf8View,
+                )));
+            }
+            Type::VARCHAR_ARRAY => {
                 let value = portal.parameter::<Vec<Option<String>>>(i, &pg_type)?;
                 let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
                     v.into_iter().map(ScalarValue::Utf8).collect()
@@ -261,6 +276,18 @@ where
                 let value = portal.parameter::<String>(i, &pg_type)?;
                 // Store MAC addresses as strings for now
                 deserialized_params.push(ScalarValue::Utf8(value));
+            }
+            Type::UNKNOWN => {
+                // For unknown types, try to deserialize as integer first, then fallback to text
+                // This handles cases like NULL arithmetic where DataFusion can't infer types
+                match portal.parameter::<i32>(i, &Type::INT4) {
+                    Ok(value) => deserialized_params.push(ScalarValue::Int32(value)),
+                    Err(_) => {
+                        // Fallback to text if integer parsing fails
+                        let value = portal.parameter::<String>(i, &Type::TEXT)?;
+                        deserialized_params.push(ScalarValue::Utf8View(value));
+                    }
+                }
             }
             // TODO: add more advanced types (composite types, ranges, etc.)
             _ => {

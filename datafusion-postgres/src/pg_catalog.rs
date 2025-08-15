@@ -936,6 +936,40 @@ impl PgCatalogSchemaProvider {
             None,
         );
 
+        // current_setting(setting_name) function
+        data.add_function(
+            2077,
+            "current_setting",
+            11,
+            10,
+            12,
+            1.0,
+            0.0,
+            0,
+            0,
+            "f",
+            false,
+            true,
+            true,
+            false,
+            "s",
+            "s",
+            1,
+            0,
+            25,   // returns TEXT
+            "25", // takes TEXT parameter
+            None,
+            None,
+            None,
+            None,
+            None,
+            "current_setting",
+            None,
+            None,
+            None,
+            None,
+        );
+
         data
     }
 }
@@ -2020,12 +2054,110 @@ pub fn create_format_type_udf() -> ScalarUDF {
     )
 }
 
+pub fn create_current_setting_udf() -> ScalarUDF {
+    // Define the function implementation for current_setting(setting_name)
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let setting_names = &args[0];
+
+        // Handle different setting name requests with reasonable defaults
+        let mut builder = StringBuilder::new();
+
+        for i in 0..setting_names.len() {
+            let setting_name = setting_names
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| DataFusionError::Internal("Expected string array".to_string()))?
+                .value(i);
+
+            // Provide reasonable defaults for common PostgreSQL settings
+            let value = match setting_name.to_lowercase().as_str() {
+                "server_version" => "16.0", // Match modern PostgreSQL version
+                "server_version_num" => "160000",
+                "client_encoding" => "UTF8",
+                "timezone" => "UTC",
+                "datestyle" => "ISO, MDY",
+                "default_transaction_isolation" => "read committed",
+                "application_name" => "datafusion-postgres",
+                "session_authorization" => "postgres",
+                "is_superuser" => "on",
+                "integer_datetimes" => "on",
+                "search_path" => "\"$user\", public, pg_catalog",
+                "standard_conforming_strings" => "on",
+                "synchronous_commit" => "on",
+                "wal_level" => "replica",
+                "max_connections" => "100",
+                "shared_preload_libraries" => "",
+                "log_statement" => "none",
+                "log_min_messages" => "warning",
+                "default_text_search_config" => "pg_catalog.english",
+                _ => "", // Return empty string for unknown settings
+            };
+
+            builder.append_value(value);
+        }
+
+        let array: ArrayRef = Arc::new(builder.finish());
+        Ok(ColumnarValue::Array(array))
+    };
+
+    // Wrap the implementation in a scalar function
+    create_udf(
+        "current_setting",
+        vec![DataType::Utf8],
+        DataType::Utf8,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_set_config_udf() -> ScalarUDF {
+    // Define the function implementation for set_config(setting_name, new_value, is_local)
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let _setting_names = &args[0]; // Setting name
+        let new_values = &args[1]; // New value
+        let _is_local = &args[2]; // Whether the setting is local to transaction
+
+        // For asyncpg compatibility, we just return the new value that was "set"
+        // In a real PostgreSQL server, this would actually modify the setting
+        let mut builder = StringBuilder::new();
+
+        for i in 0..new_values.len() {
+            let new_value = new_values
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| DataFusionError::Internal("Expected string array".to_string()))?
+                .value(i);
+
+            // Just echo back the value that was "set"
+            builder.append_value(new_value);
+        }
+
+        let array: ArrayRef = Arc::new(builder.finish());
+        Ok(ColumnarValue::Array(array))
+    };
+
+    // Wrap the implementation in a scalar function
+    create_udf(
+        "set_config",
+        vec![DataType::Utf8, DataType::Utf8, DataType::Boolean],
+        DataType::Utf8,
+        Volatility::Volatile,
+        Arc::new(func),
+    )
+}
+
 /// Install pg_catalog and postgres UDFs to current `SessionContext`
-pub fn setup_pg_catalog(
+pub async fn setup_pg_catalog(
     session_context: &SessionContext,
     catalog_name: &str,
 ) -> Result<(), Box<DataFusionError>> {
-    let pg_catalog = PgCatalogSchemaProvider::new(session_context.state().catalog_list().clone());
+    let pg_catalog = Arc::new(PgCatalogSchemaProvider::new(
+        session_context.state().catalog_list().clone(),
+    ));
+
+    // Register in pg_catalog schema
     session_context
         .catalog(catalog_name)
         .ok_or_else(|| {
@@ -2033,7 +2165,24 @@ pub fn setup_pg_catalog(
                 "Catalog not found when registering pg_catalog: {catalog_name}"
             ))
         })?
-        .register_schema("pg_catalog", Arc::new(pg_catalog))?;
+        .register_schema("pg_catalog", pg_catalog.clone())?;
+
+    // Also create individual pg_catalog tables in the public schema for asyncpg compatibility
+    // asyncpg often queries these tables without schema qualifiers
+    let pg_catalog_for_public = Arc::new(PgCatalogSchemaProvider::new(
+        session_context.state().catalog_list().clone(),
+    ));
+
+    // Register all pg_catalog tables that asyncpg might need directly in public schema
+    for table_name in PG_CATALOG_TABLES {
+        // Register table directly in the current catalog's public namespace
+        let table_path = table_name.to_string();
+        if let Ok(Some(table)) = pg_catalog_for_public.table(table_name).await {
+            session_context
+                .register_table(&table_path, table)
+                .map_err(Box::new)?;
+        }
+    }
 
     session_context.register_udf(create_current_schema_udf());
     session_context.register_udf(create_current_schemas_udf());
@@ -2042,6 +2191,8 @@ pub fn setup_pg_catalog(
     session_context.register_udf(create_has_table_privilege_2param_udf());
     session_context.register_udf(create_pg_table_is_visible());
     session_context.register_udf(create_format_type_udf());
+    session_context.register_udf(create_current_setting_udf());
+    session_context.register_udf(create_set_config_udf());
 
     Ok(())
 }

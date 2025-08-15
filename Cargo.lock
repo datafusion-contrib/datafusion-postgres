@@ -1510,6 +1510,7 @@ dependencies = [
  "log",
  "pgwire",
  "postgres-types",
+ "regex",
  "rust_decimal",
  "rustls-pemfile",
  "rustls-pki-types",

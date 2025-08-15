@@ -22,6 +22,7 @@ futures.workspace = true
 getset = "0.1"
 log = "0.4"
 pgwire = { workspace = true, features = ["server-api-ring", "scram"] }
+regex = "1"
 postgres-types.workspace = true
 rust_decimal.workspace = true
 tokio = { version = "1.47", features = ["sync", "net"] }

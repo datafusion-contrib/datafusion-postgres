@@ -179,7 +179,7 @@ async fn setup_session_context(
     }
 
     // Register pg_catalog
-    setup_pg_catalog(session_context, "datafusion")?;
+    setup_pg_catalog(session_context, "datafusion").await?;
 
     Ok(())
 }
