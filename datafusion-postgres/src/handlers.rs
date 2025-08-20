@@ -309,7 +309,7 @@ impl SimpleQueryHandler for DfSessionService {
         C: ClientInfo + Unpin + Send + Sync,
     {
         let query_lower = query.to_lowercase().trim().to_string();
-        log::debug!("Received query: {}", query); // Log the query for debugging
+        log::debug!("Received query: {query}"); // Log the query for debugging
 
         // Check permissions for the query (skip for SET, transaction, and SHOW statements)
         if !query_lower.starts_with("set")
@@ -461,7 +461,7 @@ impl ExtendedQueryHandler for DfSessionService {
             .to_lowercase()
             .trim()
             .to_string();
-        log::debug!("Received execute extended query: {}", query); // Log for debugging
+        log::debug!("Received execute extended query: {query}"); // Log for debugging
 
         // Check permissions for the query (skip for SET and SHOW statements)
         if !query.starts_with("set") && !query.starts_with("show") {
@@ -531,7 +531,7 @@ impl QueryParser for Parser {
         sql: &str,
         _types: &[Type],
     ) -> PgWireResult<Self::Statement> {
-        log::debug!("Received parse extended query: {}", sql); // Log for debugging
+        log::debug!("Received parse extended query: {sql}"); // Log for debugging
         let context = &self.session_context;
         let state = context.state();
         let logical_plan = state
