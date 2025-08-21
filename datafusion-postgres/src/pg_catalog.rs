@@ -198,6 +198,7 @@ pub struct PgCatalogSchemaProvider {
     catalog_list: Arc<dyn CatalogProviderList>,
     oid_counter: Arc<AtomicU32>,
     oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
+    static_tables: PgCatalogStaticTables,
 }
 
 #[async_trait]
@@ -212,97 +213,100 @@ impl SchemaProvider for PgCatalogSchemaProvider {
 
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         match name.to_ascii_lowercase().as_str() {
-            PG_CATALOG_TABLE_PG_AGGREGATE => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_aggregate.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_AM => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_am.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_AMOP => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_amop.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_AMPROC => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_amproc.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_CAST => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_cast.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_COLLATION => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_collation.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_CONVERSION => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_conversion.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_LANGUAGE => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_language.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_OPCLASS => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_opclass.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_OPERATOR => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_operator.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_OPFAMILY => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_opfamily.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_PROC => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_proc.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_RANGE => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_range.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_TS_CONFIG => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_ts_config.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_TS_DICT => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_ts_dict.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_TS_PARSER => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_ts_parser.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_TS_TEMPLATE => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_ts_template.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_TYPE => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_type.feather").to_vec(),
-                )
-                .map(Some),
+            PG_CATALOG_TABLE_PG_AGGREGATE => Ok(Some(self.static_tables.pg_aggregate.clone())),
+            PG_CATALOG_TABLE_PG_AM => Ok(Some(self.static_tables.pg_am.clone())),
+            PG_CATALOG_TABLE_PG_AMOP => Ok(Some(self.static_tables.pg_amop.clone())),
+            PG_CATALOG_TABLE_PG_AMPROC => Ok(Some(self.static_tables.pg_amproc.clone())),
+            PG_CATALOG_TABLE_PG_CAST => Ok(Some(self.static_tables.pg_cast.clone())),
+            PG_CATALOG_TABLE_PG_COLLATION => Ok(Some(self.static_tables.pg_collation.clone())),
+            PG_CATALOG_TABLE_PG_CONVERSION => Ok(Some(self.static_tables.pg_conversion.clone())),
+            PG_CATALOG_TABLE_PG_LANGUAGE => Ok(Some(self.static_tables.pg_language.clone())),
+            PG_CATALOG_TABLE_PG_OPCLASS => Ok(Some(self.static_tables.pg_opclass.clone())),
+            PG_CATALOG_TABLE_PG_OPERATOR => Ok(Some(self.static_tables.pg_operator.clone())),
+            PG_CATALOG_TABLE_PG_OPFAMILY => Ok(Some(self.static_tables.pg_opfamily.clone())),
+            PG_CATALOG_TABLE_PG_PROC => Ok(Some(self.static_tables.pg_proc.clone())),
+            PG_CATALOG_TABLE_PG_RANGE => Ok(Some(self.static_tables.pg_range.clone())),
+            PG_CATALOG_TABLE_PG_TS_CONFIG => Ok(Some(self.static_tables.pg_ts_config.clone())),
+            PG_CATALOG_TABLE_PG_TS_DICT => Ok(Some(self.static_tables.pg_ts_dict.clone())),
+            PG_CATALOG_TABLE_PG_TS_PARSER => Ok(Some(self.static_tables.pg_ts_parser.clone())),
+            PG_CATALOG_TABLE_PG_TS_TEMPLATE => Ok(Some(self.static_tables.pg_ts_template.clone())),
+            PG_CATALOG_TABLE_PG_TYPE => Ok(Some(self.static_tables.pg_type.clone())),
+            PG_CATALOG_TABLE_PG_ATTRDEF => Ok(Some(self.static_tables.pg_attrdef.clone())),
+            PG_CATALOG_TABLE_PG_AUTH_MEMBERS => {
+                Ok(Some(self.static_tables.pg_auth_members.clone()))
+            }
+            PG_CATALOG_TABLE_PG_AUTHID => Ok(Some(self.static_tables.pg_authid.clone())),
+
+            PG_CATALOG_TABLE_PG_CONSTRAINT => Ok(Some(self.static_tables.pg_constraint.clone())),
+
+            PG_CATALOG_TABLE_PG_DB_ROLE_SETTING => {
+                Ok(Some(self.static_tables.pg_db_role_setting.clone()))
+            }
+            PG_CATALOG_TABLE_PG_DEFAULT_ACL => Ok(Some(self.static_tables.pg_default_acl.clone())),
+            PG_CATALOG_TABLE_PG_DEPEND => Ok(Some(self.static_tables.pg_depend.clone())),
+            PG_CATALOG_TABLE_PG_DESCRIPTION => Ok(Some(self.static_tables.pg_description.clone())),
+            PG_CATALOG_TABLE_PG_ENUM => Ok(Some(self.static_tables.pg_enum.clone())),
+            PG_CATALOG_TABLE_PG_EVENT_TRIGGER => {
+                Ok(Some(self.static_tables.pg_event_trigger.clone()))
+            }
+            PG_CATALOG_TABLE_PG_EXTENSION => Ok(Some(self.static_tables.pg_extension.clone())),
+            PG_CATALOG_TABLE_PG_FOREIGN_DATA_WRAPPER => {
+                Ok(Some(self.static_tables.pg_foreign_data_wrapper.clone()))
+            }
+            PG_CATALOG_TABLE_PG_FOREIGN_SERVER => {
+                Ok(Some(self.static_tables.pg_foreign_server.clone()))
+            }
+            PG_CATALOG_TABLE_PG_FOREIGN_TABLE => {
+                Ok(Some(self.static_tables.pg_foreign_table.clone()))
+            }
+            PG_CATALOG_TABLE_PG_INDEX => Ok(Some(self.static_tables.pg_index.clone())),
+            PG_CATALOG_TABLE_PG_INHERITS => Ok(Some(self.static_tables.pg_inherits.clone())),
+            PG_CATALOG_TABLE_PG_INIT_PRIVS => Ok(Some(self.static_tables.pg_init_privs.clone())),
+            PG_CATALOG_TABLE_PG_LARGEOBJECT => Ok(Some(self.static_tables.pg_largeobject.clone())),
+            PG_CATALOG_TABLE_PG_LARGEOBJECT_METADATA => {
+                Ok(Some(self.static_tables.pg_largeobject_metadata.clone()))
+            }
+            PG_CATALOG_TABLE_PG_PARTITIONED_TABLE => {
+                Ok(Some(self.static_tables.pg_partitioned_table.clone()))
+            }
+            PG_CATALOG_TABLE_PG_POLICY => Ok(Some(self.static_tables.pg_policy.clone())),
+            PG_CATALOG_TABLE_PG_PUBLICATION => Ok(Some(self.static_tables.pg_publication.clone())),
+            PG_CATALOG_TABLE_PG_PUBLICATION_NAMESPACE => {
+                Ok(Some(self.static_tables.pg_publication_namespace.clone()))
+            }
+            PG_CATALOG_TABLE_PG_PUBLICATION_REL => {
+                Ok(Some(self.static_tables.pg_publication_rel.clone()))
+            }
+            PG_CATALOG_TABLE_PG_REPLICATION_ORIGIN => {
+                Ok(Some(self.static_tables.pg_replication_origin.clone()))
+            }
+            PG_CATALOG_TABLE_PG_REWRITE => Ok(Some(self.static_tables.pg_rewrite.clone())),
+            PG_CATALOG_TABLE_PG_SECLABEL => Ok(Some(self.static_tables.pg_seclabel.clone())),
+            PG_CATALOG_TABLE_PG_SEQUENCE => Ok(Some(self.static_tables.pg_sequence.clone())),
+            PG_CATALOG_TABLE_PG_SHDEPEND => Ok(Some(self.static_tables.pg_shdepend.clone())),
+            PG_CATALOG_TABLE_PG_SHDESCRIPTION => {
+                Ok(Some(self.static_tables.pg_shdescription.clone()))
+            }
+            PG_CATALOG_TABLE_PG_SHSECLABEL => Ok(Some(self.static_tables.pg_shseclabel.clone())),
+            PG_CATALOG_TABLE_PG_STATISTIC => Ok(Some(self.static_tables.pg_statistic.clone())),
+            PG_CATALOG_TABLE_PG_STATISTIC_EXT => {
+                Ok(Some(self.static_tables.pg_statistic_ext.clone()))
+            }
+            PG_CATALOG_TABLE_PG_STATISTIC_EXT_DATA => {
+                Ok(Some(self.static_tables.pg_statistic_ext_data.clone()))
+            }
+            PG_CATALOG_TABLE_PG_SUBSCRIPTION => {
+                Ok(Some(self.static_tables.pg_subscription.clone()))
+            }
+            PG_CATALOG_TABLE_PG_SUBSCRIPTION_REL => {
+                Ok(Some(self.static_tables.pg_subscription_rel.clone()))
+            }
+            PG_CATALOG_TABLE_PG_TABLESPACE => Ok(Some(self.static_tables.pg_tablespace.clone())),
+            PG_CATALOG_TABLE_PG_TRIGGER => Ok(Some(self.static_tables.pg_trigger.clone())),
+            PG_CATALOG_TABLE_PG_USER_MAPPING => {
+                Ok(Some(self.static_tables.pg_user_mapping.clone()))
+            }
+
             PG_CATALOG_TABLE_PG_ATTRIBUTE => {
                 let table = Arc::new(pg_attribute::PgAttributeTable::new(
                     self.catalog_list.clone(),
@@ -313,22 +317,6 @@ impl SchemaProvider for PgCatalogSchemaProvider {
                     StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
                 )))
             }
-            PG_CATALOG_TABLE_PG_ATTRDEF => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_attrdef.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_AUTH_MEMBERS => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_auth_members.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_AUTHID => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_authid.feather").to_vec(),
-                )
-                .map(Some),
             PG_CATALOG_TABLE_PG_CLASS => {
                 let table = Arc::new(pg_class::PgClassTable::new(
                     self.catalog_list.clone(),
@@ -339,11 +327,6 @@ impl SchemaProvider for PgCatalogSchemaProvider {
                     StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
                 )))
             }
-            PG_CATALOG_TABLE_PG_CONSTRAINT => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_constraint.feather").to_vec(),
-                )
-                .map(Some),
             PG_CATALOG_TABLE_PG_DATABASE => {
                 let table = Arc::new(pg_database::PgDatabaseTable::new(
                     self.catalog_list.clone(),
@@ -354,94 +337,6 @@ impl SchemaProvider for PgCatalogSchemaProvider {
                     StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
                 )))
             }
-            PG_CATALOG_TABLE_PG_DB_ROLE_SETTING => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_db_role_setting.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_DEFAULT_ACL => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_default_acl.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_DEPEND => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_depend.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_DESCRIPTION => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_description.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_ENUM => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_enum.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_EVENT_TRIGGER => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_event_trigger.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_EXTENSION => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_extension.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_FOREIGN_DATA_WRAPPER => self
-                .create_arrow_table(
-                    include_bytes!(
-                        "../../pg_catalog_arrow_exports/pg_foreign_data_wrapper.feather"
-                    )
-                    .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_FOREIGN_SERVER => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_server.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_FOREIGN_TABLE => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_table.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_INDEX => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_index.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_INHERITS => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_inherits.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_INIT_PRIVS => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_init_privs.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_LARGEOBJECT => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_largeobject.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_LARGEOBJECT_METADATA => self
-                .create_arrow_table(
-                    include_bytes!(
-                        "../../pg_catalog_arrow_exports/pg_largeobject_metadata.feather"
-                    )
-                    .to_vec(),
-                )
-                .map(Some),
             PG_CATALOG_TABLE_PG_NAMESPACE => {
                 let table = Arc::new(pg_namespace::PgNamespaceTable::new(
                     self.catalog_list.clone(),
@@ -452,119 +347,6 @@ impl SchemaProvider for PgCatalogSchemaProvider {
                     StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
                 )))
             }
-            PG_CATALOG_TABLE_PG_PARTITIONED_TABLE => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_partitioned_table.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_POLICY => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_policy.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_PUBLICATION => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_publication.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_PUBLICATION_NAMESPACE => self
-                .create_arrow_table(
-                    include_bytes!(
-                        "../../pg_catalog_arrow_exports/pg_publication_namespace.feather"
-                    )
-                    .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_PUBLICATION_REL => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_publication_rel.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_REPLICATION_ORIGIN => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_replication_origin.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_REWRITE => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_rewrite.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_SECLABEL => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_seclabel.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_SEQUENCE => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_sequence.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_SHDEPEND => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_shdepend.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_SHDESCRIPTION => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_shdescription.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_SHSECLABEL => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_shseclabel.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_STATISTIC => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_statistic.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_STATISTIC_EXT => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_statistic_ext.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_STATISTIC_EXT_DATA => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_statistic_ext_data.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_SUBSCRIPTION => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_subscription.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_SUBSCRIPTION_REL => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_subscription_rel.feather")
-                        .to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_TABLESPACE => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_tablespace.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_TRIGGER => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_trigger.feather").to_vec(),
-                )
-                .map(Some),
-            PG_CATALOG_TABLE_PG_USER_MAPPING => self
-                .create_arrow_table(
-                    include_bytes!("../../pg_catalog_arrow_exports/pg_user_mapping.feather")
-                        .to_vec(),
-                )
-                .map(Some),
 
             _ => Ok(None),
         }
@@ -576,19 +358,13 @@ impl SchemaProvider for PgCatalogSchemaProvider {
 }
 
 impl PgCatalogSchemaProvider {
-    pub fn new(catalog_list: Arc<dyn CatalogProviderList>) -> PgCatalogSchemaProvider {
-        Self {
+    pub fn try_new(catalog_list: Arc<dyn CatalogProviderList>) -> Result<PgCatalogSchemaProvider> {
+        Ok(Self {
             catalog_list,
             oid_counter: Arc::new(AtomicU32::new(16384)),
             oid_cache: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
-    /// Create table from dumped arrow data
-    fn create_arrow_table(&self, data_bytes: Vec<u8>) -> Result<Arc<dyn TableProvider>> {
-        let table = ArrowTable::from_ipc_data(data_bytes)?;
-        let streaming_table = StreamingTable::try_new(table.schema.clone(), vec![Arc::new(table)])?;
-        Ok(Arc::new(streaming_table))
+            static_tables: PgCatalogStaticTables::try_new()?,
+        })
     }
 }
 
@@ -631,6 +407,265 @@ impl PartitionStream for ArrowTable {
             self.schema.clone(),
             futures::stream::iter(data.into_iter().map(Ok)),
         ))
+    }
+}
+
+/// pg_catalog table as datafusion table provider
+///
+/// This implementation only contains static tables
+#[derive(Debug)]
+pub struct PgCatalogStaticTables {
+    pub pg_aggregate: Arc<dyn TableProvider>,
+    pub pg_am: Arc<dyn TableProvider>,
+    pub pg_amop: Arc<dyn TableProvider>,
+    pub pg_amproc: Arc<dyn TableProvider>,
+    pub pg_cast: Arc<dyn TableProvider>,
+    pub pg_collation: Arc<dyn TableProvider>,
+    pub pg_conversion: Arc<dyn TableProvider>,
+    pub pg_language: Arc<dyn TableProvider>,
+    pub pg_opclass: Arc<dyn TableProvider>,
+    pub pg_operator: Arc<dyn TableProvider>,
+    pub pg_opfamily: Arc<dyn TableProvider>,
+    pub pg_proc: Arc<dyn TableProvider>,
+    pub pg_range: Arc<dyn TableProvider>,
+    pub pg_ts_config: Arc<dyn TableProvider>,
+    pub pg_ts_dict: Arc<dyn TableProvider>,
+    pub pg_ts_parser: Arc<dyn TableProvider>,
+    pub pg_ts_template: Arc<dyn TableProvider>,
+    pub pg_type: Arc<dyn TableProvider>,
+    pub pg_attrdef: Arc<dyn TableProvider>,
+    pub pg_auth_members: Arc<dyn TableProvider>,
+    pub pg_authid: Arc<dyn TableProvider>,
+    pub pg_constraint: Arc<dyn TableProvider>,
+    pub pg_db_role_setting: Arc<dyn TableProvider>,
+    pub pg_default_acl: Arc<dyn TableProvider>,
+    pub pg_depend: Arc<dyn TableProvider>,
+    pub pg_description: Arc<dyn TableProvider>,
+    pub pg_enum: Arc<dyn TableProvider>,
+    pub pg_event_trigger: Arc<dyn TableProvider>,
+    pub pg_extension: Arc<dyn TableProvider>,
+    pub pg_foreign_data_wrapper: Arc<dyn TableProvider>,
+    pub pg_foreign_server: Arc<dyn TableProvider>,
+    pub pg_foreign_table: Arc<dyn TableProvider>,
+    pub pg_index: Arc<dyn TableProvider>,
+    pub pg_inherits: Arc<dyn TableProvider>,
+    pub pg_init_privs: Arc<dyn TableProvider>,
+    pub pg_largeobject: Arc<dyn TableProvider>,
+    pub pg_largeobject_metadata: Arc<dyn TableProvider>,
+    pub pg_partitioned_table: Arc<dyn TableProvider>,
+    pub pg_policy: Arc<dyn TableProvider>,
+    pub pg_publication: Arc<dyn TableProvider>,
+    pub pg_publication_namespace: Arc<dyn TableProvider>,
+    pub pg_publication_rel: Arc<dyn TableProvider>,
+    pub pg_replication_origin: Arc<dyn TableProvider>,
+    pub pg_rewrite: Arc<dyn TableProvider>,
+    pub pg_seclabel: Arc<dyn TableProvider>,
+    pub pg_sequence: Arc<dyn TableProvider>,
+    pub pg_shdepend: Arc<dyn TableProvider>,
+    pub pg_shdescription: Arc<dyn TableProvider>,
+    pub pg_shseclabel: Arc<dyn TableProvider>,
+    pub pg_statistic: Arc<dyn TableProvider>,
+    pub pg_statistic_ext: Arc<dyn TableProvider>,
+    pub pg_statistic_ext_data: Arc<dyn TableProvider>,
+    pub pg_subscription: Arc<dyn TableProvider>,
+    pub pg_subscription_rel: Arc<dyn TableProvider>,
+    pub pg_tablespace: Arc<dyn TableProvider>,
+    pub pg_trigger: Arc<dyn TableProvider>,
+    pub pg_user_mapping: Arc<dyn TableProvider>,
+}
+
+impl PgCatalogStaticTables {
+    pub fn try_new() -> Result<Self> {
+        Ok(Self {
+            pg_aggregate: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_aggregate.feather").to_vec(),
+            )?,
+            pg_am: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_am.feather").to_vec(),
+            )?,
+            pg_amop: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_amop.feather").to_vec(),
+            )?,
+            pg_amproc: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_amproc.feather").to_vec(),
+            )?,
+            pg_cast: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_cast.feather").to_vec(),
+            )?,
+            pg_collation: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_collation.feather").to_vec(),
+            )?,
+            pg_conversion: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_conversion.feather").to_vec(),
+            )?,
+            pg_language: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_language.feather").to_vec(),
+            )?,
+            pg_opclass: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_opclass.feather").to_vec(),
+            )?,
+            pg_operator: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_operator.feather").to_vec(),
+            )?,
+            pg_opfamily: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_opfamily.feather").to_vec(),
+            )?,
+            pg_proc: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_proc.feather").to_vec(),
+            )?,
+            pg_range: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_range.feather").to_vec(),
+            )?,
+            pg_ts_config: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_ts_config.feather").to_vec(),
+            )?,
+            pg_ts_dict: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_ts_dict.feather").to_vec(),
+            )?,
+            pg_ts_parser: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_ts_parser.feather").to_vec(),
+            )?,
+            pg_ts_template: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_ts_template.feather").to_vec(),
+            )?,
+            pg_type: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_type.feather").to_vec(),
+            )?,
+            pg_attrdef: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_attrdef.feather").to_vec(),
+            )?,
+            pg_auth_members: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_auth_members.feather").to_vec(),
+            )?,
+            pg_authid: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_authid.feather").to_vec(),
+            )?,
+            pg_constraint: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_constraint.feather").to_vec(),
+            )?,
+            pg_db_role_setting: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_db_role_setting.feather")
+                    .to_vec(),
+            )?,
+            pg_default_acl: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_default_acl.feather").to_vec(),
+            )?,
+            pg_depend: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_depend.feather").to_vec(),
+            )?,
+            pg_description: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_description.feather").to_vec(),
+            )?,
+            pg_enum: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_enum.feather").to_vec(),
+            )?,
+            pg_event_trigger: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_event_trigger.feather").to_vec(),
+            )?,
+            pg_extension: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_extension.feather").to_vec(),
+            )?,
+            pg_foreign_data_wrapper: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_data_wrapper.feather")
+                    .to_vec(),
+            )?,
+            pg_foreign_server: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_server.feather").to_vec(),
+            )?,
+            pg_foreign_table: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_table.feather").to_vec(),
+            )?,
+            pg_index: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_index.feather").to_vec(),
+            )?,
+            pg_inherits: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_inherits.feather").to_vec(),
+            )?,
+            pg_init_privs: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_init_privs.feather").to_vec(),
+            )?,
+            pg_largeobject: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_largeobject.feather").to_vec(),
+            )?,
+            pg_largeobject_metadata: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_largeobject_metadata.feather")
+                    .to_vec(),
+            )?,
+
+            pg_partitioned_table: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_partitioned_table.feather")
+                    .to_vec(),
+            )?,
+            pg_policy: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_policy.feather").to_vec(),
+            )?,
+            pg_publication: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_publication.feather").to_vec(),
+            )?,
+            pg_publication_namespace: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_publication_namespace.feather")
+                    .to_vec(),
+            )?,
+            pg_publication_rel: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_publication_rel.feather")
+                    .to_vec(),
+            )?,
+            pg_replication_origin: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_replication_origin.feather")
+                    .to_vec(),
+            )?,
+            pg_rewrite: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_rewrite.feather").to_vec(),
+            )?,
+            pg_seclabel: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_seclabel.feather").to_vec(),
+            )?,
+            pg_sequence: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_sequence.feather").to_vec(),
+            )?,
+            pg_shdepend: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_shdepend.feather").to_vec(),
+            )?,
+            pg_shdescription: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_shdescription.feather").to_vec(),
+            )?,
+            pg_shseclabel: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_shseclabel.feather").to_vec(),
+            )?,
+            pg_statistic: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_statistic.feather").to_vec(),
+            )?,
+            pg_statistic_ext: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_statistic_ext.feather").to_vec(),
+            )?,
+            pg_statistic_ext_data: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_statistic_ext_data.feather")
+                    .to_vec(),
+            )?,
+            pg_subscription: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_subscription.feather").to_vec(),
+            )?,
+            pg_subscription_rel: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_subscription_rel.feather")
+                    .to_vec(),
+            )?,
+            pg_tablespace: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_tablespace.feather").to_vec(),
+            )?,
+            pg_trigger: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_trigger.feather").to_vec(),
+            )?,
+            pg_user_mapping: Self::create_arrow_table(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_user_mapping.feather").to_vec(),
+            )?,
+        })
+    }
+
+    /// Create table from dumped arrow data
+    fn create_arrow_table(data_bytes: Vec<u8>) -> Result<Arc<dyn TableProvider>> {
+        let table = ArrowTable::from_ipc_data(data_bytes)?;
+        let streaming_table = StreamingTable::try_new(table.schema.clone(), vec![Arc::new(table)])?;
+        Ok(Arc::new(streaming_table))
     }
 }
 
@@ -850,7 +885,8 @@ pub fn setup_pg_catalog(
     session_context: &SessionContext,
     catalog_name: &str,
 ) -> Result<(), Box<DataFusionError>> {
-    let pg_catalog = PgCatalogSchemaProvider::new(session_context.state().catalog_list().clone());
+    let pg_catalog =
+        PgCatalogSchemaProvider::try_new(session_context.state().catalog_list().clone())?;
     session_context
         .catalog(catalog_name)
         .ok_or_else(|| {
