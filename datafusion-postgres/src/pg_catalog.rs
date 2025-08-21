@@ -4,12 +4,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{
-    as_boolean_array, ArrayRef, BooleanArray, BooleanBuilder, Float32Array, Float64Array,
-    Int16Array, Int32Array, RecordBatch, StringArray, StringBuilder,
+    as_boolean_array, ArrayRef, BooleanArray, BooleanBuilder, Float64Array, Int16Array, Int32Array,
+    RecordBatch, StringArray, StringBuilder,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::ipc::reader::FileReader;
 use datafusion::catalog::streaming::StreamingTable;
-use datafusion::catalog::{CatalogProviderList, MemTable, SchemaProvider};
+use datafusion::catalog::{CatalogProviderList, SchemaProvider};
 use datafusion::common::utils::SingleRowListArrayBuilder;
 use datafusion::datasource::{TableProvider, ViewTable};
 use datafusion::error::{DataFusionError, Result};
@@ -21,16 +22,67 @@ use datafusion::prelude::{create_udf, SessionContext};
 use postgres_types::Oid;
 use tokio::sync::RwLock;
 
-const PG_CATALOG_TABLE_PG_TYPE: &str = "pg_type";
-const PG_CATALOG_TABLE_PG_CLASS: &str = "pg_class";
-const PG_CATALOG_TABLE_PG_ATTRIBUTE: &str = "pg_attribute";
-const PG_CATALOG_TABLE_PG_NAMESPACE: &str = "pg_namespace";
-const PG_CATALOG_TABLE_PG_PROC: &str = "pg_proc";
-const PG_CATALOG_TABLE_PG_DATABASE: &str = "pg_database";
+const PG_CATALOG_TABLE_PG_AGGREGATE: &str = "pg_aggregate";
 const PG_CATALOG_TABLE_PG_AM: &str = "pg_am";
+const PG_CATALOG_TABLE_PG_AMOP: &str = "pg_amop";
+const PG_CATALOG_TABLE_PG_AMPROC: &str = "pg_amproc";
+const PG_CATALOG_TABLE_PG_CAST: &str = "pg_cast";
+const PG_CATALOG_TABLE_PG_COLLATION: &str = "pg_collation";
+const PG_CATALOG_TABLE_PG_CONVERSION: &str = "pg_conversion";
+const PG_CATALOG_TABLE_PG_LANGUAGE: &str = "pg_language";
+const PG_CATALOG_TABLE_PG_OPCLASS: &str = "pg_opclass";
+const PG_CATALOG_TABLE_PG_OPERATOR: &str = "pg_operator";
+const PG_CATALOG_TABLE_PG_OPFAMILY: &str = "pg_opfamily";
+const PG_CATALOG_TABLE_PG_PROC: &str = "pg_proc";
 const PG_CATALOG_TABLE_PG_RANGE: &str = "pg_range";
-const PG_CATALOG_TABLE_PG_ENUM: &str = "pg_enum";
+const PG_CATALOG_TABLE_PG_TS_CONFIG: &str = "pg_ts_config";
+const PG_CATALOG_TABLE_PG_TS_DICT: &str = "pg_ts_dict";
+const PG_CATALOG_TABLE_PG_TS_PARSER: &str = "pg_ts_parser";
+const PG_CATALOG_TABLE_PG_TS_TEMPLATE: &str = "pg_ts_template";
+const PG_CATALOG_TABLE_PG_TYPE: &str = "pg_type";
+const PG_CATALOG_TABLE_PG_ATTRIBUTE: &str = "pg_attribute";
+const PG_CATALOG_TABLE_PG_ATTRDEF: &str = "pg_attrdef";
+const PG_CATALOG_TABLE_PG_AUTH_MEMBERS: &str = "pg_auth_members";
+const PG_CATALOG_TABLE_PG_AUTHID: &str = "pg_authid";
+const PG_CATALOG_TABLE_PG_CLASS: &str = "pg_class";
+const PG_CATALOG_TABLE_PG_CONSTRAINT: &str = "pg_constraint";
+const PG_CATALOG_TABLE_PG_DATABASE: &str = "pg_database";
+const PG_CATALOG_TABLE_PG_DB_ROLE_SETTING: &str = "pg_db_role_setting";
+const PG_CATALOG_TABLE_PG_DEFAULT_ACL: &str = "pg_default_acl";
+const PG_CATALOG_TABLE_PG_DEPEND: &str = "pg_depend";
 const PG_CATALOG_TABLE_PG_DESCRIPTION: &str = "pg_description";
+const PG_CATALOG_TABLE_PG_ENUM: &str = "pg_enum";
+const PG_CATALOG_TABLE_PG_EVENT_TRIGGER: &str = "pg_event_trigger";
+const PG_CATALOG_TABLE_PG_EXTENSION: &str = "pg_extension";
+const PG_CATALOG_TABLE_PG_FOREIGN_DATA_WRAPPER: &str = "pg_foreign_data_wrapper";
+const PG_CATALOG_TABLE_PG_FOREIGN_SERVER: &str = "pg_foreign_server";
+const PG_CATALOG_TABLE_PG_FOREIGN_TABLE: &str = "pg_foreign_table";
+const PG_CATALOG_TABLE_PG_INDEX: &str = "pg_index";
+const PG_CATALOG_TABLE_PG_INHERITS: &str = "pg_inherits";
+const PG_CATALOG_TABLE_PG_INIT_PRIVS: &str = "pg_init_privs";
+const PG_CATALOG_TABLE_PG_LARGEOBJECT: &str = "pg_largeobject";
+const PG_CATALOG_TABLE_PG_LARGEOBJECT_METADATA: &str = "pg_largeobject_metadata";
+const PG_CATALOG_TABLE_PG_NAMESPACE: &str = "pg_namespace";
+const PG_CATALOG_TABLE_PG_PARTITIONED_TABLE: &str = "pg_partitioned_table";
+const PG_CATALOG_TABLE_PG_POLICY: &str = "pg_policy";
+const PG_CATALOG_TABLE_PG_PUBLICATION: &str = "pg_publication";
+const PG_CATALOG_TABLE_PG_PUBLICATION_NAMESPACE: &str = "pg_publication_namespace";
+const PG_CATALOG_TABLE_PG_PUBLICATION_REL: &str = "pg_publication_rel";
+const PG_CATALOG_TABLE_PG_REPLICATION_ORIGIN: &str = "pg_replication_origin";
+const PG_CATALOG_TABLE_PG_REWRITE: &str = "pg_rewrite";
+const PG_CATALOG_TABLE_PG_SECLABEL: &str = "pg_seclabel";
+const PG_CATALOG_TABLE_PG_SEQUENCE: &str = "pg_sequence";
+const PG_CATALOG_TABLE_PG_SHDEPEND: &str = "pg_shdepend";
+const PG_CATALOG_TABLE_PG_SHDESCRIPTION: &str = "pg_shdescription";
+const PG_CATALOG_TABLE_PG_SHSECLABEL: &str = "pg_shseclabel";
+const PG_CATALOG_TABLE_PG_STATISTIC: &str = "pg_statistic";
+const PG_CATALOG_TABLE_PG_STATISTIC_EXT: &str = "pg_statistic_ext";
+const PG_CATALOG_TABLE_PG_STATISTIC_EXT_DATA: &str = "pg_statistic_ext_data";
+const PG_CATALOG_TABLE_PG_SUBSCRIPTION: &str = "pg_subscription";
+const PG_CATALOG_TABLE_PG_SUBSCRIPTION_REL: &str = "pg_subscription_rel";
+const PG_CATALOG_TABLE_PG_TABLESPACE: &str = "pg_tablespace";
+const PG_CATALOG_TABLE_PG_TRIGGER: &str = "pg_trigger";
+const PG_CATALOG_TABLE_PG_USER_MAPPING: &str = "pg_user_mapping";
 
 /// Determine PostgreSQL table type (relkind) from DataFusion TableProvider
 fn get_table_type(table: &Arc<dyn TableProvider>) -> &'static str {
@@ -64,155 +116,68 @@ fn get_table_type_with_name(
 }
 
 pub const PG_CATALOG_TABLES: &[&str] = &[
-    PG_CATALOG_TABLE_PG_TYPE,
-    PG_CATALOG_TABLE_PG_CLASS,
-    PG_CATALOG_TABLE_PG_ATTRIBUTE,
-    PG_CATALOG_TABLE_PG_NAMESPACE,
-    PG_CATALOG_TABLE_PG_PROC,
-    PG_CATALOG_TABLE_PG_DATABASE,
+    PG_CATALOG_TABLE_PG_AGGREGATE,
     PG_CATALOG_TABLE_PG_AM,
+    PG_CATALOG_TABLE_PG_AMOP,
+    PG_CATALOG_TABLE_PG_AMPROC,
+    PG_CATALOG_TABLE_PG_CAST,
+    PG_CATALOG_TABLE_PG_COLLATION,
+    PG_CATALOG_TABLE_PG_CONVERSION,
+    PG_CATALOG_TABLE_PG_LANGUAGE,
+    PG_CATALOG_TABLE_PG_OPCLASS,
+    PG_CATALOG_TABLE_PG_OPERATOR,
+    PG_CATALOG_TABLE_PG_OPFAMILY,
+    PG_CATALOG_TABLE_PG_PROC,
     PG_CATALOG_TABLE_PG_RANGE,
-    PG_CATALOG_TABLE_PG_ENUM,
+    PG_CATALOG_TABLE_PG_TS_CONFIG,
+    PG_CATALOG_TABLE_PG_TS_DICT,
+    PG_CATALOG_TABLE_PG_TS_PARSER,
+    PG_CATALOG_TABLE_PG_TS_TEMPLATE,
+    PG_CATALOG_TABLE_PG_TYPE,
+    PG_CATALOG_TABLE_PG_ATTRIBUTE,
+    PG_CATALOG_TABLE_PG_ATTRDEF,
+    PG_CATALOG_TABLE_PG_AUTH_MEMBERS,
+    PG_CATALOG_TABLE_PG_AUTHID,
+    PG_CATALOG_TABLE_PG_CLASS,
+    PG_CATALOG_TABLE_PG_CONSTRAINT,
+    PG_CATALOG_TABLE_PG_DATABASE,
+    PG_CATALOG_TABLE_PG_DB_ROLE_SETTING,
+    PG_CATALOG_TABLE_PG_DEFAULT_ACL,
+    PG_CATALOG_TABLE_PG_DEPEND,
     PG_CATALOG_TABLE_PG_DESCRIPTION,
+    PG_CATALOG_TABLE_PG_ENUM,
+    PG_CATALOG_TABLE_PG_EVENT_TRIGGER,
+    PG_CATALOG_TABLE_PG_EXTENSION,
+    PG_CATALOG_TABLE_PG_FOREIGN_DATA_WRAPPER,
+    PG_CATALOG_TABLE_PG_FOREIGN_SERVER,
+    PG_CATALOG_TABLE_PG_FOREIGN_TABLE,
+    PG_CATALOG_TABLE_PG_INDEX,
+    PG_CATALOG_TABLE_PG_INHERITS,
+    PG_CATALOG_TABLE_PG_INIT_PRIVS,
+    PG_CATALOG_TABLE_PG_LARGEOBJECT,
+    PG_CATALOG_TABLE_PG_LARGEOBJECT_METADATA,
+    PG_CATALOG_TABLE_PG_NAMESPACE,
+    PG_CATALOG_TABLE_PG_PARTITIONED_TABLE,
+    PG_CATALOG_TABLE_PG_POLICY,
+    PG_CATALOG_TABLE_PG_PUBLICATION,
+    PG_CATALOG_TABLE_PG_PUBLICATION_NAMESPACE,
+    PG_CATALOG_TABLE_PG_PUBLICATION_REL,
+    PG_CATALOG_TABLE_PG_REPLICATION_ORIGIN,
+    PG_CATALOG_TABLE_PG_REWRITE,
+    PG_CATALOG_TABLE_PG_SECLABEL,
+    PG_CATALOG_TABLE_PG_SEQUENCE,
+    PG_CATALOG_TABLE_PG_SHDEPEND,
+    PG_CATALOG_TABLE_PG_SHDESCRIPTION,
+    PG_CATALOG_TABLE_PG_SHSECLABEL,
+    PG_CATALOG_TABLE_PG_STATISTIC,
+    PG_CATALOG_TABLE_PG_STATISTIC_EXT,
+    PG_CATALOG_TABLE_PG_STATISTIC_EXT_DATA,
+    PG_CATALOG_TABLE_PG_SUBSCRIPTION,
+    PG_CATALOG_TABLE_PG_SUBSCRIPTION_REL,
+    PG_CATALOG_TABLE_PG_TABLESPACE,
+    PG_CATALOG_TABLE_PG_TRIGGER,
+    PG_CATALOG_TABLE_PG_USER_MAPPING,
 ];
-
-// Data structure to hold pg_type table data
-#[derive(Debug)]
-struct PgTypesData {
-    oids: Vec<i32>,
-    typnames: Vec<String>,
-    typnamespaces: Vec<i32>,
-    typowners: Vec<i32>,
-    typlens: Vec<i16>,
-    typbyvals: Vec<bool>,
-    typtypes: Vec<String>,
-    typcategories: Vec<String>,
-    typispreferreds: Vec<bool>,
-    typisdefineds: Vec<bool>,
-    typdelims: Vec<String>,
-    typrelids: Vec<i32>,
-    typelems: Vec<i32>,
-    typarrays: Vec<i32>,
-    typinputs: Vec<String>,
-    typoutputs: Vec<String>,
-    typreceives: Vec<String>,
-    typsends: Vec<String>,
-    typmodins: Vec<String>,
-    typmodouts: Vec<String>,
-    typanalyzes: Vec<String>,
-    typaligns: Vec<String>,
-    typstorages: Vec<String>,
-    typnotnulls: Vec<bool>,
-    typbasetypes: Vec<i32>,
-    typtymods: Vec<i32>,
-    typndimss: Vec<i32>,
-    typcollations: Vec<i32>,
-    typdefaultbins: Vec<Option<String>>,
-    typdefaults: Vec<Option<String>>,
-}
-
-impl PgTypesData {
-    fn new() -> Self {
-        Self {
-            oids: Vec::new(),
-            typnames: Vec::new(),
-            typnamespaces: Vec::new(),
-            typowners: Vec::new(),
-            typlens: Vec::new(),
-            typbyvals: Vec::new(),
-            typtypes: Vec::new(),
-            typcategories: Vec::new(),
-            typispreferreds: Vec::new(),
-            typisdefineds: Vec::new(),
-            typdelims: Vec::new(),
-            typrelids: Vec::new(),
-            typelems: Vec::new(),
-            typarrays: Vec::new(),
-            typinputs: Vec::new(),
-            typoutputs: Vec::new(),
-            typreceives: Vec::new(),
-            typsends: Vec::new(),
-            typmodins: Vec::new(),
-            typmodouts: Vec::new(),
-            typanalyzes: Vec::new(),
-            typaligns: Vec::new(),
-            typstorages: Vec::new(),
-            typnotnulls: Vec::new(),
-            typbasetypes: Vec::new(),
-            typtymods: Vec::new(),
-            typndimss: Vec::new(),
-            typcollations: Vec::new(),
-            typdefaultbins: Vec::new(),
-            typdefaults: Vec::new(),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn add_type(
-        &mut self,
-        oid: i32,
-        typname: &str,
-        typnamespace: i32,
-        typowner: i32,
-        typlen: i16,
-        typbyval: bool,
-        typtype: &str,
-        typcategory: &str,
-        typispreferred: bool,
-        typisdefined: bool,
-        typdelim: &str,
-        typrelid: i32,
-        typelem: i32,
-        typarray: i32,
-        typinput: &str,
-        typoutput: &str,
-        typreceive: &str,
-        typsend: &str,
-        typmodin: &str,
-        typmodout: &str,
-        typanalyze: &str,
-        typalign: &str,
-        typstorage: &str,
-        typnotnull: bool,
-        typbasetype: i32,
-        typtypmod: i32,
-        typndims: i32,
-        typcollation: i32,
-        typdefaultbin: Option<String>,
-        typdefault: Option<String>,
-    ) {
-        self.oids.push(oid);
-        self.typnames.push(typname.to_string());
-        self.typnamespaces.push(typnamespace);
-        self.typowners.push(typowner);
-        self.typlens.push(typlen);
-        self.typbyvals.push(typbyval);
-        self.typtypes.push(typtype.to_string());
-        self.typcategories.push(typcategory.to_string());
-        self.typispreferreds.push(typispreferred);
-        self.typisdefineds.push(typisdefined);
-        self.typdelims.push(typdelim.to_string());
-        self.typrelids.push(typrelid);
-        self.typelems.push(typelem);
-        self.typarrays.push(typarray);
-        self.typinputs.push(typinput.to_string());
-        self.typoutputs.push(typoutput.to_string());
-        self.typreceives.push(typreceive.to_string());
-        self.typsends.push(typsend.to_string());
-        self.typmodins.push(typmodin.to_string());
-        self.typmodouts.push(typmodout.to_string());
-        self.typanalyzes.push(typanalyze.to_string());
-        self.typaligns.push(typalign.to_string());
-        self.typstorages.push(typstorage.to_string());
-        self.typnotnulls.push(typnotnull);
-        self.typbasetypes.push(typbasetype);
-        self.typtymods.push(typtypmod);
-        self.typndimss.push(typndims);
-        self.typcollations.push(typcollation);
-        self.typdefaultbins.push(typdefaultbin);
-        self.typdefaults.push(typdefault);
-    }
-}
 
 #[derive(Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
 enum OidCacheKey {
@@ -242,8 +207,119 @@ impl SchemaProvider for PgCatalogSchemaProvider {
 
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         match name.to_ascii_lowercase().as_str() {
-            PG_CATALOG_TABLE_PG_TYPE => Ok(Some(self.create_pg_type_table())),
-            PG_CATALOG_TABLE_PG_AM => Ok(Some(self.create_pg_am_table())),
+            PG_CATALOG_TABLE_PG_AGGREGATE => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_aggregate.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_AM => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_am.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_AMOP => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_amop.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_AMPROC => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_amproc.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_CAST => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_cast.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_COLLATION => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_collation.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_CONVERSION => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_conversion.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_LANGUAGE => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_language.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_OPCLASS => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_opclass.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_OPERATOR => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_operator.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_OPFAMILY => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_opfamily.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_PROC => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_proc.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_RANGE => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_range.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_TS_CONFIG => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_ts_config.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_TS_DICT => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_ts_dict.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_TS_PARSER => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_ts_parser.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_TS_TEMPLATE => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_ts_template.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_TYPE => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_type.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_ATTRIBUTE => {
+                let table = Arc::new(PgAttributeTable::new(self.catalog_list.clone()));
+                Ok(Some(Arc::new(
+                    StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
+                )))
+            }
+            PG_CATALOG_TABLE_PG_ATTRDEF => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_attrdef.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_AUTH_MEMBERS => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_auth_members.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_AUTHID => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_authid.feather").to_vec(),
+                )
+                .map(Some),
             PG_CATALOG_TABLE_PG_CLASS => {
                 let table = Arc::new(PgClassTable::new(
                     self.catalog_list.clone(),
@@ -254,16 +330,11 @@ impl SchemaProvider for PgCatalogSchemaProvider {
                     StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
                 )))
             }
-            PG_CATALOG_TABLE_PG_NAMESPACE => {
-                let table = Arc::new(PgNamespaceTable::new(
-                    self.catalog_list.clone(),
-                    self.oid_counter.clone(),
-                    self.oid_cache.clone(),
-                ));
-                Ok(Some(Arc::new(
-                    StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
-                )))
-            }
+            PG_CATALOG_TABLE_PG_CONSTRAINT => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_constraint.feather").to_vec(),
+                )
+                .map(Some),
             PG_CATALOG_TABLE_PG_DATABASE => {
                 let table = Arc::new(PgDatabaseTable::new(
                     self.catalog_list.clone(),
@@ -274,16 +345,218 @@ impl SchemaProvider for PgCatalogSchemaProvider {
                     StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
                 )))
             }
-            PG_CATALOG_TABLE_PG_ATTRIBUTE => {
-                let table = Arc::new(PgAttributeTable::new(self.catalog_list.clone()));
+            PG_CATALOG_TABLE_PG_DB_ROLE_SETTING => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_db_role_setting.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_DEFAULT_ACL => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_default_acl.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_DEPEND => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_depend.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_DESCRIPTION => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_description.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_ENUM => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_enum.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_EVENT_TRIGGER => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_event_trigger.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_EXTENSION => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_extension.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_FOREIGN_DATA_WRAPPER => self
+                .create_arrow_table(
+                    include_bytes!(
+                        "../../pg_catalog_arrow_exports/pg_foreign_data_wrapper.feather"
+                    )
+                    .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_FOREIGN_SERVER => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_server.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_FOREIGN_TABLE => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_table.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_INDEX => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_index.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_INHERITS => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_inherits.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_INIT_PRIVS => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_init_privs.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_LARGEOBJECT => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_largeobject.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_LARGEOBJECT_METADATA => self
+                .create_arrow_table(
+                    include_bytes!(
+                        "../../pg_catalog_arrow_exports/pg_largeobject_metadata.feather"
+                    )
+                    .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_NAMESPACE => {
+                let table = Arc::new(PgNamespaceTable::new(
+                    self.catalog_list.clone(),
+                    self.oid_counter.clone(),
+                    self.oid_cache.clone(),
+                ));
                 Ok(Some(Arc::new(
                     StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
                 )))
             }
-            PG_CATALOG_TABLE_PG_PROC => Ok(Some(self.create_pg_proc_table())),
-            PG_CATALOG_TABLE_PG_RANGE => Ok(Some(self.create_pg_range_table())),
-            PG_CATALOG_TABLE_PG_ENUM => Ok(Some(self.create_pg_enum_table())),
-            PG_CATALOG_TABLE_PG_DESCRIPTION => Ok(Some(self.create_pg_description_table())),
+            PG_CATALOG_TABLE_PG_PARTITIONED_TABLE => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_partitioned_table.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_POLICY => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_policy.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_PUBLICATION => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_publication.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_PUBLICATION_NAMESPACE => self
+                .create_arrow_table(
+                    include_bytes!(
+                        "../../pg_catalog_arrow_exports/pg_publication_namespace.feather"
+                    )
+                    .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_PUBLICATION_REL => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_publication_rel.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_REPLICATION_ORIGIN => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_replication_origin.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_REWRITE => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_rewrite.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_SECLABEL => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_seclabel.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_SEQUENCE => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_sequence.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_SHDEPEND => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_shdepend.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_SHDESCRIPTION => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_shdescription.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_SHSECLABEL => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_shseclabel.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_STATISTIC => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_statistic.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_STATISTIC_EXT => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_statistic_ext.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_STATISTIC_EXT_DATA => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_statistic_ext_data.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_SUBSCRIPTION => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_subscription.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_SUBSCRIPTION_REL => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_subscription_rel.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_TABLESPACE => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_tablespace.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_TRIGGER => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_trigger.feather").to_vec(),
+                )
+                .map(Some),
+            PG_CATALOG_TABLE_PG_USER_MAPPING => self
+                .create_arrow_table(
+                    include_bytes!("../../pg_catalog_arrow_exports/pg_user_mapping.feather")
+                        .to_vec(),
+                )
+                .map(Some),
+
             _ => Ok(None),
         }
     }
@@ -302,779 +575,11 @@ impl PgCatalogSchemaProvider {
         }
     }
 
-    /// Create a populated pg_type table with standard PostgreSQL data types
-    fn create_pg_type_table(&self) -> Arc<dyn TableProvider> {
-        // Define complete schema for pg_type (matching PostgreSQL)
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("oid", DataType::Int32, false),
-            Field::new("typname", DataType::Utf8, false),
-            Field::new("typnamespace", DataType::Int32, false),
-            Field::new("typowner", DataType::Int32, false),
-            Field::new("typlen", DataType::Int16, false),
-            Field::new("typbyval", DataType::Boolean, false),
-            Field::new("typtype", DataType::Utf8, false),
-            Field::new("typcategory", DataType::Utf8, false),
-            Field::new("typispreferred", DataType::Boolean, false),
-            Field::new("typisdefined", DataType::Boolean, false),
-            Field::new("typdelim", DataType::Utf8, false),
-            Field::new("typrelid", DataType::Int32, false),
-            Field::new("typelem", DataType::Int32, false),
-            Field::new("typarray", DataType::Int32, false),
-            Field::new("typinput", DataType::Utf8, false),
-            Field::new("typoutput", DataType::Utf8, false),
-            Field::new("typreceive", DataType::Utf8, false),
-            Field::new("typsend", DataType::Utf8, false),
-            Field::new("typmodin", DataType::Utf8, false),
-            Field::new("typmodout", DataType::Utf8, false),
-            Field::new("typanalyze", DataType::Utf8, false),
-            Field::new("typalign", DataType::Utf8, false),
-            Field::new("typstorage", DataType::Utf8, false),
-            Field::new("typnotnull", DataType::Boolean, false),
-            Field::new("typbasetype", DataType::Int32, false),
-            Field::new("typtypmod", DataType::Int32, false),
-            Field::new("typndims", DataType::Int32, false),
-            Field::new("typcollation", DataType::Int32, false),
-            Field::new("typdefaultbin", DataType::Utf8, true),
-            Field::new("typdefault", DataType::Utf8, true),
-        ]));
-
-        // Create standard PostgreSQL data types
-        let pg_types_data = Self::get_standard_pg_types();
-
-        // Create RecordBatch from the data
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Int32Array::from(pg_types_data.oids)),
-            Arc::new(StringArray::from(pg_types_data.typnames)),
-            Arc::new(Int32Array::from(pg_types_data.typnamespaces)),
-            Arc::new(Int32Array::from(pg_types_data.typowners)),
-            Arc::new(Int16Array::from(pg_types_data.typlens)),
-            Arc::new(BooleanArray::from(pg_types_data.typbyvals)),
-            Arc::new(StringArray::from(pg_types_data.typtypes)),
-            Arc::new(StringArray::from(pg_types_data.typcategories)),
-            Arc::new(BooleanArray::from(pg_types_data.typispreferreds)),
-            Arc::new(BooleanArray::from(pg_types_data.typisdefineds)),
-            Arc::new(StringArray::from(pg_types_data.typdelims)),
-            Arc::new(Int32Array::from(pg_types_data.typrelids)),
-            Arc::new(Int32Array::from(pg_types_data.typelems)),
-            Arc::new(Int32Array::from(pg_types_data.typarrays)),
-            Arc::new(StringArray::from(pg_types_data.typinputs)),
-            Arc::new(StringArray::from(pg_types_data.typoutputs)),
-            Arc::new(StringArray::from(pg_types_data.typreceives)),
-            Arc::new(StringArray::from(pg_types_data.typsends)),
-            Arc::new(StringArray::from(pg_types_data.typmodins)),
-            Arc::new(StringArray::from(pg_types_data.typmodouts)),
-            Arc::new(StringArray::from(pg_types_data.typanalyzes)),
-            Arc::new(StringArray::from(pg_types_data.typaligns)),
-            Arc::new(StringArray::from(pg_types_data.typstorages)),
-            Arc::new(BooleanArray::from(pg_types_data.typnotnulls)),
-            Arc::new(Int32Array::from(pg_types_data.typbasetypes)),
-            Arc::new(Int32Array::from(pg_types_data.typtymods)),
-            Arc::new(Int32Array::from(pg_types_data.typndimss)),
-            Arc::new(Int32Array::from(pg_types_data.typcollations)),
-            Arc::new(StringArray::from_iter(
-                pg_types_data.typdefaultbins.into_iter(),
-            )),
-            Arc::new(StringArray::from_iter(
-                pg_types_data.typdefaults.into_iter(),
-            )),
-        ];
-
-        let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
-
-        // Create memory table with populated data
-        let provider = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
-
-        Arc::new(provider)
-    }
-
-    /// Generate standard PostgreSQL data types for pg_type table
-    fn get_standard_pg_types() -> PgTypesData {
-        let mut data = PgTypesData::new();
-
-        // Basic data types commonly used
-        data.add_type(
-            16, "bool", 11, 10, 1, true, "b", "B", true, true, ",", 0, 0, 1000, "boolin",
-            "boolout", "boolrecv", "boolsend", "-", "-", "-", "c", "p", false, 0, -1, 0, 0, None,
-            None,
-        );
-        data.add_type(
-            17,
-            "bytea",
-            11,
-            10,
-            -1,
-            false,
-            "b",
-            "U",
-            false,
-            true,
-            ",",
-            0,
-            0,
-            1001,
-            "byteain",
-            "byteaout",
-            "bytearecv",
-            "byteasend",
-            "-",
-            "-",
-            "-",
-            "i",
-            "x",
-            false,
-            0,
-            -1,
-            0,
-            0,
-            None,
-            None,
-        );
-        data.add_type(
-            18, "char", 11, 10, 1, true, "b", "S", false, true, ",", 0, 0, 1002, "charin",
-            "charout", "charrecv", "charsend", "-", "-", "-", "c", "p", false, 0, -1, 0, 0, None,
-            None,
-        );
-        data.add_type(
-            19, "name", 11, 10, 64, false, "b", "S", false, true, ",", 0, 0, 1003, "namein",
-            "nameout", "namerecv", "namesend", "-", "-", "-", "i", "p", false, 0, -1, 0, 0, None,
-            None,
-        );
-        data.add_type(
-            20, "int8", 11, 10, 8, true, "b", "N", false, true, ",", 0, 0, 1016, "int8in",
-            "int8out", "int8recv", "int8send", "-", "-", "-", "d", "p", false, 0, -1, 0, 0, None,
-            None,
-        );
-        data.add_type(
-            21, "int2", 11, 10, 2, true, "b", "N", false, true, ",", 0, 0, 1005, "int2in",
-            "int2out", "int2recv", "int2send", "-", "-", "-", "s", "p", false, 0, -1, 0, 0, None,
-            None,
-        );
-        data.add_type(
-            23, "int4", 11, 10, 4, true, "b", "N", true, true, ",", 0, 0, 1007, "int4in",
-            "int4out", "int4recv", "int4send", "-", "-", "-", "i", "p", false, 0, -1, 0, 0, None,
-            None,
-        );
-        data.add_type(
-            25, "text", 11, 10, -1, false, "b", "S", true, true, ",", 0, 0, 1009, "textin",
-            "textout", "textrecv", "textsend", "-", "-", "-", "i", "x", false, 0, -1, 0, 100, None,
-            None,
-        );
-        data.add_type(
-            700,
-            "float4",
-            11,
-            10,
-            4,
-            true,
-            "b",
-            "N",
-            false,
-            true,
-            ",",
-            0,
-            0,
-            1021,
-            "float4in",
-            "float4out",
-            "float4recv",
-            "float4send",
-            "-",
-            "-",
-            "-",
-            "i",
-            "p",
-            false,
-            0,
-            -1,
-            0,
-            0,
-            None,
-            None,
-        );
-        data.add_type(
-            701,
-            "float8",
-            11,
-            10,
-            8,
-            true,
-            "b",
-            "N",
-            true,
-            true,
-            ",",
-            0,
-            0,
-            1022,
-            "float8in",
-            "float8out",
-            "float8recv",
-            "float8send",
-            "-",
-            "-",
-            "-",
-            "d",
-            "p",
-            false,
-            0,
-            -1,
-            0,
-            0,
-            None,
-            None,
-        );
-        data.add_type(
-            1043,
-            "varchar",
-            11,
-            10,
-            -1,
-            false,
-            "b",
-            "S",
-            false,
-            true,
-            ",",
-            0,
-            0,
-            1015,
-            "varcharin",
-            "varcharout",
-            "varcharrecv",
-            "varcharsend",
-            "varchartypmodin",
-            "varchartypmodout",
-            "-",
-            "i",
-            "x",
-            false,
-            0,
-            -1,
-            0,
-            100,
-            None,
-            None,
-        );
-        data.add_type(
-            1082,
-            "date",
-            11,
-            10,
-            4,
-            true,
-            "b",
-            "D",
-            false,
-            true,
-            ",",
-            0,
-            0,
-            1182,
-            "date_in",
-            "date_out",
-            "date_recv",
-            "date_send",
-            "-",
-            "-",
-            "-",
-            "i",
-            "p",
-            false,
-            0,
-            -1,
-            0,
-            0,
-            None,
-            None,
-        );
-        data.add_type(
-            1083,
-            "time",
-            11,
-            10,
-            8,
-            true,
-            "b",
-            "D",
-            false,
-            true,
-            ",",
-            0,
-            0,
-            1183,
-            "time_in",
-            "time_out",
-            "time_recv",
-            "time_send",
-            "timetypmodin",
-            "timetypmodout",
-            "-",
-            "d",
-            "p",
-            false,
-            0,
-            -1,
-            0,
-            0,
-            None,
-            None,
-        );
-        data.add_type(
-            1114,
-            "timestamp",
-            11,
-            10,
-            8,
-            true,
-            "b",
-            "D",
-            false,
-            true,
-            ",",
-            0,
-            0,
-            1115,
-            "timestamp_in",
-            "timestamp_out",
-            "timestamp_recv",
-            "timestamp_send",
-            "timestamptypmodin",
-            "timestamptypmodout",
-            "-",
-            "d",
-            "p",
-            false,
-            0,
-            -1,
-            0,
-            0,
-            None,
-            None,
-        );
-        data.add_type(
-            1184,
-            "timestamptz",
-            11,
-            10,
-            8,
-            true,
-            "b",
-            "D",
-            true,
-            true,
-            ",",
-            0,
-            0,
-            1185,
-            "timestamptz_in",
-            "timestamptz_out",
-            "timestamptz_recv",
-            "timestamptz_send",
-            "timestamptztypmodin",
-            "timestamptztypmodout",
-            "-",
-            "d",
-            "p",
-            false,
-            0,
-            -1,
-            0,
-            0,
-            None,
-            None,
-        );
-        data.add_type(
-            1700,
-            "numeric",
-            11,
-            10,
-            -1,
-            false,
-            "b",
-            "N",
-            false,
-            true,
-            ",",
-            0,
-            0,
-            1231,
-            "numeric_in",
-            "numeric_out",
-            "numeric_recv",
-            "numeric_send",
-            "numerictypmodin",
-            "numerictypmodout",
-            "-",
-            "i",
-            "m",
-            false,
-            0,
-            -1,
-            0,
-            0,
-            None,
-            None,
-        );
-
-        data
-    }
-
-    /// Create a mock empty table for pg_am
-    fn create_pg_am_table(&self) -> Arc<dyn TableProvider> {
-        // Define the schema for pg_am
-        // This matches PostgreSQL's pg_am table columns
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("oid", DataType::Int32, false), // Object identifier
-            Field::new("amname", DataType::Utf8, false), // Name of the access method
-            Field::new("amhandler", DataType::Int32, false), // OID of handler function
-            Field::new("amtype", DataType::Utf8, false), // Type of access method (i=index, t=table)
-            Field::new("amstrategies", DataType::Int32, false), // Number of operator strategies
-            Field::new("amsupport", DataType::Int32, false), // Number of support routines
-            Field::new("amcanorder", DataType::Boolean, false), // Does AM support ordered scans?
-            Field::new("amcanorderbyop", DataType::Boolean, false), // Does AM support order by operator result?
-            Field::new("amcanbackward", DataType::Boolean, false), // Does AM support backward scanning?
-            Field::new("amcanunique", DataType::Boolean, false), // Does AM support unique indexes?
-            Field::new("amcanmulticol", DataType::Boolean, false), // Does AM support multi-column indexes?
-            Field::new("amoptionalkey", DataType::Boolean, false), // Can first index column be omitted in search?
-            Field::new("amsearcharray", DataType::Boolean, false), // Does AM support ScalarArrayOpExpr searches?
-            Field::new("amsearchnulls", DataType::Boolean, false), // Does AM support searching for NULL/NOT NULL?
-            Field::new("amstorage", DataType::Boolean, false), // Can storage type differ from column type?
-            Field::new("amclusterable", DataType::Boolean, false), // Can index be clustered on?
-            Field::new("ampredlocks", DataType::Boolean, false), // Does AM manage fine-grained predicate locks?
-            Field::new("amcanparallel", DataType::Boolean, false), // Does AM support parallel scan?
-            Field::new("amcanbeginscan", DataType::Boolean, false), // Does AM support BRIN index scans?
-            Field::new("amcanmarkpos", DataType::Boolean, false), // Does AM support mark/restore positions?
-            Field::new("amcanfetch", DataType::Boolean, false), // Does AM support fetching specific tuples?
-            Field::new("amkeytype", DataType::Int32, false),    // Type of data in index
-        ]));
-
-        // Create memory table with schema
-        let provider = MemTable::try_new(schema, vec![vec![]]).unwrap();
-
-        Arc::new(provider)
-    }
-
-    /// Create a mock empty table for pg_range
-    fn create_pg_range_table(&self) -> Arc<dyn TableProvider> {
-        // Define the schema for pg_range
-        // This matches PostgreSQL's pg_range table columns
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("rngtypid", DataType::Int32, false), // OID of the range type
-            Field::new("rngsubtype", DataType::Int32, false), // OID of the element type (subtype) of this range type
-            Field::new("rngmultitypid", DataType::Int32, false), // OID of the multirange type for this range type
-            Field::new("rngcollation", DataType::Int32, false), // OID of the collation used for range comparisons, or zero if none
-            Field::new("rngsubopc", DataType::Int32, false), // OID of the subtype's operator class used for range comparisons
-            Field::new("rngcanonical", DataType::Int32, false), // OID of the function to convert a range value into canonical form, or zero if none
-            Field::new("rngsubdiff", DataType::Int32, false), // OID of the function to return the difference between two element values as double precision, or zero if none
-        ]));
-
-        // Create memory table with schema
-        let provider = MemTable::try_new(schema, vec![vec![]]).unwrap();
-        Arc::new(provider)
-    }
-
-    /// Create a mock empty table for pg_enum
-    fn create_pg_enum_table(&self) -> Arc<dyn TableProvider> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("oid", DataType::Int32, false), // Row identifier
-            Field::new("enumtypid", DataType::Int32, false), // The OID of the pg_type entry owning this enum value
-            Field::new("enumsortorder", DataType::Float32, false), // The sort position of this enum value within its enum type
-            Field::new("enumlabel", DataType::Utf8, false), // The textual label for this enum value
-        ]));
-        let provider = MemTable::try_new(schema, vec![vec![]]).unwrap();
-        Arc::new(provider)
-    }
-
-    /// Create a mock empty table for pg_description
-    fn create_pg_description_table(&self) -> Arc<dyn TableProvider> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("objoid", DataType::Int32, false),   // Oid
-            Field::new("classoid", DataType::Int32, false), // Oid of the obj class
-            Field::new("objsubid", DataType::Int32, false), // subid
-            Field::new("description", DataType::Utf8, false),
-        ]));
-        let provider = MemTable::try_new(schema, vec![vec![]]).unwrap();
-        Arc::new(provider)
-    }
-
-    /// Create a populated pg_proc table with standard PostgreSQL functions
-    fn create_pg_proc_table(&self) -> Arc<dyn TableProvider> {
-        // Define complete schema for pg_proc (matching PostgreSQL)
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("oid", DataType::Int32, false), // Object identifier
-            Field::new("proname", DataType::Utf8, false), // Function name
-            Field::new("pronamespace", DataType::Int32, false), // OID of namespace containing function
-            Field::new("proowner", DataType::Int32, false),     // Owner of the function
-            Field::new("prolang", DataType::Int32, false),      // Implementation language
-            Field::new("procost", DataType::Float32, false),    // Estimated execution cost
-            Field::new("prorows", DataType::Float32, false), // Estimated result size for set-returning functions
-            Field::new("provariadic", DataType::Int32, false), // Element type of variadic array
-            Field::new("prosupport", DataType::Int32, false), // Support function OID
-            Field::new("prokind", DataType::Utf8, false), // f=function, p=procedure, a=aggregate, w=window
-            Field::new("prosecdef", DataType::Boolean, false), // Security definer flag
-            Field::new("proleakproof", DataType::Boolean, false), // Leak-proof flag
-            Field::new("proisstrict", DataType::Boolean, false), // Returns null if any argument is null
-            Field::new("proretset", DataType::Boolean, false),   // Returns a set (vs scalar)
-            Field::new("provolatile", DataType::Utf8, false), // i=immutable, s=stable, v=volatile
-            Field::new("proparallel", DataType::Utf8, false), // s=safe, r=restricted, u=unsafe
-            Field::new("pronargs", DataType::Int16, false),   // Number of input arguments
-            Field::new("pronargdefaults", DataType::Int16, false), // Number of arguments with defaults
-            Field::new("prorettype", DataType::Int32, false),      // OID of return type
-            Field::new("proargtypes", DataType::Utf8, false),      // Array of argument type OIDs
-            Field::new("proallargtypes", DataType::Utf8, true), // Array of all argument type OIDs
-            Field::new("proargmodes", DataType::Utf8, true),    // Array of argument modes
-            Field::new("proargnames", DataType::Utf8, true),    // Array of argument names
-            Field::new("proargdefaults", DataType::Utf8, true), // Expression for argument defaults
-            Field::new("protrftypes", DataType::Utf8, true),    // Transform types
-            Field::new("prosrc", DataType::Utf8, false),        // Function source code
-            Field::new("probin", DataType::Utf8, true),         // Binary file containing function
-            Field::new("prosqlbody", DataType::Utf8, true),     // SQL function body
-            Field::new("proconfig", DataType::Utf8, true),      // Configuration variables
-            Field::new("proacl", DataType::Utf8, true),         // Access privileges
-        ]));
-
-        // Create standard PostgreSQL functions
-        let pg_proc_data = Self::get_standard_pg_functions();
-
-        // Create RecordBatch from the data
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Int32Array::from(pg_proc_data.oids)),
-            Arc::new(StringArray::from(pg_proc_data.pronames)),
-            Arc::new(Int32Array::from(pg_proc_data.pronamespaces)),
-            Arc::new(Int32Array::from(pg_proc_data.proowners)),
-            Arc::new(Int32Array::from(pg_proc_data.prolangs)),
-            Arc::new(Float32Array::from(pg_proc_data.procosts)),
-            Arc::new(Float32Array::from(pg_proc_data.prorows)),
-            Arc::new(Int32Array::from(pg_proc_data.provariadics)),
-            Arc::new(Int32Array::from(pg_proc_data.prosupports)),
-            Arc::new(StringArray::from(pg_proc_data.prokinds)),
-            Arc::new(BooleanArray::from(pg_proc_data.prosecdefs)),
-            Arc::new(BooleanArray::from(pg_proc_data.proleakproofs)),
-            Arc::new(BooleanArray::from(pg_proc_data.proisstricts)),
-            Arc::new(BooleanArray::from(pg_proc_data.proretsets)),
-            Arc::new(StringArray::from(pg_proc_data.provolatiles)),
-            Arc::new(StringArray::from(pg_proc_data.proparallels)),
-            Arc::new(Int16Array::from(pg_proc_data.pronargs)),
-            Arc::new(Int16Array::from(pg_proc_data.pronargdefaults)),
-            Arc::new(Int32Array::from(pg_proc_data.prorettypes)),
-            Arc::new(StringArray::from(pg_proc_data.proargtypes)),
-            Arc::new(StringArray::from_iter(
-                pg_proc_data.proallargtypes.into_iter(),
-            )),
-            Arc::new(StringArray::from_iter(pg_proc_data.proargmodes.into_iter())),
-            Arc::new(StringArray::from_iter(pg_proc_data.proargnames.into_iter())),
-            Arc::new(StringArray::from_iter(
-                pg_proc_data.proargdefaults.into_iter(),
-            )),
-            Arc::new(StringArray::from_iter(pg_proc_data.protrftypes.into_iter())),
-            Arc::new(StringArray::from(pg_proc_data.prosrcs)),
-            Arc::new(StringArray::from_iter(pg_proc_data.probins.into_iter())),
-            Arc::new(StringArray::from_iter(pg_proc_data.prosqlbodys.into_iter())),
-            Arc::new(StringArray::from_iter(pg_proc_data.proconfigs.into_iter())),
-            Arc::new(StringArray::from_iter(pg_proc_data.proacls.into_iter())),
-        ];
-
-        let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
-
-        // Create memory table with populated data
-        let provider = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
-
-        Arc::new(provider)
-    }
-
-    /// Generate standard PostgreSQL functions for pg_proc table
-    fn get_standard_pg_functions() -> PgProcData {
-        let mut data = PgProcData::new();
-
-        // Essential PostgreSQL functions that many tools expect
-        data.add_function(
-            1242, "boolin", 11, 10, 12, 1.0, 0.0, 0, 0, "f", false, true, true, false, "i", "s", 1,
-            0, 16, "2275", None, None, None, None, None, "boolin", None, None, None, None,
-        );
-        data.add_function(
-            1243, "boolout", 11, 10, 12, 1.0, 0.0, 0, 0, "f", false, true, true, false, "i", "s",
-            1, 0, 2275, "16", None, None, None, None, None, "boolout", None, None, None, None,
-        );
-        data.add_function(
-            1564, "textin", 11, 10, 12, 1.0, 0.0, 0, 0, "f", false, true, true, false, "i", "s", 1,
-            0, 25, "2275", None, None, None, None, None, "textin", None, None, None, None,
-        );
-        data.add_function(
-            1565, "textout", 11, 10, 12, 1.0, 0.0, 0, 0, "f", false, true, true, false, "i", "s",
-            1, 0, 2275, "25", None, None, None, None, None, "textout", None, None, None, None,
-        );
-        data.add_function(
-            1242,
-            "version",
-            11,
-            10,
-            12,
-            1.0,
-            0.0,
-            0,
-            0,
-            "f",
-            false,
-            true,
-            false,
-            false,
-            "s",
-            "s",
-            0,
-            0,
-            25,
-            "",
-            None,
-            None,
-            None,
-            None,
-            None,
-            "SELECT 'DataFusion PostgreSQL 48.0.0 on x86_64-pc-linux-gnu'",
-            None,
-            None,
-            None,
-            None,
-        );
-
-        data
-    }
-}
-
-// Data structure to hold pg_proc table data
-#[derive(Debug)]
-struct PgProcData {
-    oids: Vec<i32>,
-    pronames: Vec<String>,
-    pronamespaces: Vec<i32>,
-    proowners: Vec<i32>,
-    prolangs: Vec<i32>,
-    procosts: Vec<f32>,
-    prorows: Vec<f32>,
-    provariadics: Vec<i32>,
-    prosupports: Vec<i32>,
-    prokinds: Vec<String>,
-    prosecdefs: Vec<bool>,
-    proleakproofs: Vec<bool>,
-    proisstricts: Vec<bool>,
-    proretsets: Vec<bool>,
-    provolatiles: Vec<String>,
-    proparallels: Vec<String>,
-    pronargs: Vec<i16>,
-    pronargdefaults: Vec<i16>,
-    prorettypes: Vec<i32>,
-    proargtypes: Vec<String>,
-    proallargtypes: Vec<Option<String>>,
-    proargmodes: Vec<Option<String>>,
-    proargnames: Vec<Option<String>>,
-    proargdefaults: Vec<Option<String>>,
-    protrftypes: Vec<Option<String>>,
-    prosrcs: Vec<String>,
-    probins: Vec<Option<String>>,
-    prosqlbodys: Vec<Option<String>>,
-    proconfigs: Vec<Option<String>>,
-    proacls: Vec<Option<String>>,
-}
-
-impl PgProcData {
-    fn new() -> Self {
-        Self {
-            oids: Vec::new(),
-            pronames: Vec::new(),
-            pronamespaces: Vec::new(),
-            proowners: Vec::new(),
-            prolangs: Vec::new(),
-            procosts: Vec::new(),
-            prorows: Vec::new(),
-            provariadics: Vec::new(),
-            prosupports: Vec::new(),
-            prokinds: Vec::new(),
-            prosecdefs: Vec::new(),
-            proleakproofs: Vec::new(),
-            proisstricts: Vec::new(),
-            proretsets: Vec::new(),
-            provolatiles: Vec::new(),
-            proparallels: Vec::new(),
-            pronargs: Vec::new(),
-            pronargdefaults: Vec::new(),
-            prorettypes: Vec::new(),
-            proargtypes: Vec::new(),
-            proallargtypes: Vec::new(),
-            proargmodes: Vec::new(),
-            proargnames: Vec::new(),
-            proargdefaults: Vec::new(),
-            protrftypes: Vec::new(),
-            prosrcs: Vec::new(),
-            probins: Vec::new(),
-            prosqlbodys: Vec::new(),
-            proconfigs: Vec::new(),
-            proacls: Vec::new(),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn add_function(
-        &mut self,
-        oid: i32,
-        proname: &str,
-        pronamespace: i32,
-        proowner: i32,
-        prolang: i32,
-        procost: f32,
-        prorows: f32,
-        provariadic: i32,
-        prosupport: i32,
-        prokind: &str,
-        prosecdef: bool,
-        proleakproof: bool,
-        proisstrict: bool,
-        proretset: bool,
-        provolatile: &str,
-        proparallel: &str,
-        pronargs: i16,
-        pronargdefaults: i16,
-        prorettype: i32,
-        proargtypes: &str,
-        proallargtypes: Option<String>,
-        proargmodes: Option<String>,
-        proargnames: Option<String>,
-        proargdefaults: Option<String>,
-        protrftypes: Option<String>,
-        prosrc: &str,
-        probin: Option<String>,
-        prosqlbody: Option<String>,
-        proconfig: Option<String>,
-        proacl: Option<String>,
-    ) {
-        self.oids.push(oid);
-        self.pronames.push(proname.to_string());
-        self.pronamespaces.push(pronamespace);
-        self.proowners.push(proowner);
-        self.prolangs.push(prolang);
-        self.procosts.push(procost);
-        self.prorows.push(prorows);
-        self.provariadics.push(provariadic);
-        self.prosupports.push(prosupport);
-        self.prokinds.push(prokind.to_string());
-        self.prosecdefs.push(prosecdef);
-        self.proleakproofs.push(proleakproof);
-        self.proisstricts.push(proisstrict);
-        self.proretsets.push(proretset);
-        self.provolatiles.push(provolatile.to_string());
-        self.proparallels.push(proparallel.to_string());
-        self.pronargs.push(pronargs);
-        self.pronargdefaults.push(pronargdefaults);
-        self.prorettypes.push(prorettype);
-        self.proargtypes.push(proargtypes.to_string());
-        self.proallargtypes.push(proallargtypes);
-        self.proargmodes.push(proargmodes);
-        self.proargnames.push(proargnames);
-        self.proargdefaults.push(proargdefaults);
-        self.protrftypes.push(protrftypes);
-        self.prosrcs.push(prosrc.to_string());
-        self.probins.push(probin);
-        self.prosqlbodys.push(prosqlbody);
-        self.proconfigs.push(proconfig);
-        self.proacls.push(proacl);
+    /// Create table from dumped arrow data
+    fn create_arrow_table(&self, data_bytes: Vec<u8>) -> Result<Arc<dyn TableProvider>> {
+        let table = ArrowTable::from_ipc_data(data_bytes)?;
+        let streaming_table = StreamingTable::try_new(table.schema.clone(), vec![Arc::new(table)])?;
+        Ok(Arc::new(streaming_table))
     }
 }
 
@@ -1673,6 +1178,7 @@ impl PgAttributeTable {
         let mut attmissingvals: Vec<Option<String>> = Vec::new();
 
         // Start OID counter (should be consistent with pg_class)
+        // FIXME: oid
         let mut next_oid = 10000;
 
         // Iterate through all catalogs and schemas
@@ -1805,6 +1311,48 @@ impl PartitionStream for PgAttributeTable {
         Box::pin(RecordBatchStreamAdapter::new(
             schema.clone(),
             futures::stream::once(async move { Self::get_data(schema, catalog_list).await }),
+        ))
+    }
+}
+
+/// A table that reads data from Avro bytes
+#[derive(Debug, Clone)]
+struct ArrowTable {
+    schema: SchemaRef,
+    data: Vec<RecordBatch>,
+}
+
+impl ArrowTable {
+    /// Create a new ArrowTable from bytes
+    pub fn from_ipc_data(data: Vec<u8>) -> Result<Self> {
+        let cursor = std::io::Cursor::new(data);
+        let reader = FileReader::try_new(cursor, None)?;
+
+        let schema = reader.schema();
+        let mut batches = Vec::new();
+
+        // Read all record batches from the IPC stream
+        for batch in reader {
+            batches.push(batch?);
+        }
+
+        Ok(Self {
+            schema,
+            data: batches,
+        })
+    }
+}
+
+impl PartitionStream for ArrowTable {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let data = self.data.clone();
+        Box::pin(RecordBatchStreamAdapter::new(
+            self.schema.clone(),
+            futures::stream::iter(data.into_iter().map(Ok)),
         ))
     }
 }
@@ -2044,4 +1592,256 @@ pub fn setup_pg_catalog(
     session_context.register_udf(create_format_type_udf());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_load_arrow_data() {
+        let table = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_aggregate.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+
+        assert_eq!(table.schema.fields.len(), 22);
+        assert_eq!(table.data.len(), 1);
+
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_aggregate.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_am.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_amop.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_amproc.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_cast.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_collation.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_conversion.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_language.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_opclass.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_operator.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_opfamily.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_proc.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_range.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_ts_config.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_ts_dict.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_ts_parser.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_ts_template.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_type.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_attrdef.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_auth_members.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_authid.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_constraint.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_db_role_setting.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_default_acl.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_depend.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_description.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_enum.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_event_trigger.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_extension.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_data_wrapper.feather")
+                .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_server.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_table.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_index.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_inherits.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_init_privs.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_largeobject.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_largeobject_metadata.feather")
+                .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_partitioned_table.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_policy.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_publication.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_publication_namespace.feather")
+                .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_publication_rel.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_replication_origin.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_rewrite.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_seclabel.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_sequence.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_shdepend.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_shdescription.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_shseclabel.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_statistic.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_statistic_ext.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_statistic_ext_data.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_subscription.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_subscription_rel.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_tablespace.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_trigger.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_user_mapping.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+    }
 }
