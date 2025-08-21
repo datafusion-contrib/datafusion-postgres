@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -9,15 +11,25 @@ use datafusion::error::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::PartitionStream;
+use postgres_types::Oid;
+use tokio::sync::RwLock;
 
-#[derive(Debug)]
+use super::OidCacheKey;
+
+#[derive(Debug, Clone)]
 pub(crate) struct PgAttributeTable {
     schema: SchemaRef,
     catalog_list: Arc<dyn CatalogProviderList>,
+    oid_counter: Arc<AtomicU32>,
+    oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
 }
 
 impl PgAttributeTable {
-    pub(crate) fn new(catalog_list: Arc<dyn CatalogProviderList>) -> Self {
+    pub(crate) fn new(
+        catalog_list: Arc<dyn CatalogProviderList>,
+        oid_counter: Arc<AtomicU32>,
+        oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
+    ) -> Self {
         // Define the schema for pg_attribute
         // This matches PostgreSQL's pg_attribute table columns
         let schema = Arc::new(Schema::new(vec![
@@ -52,14 +64,13 @@ impl PgAttributeTable {
         Self {
             schema,
             catalog_list,
+            oid_counter,
+            oid_cache,
         }
     }
 
     /// Generate record batches based on the current state of the catalog
-    async fn get_data(
-        schema: SchemaRef,
-        catalog_list: Arc<dyn CatalogProviderList>,
-    ) -> Result<RecordBatch> {
+    async fn get_data(this: Self) -> Result<RecordBatch> {
         // Vectors to store column data
         let mut attrelids = Vec::new();
         let mut attnames = Vec::new();
@@ -88,19 +99,28 @@ impl PgAttributeTable {
         let mut attfdwoptions: Vec<Option<String>> = Vec::new();
         let mut attmissingvals: Vec<Option<String>> = Vec::new();
 
-        // Start OID counter (should be consistent with pg_class)
-        // FIXME: oid
-        let mut next_oid = 10000;
+        let mut oid_cache = this.oid_cache.write().await;
+        // Every time when call pg_catalog we generate a new cache and drop the
+        // original one in case that schemas or tables were dropped.
+        let mut swap_cache = HashMap::new();
 
-        // Iterate through all catalogs and schemas
-        for catalog_name in catalog_list.catalog_names() {
-            if let Some(catalog) = catalog_list.catalog(&catalog_name) {
+        for catalog_name in this.catalog_list.catalog_names() {
+            if let Some(catalog) = this.catalog_list.catalog(&catalog_name) {
                 for schema_name in catalog.schema_names() {
                     if let Some(schema_provider) = catalog.schema(&schema_name) {
                         // Process all tables in this schema
                         for table_name in schema_provider.table_names() {
-                            let table_oid = next_oid;
-                            next_oid += 1;
+                            let cache_key = OidCacheKey::Table(
+                                catalog_name.clone(),
+                                schema_name.clone(),
+                                table_name.clone(),
+                            );
+                            let table_oid = if let Some(oid) = oid_cache.get(&cache_key) {
+                                *oid
+                            } else {
+                                this.oid_counter.fetch_add(1, Ordering::Relaxed)
+                            };
+                            swap_cache.insert(cache_key, table_oid);
 
                             if let Some(table) = schema_provider.table(&table_name).await? {
                                 let table_schema = table.schema();
@@ -112,7 +132,7 @@ impl PgAttributeTable {
                                     let (pg_type_oid, type_len, by_val, align, storage) =
                                         Self::datafusion_to_pg_type(field.data_type());
 
-                                    attrelids.push(table_oid);
+                                    attrelids.push(table_oid as i32);
                                     attnames.push(field.name().clone());
                                     atttypids.push(pg_type_oid);
                                     attstattargets.push(-1); // Default statistics target
@@ -146,6 +166,8 @@ impl PgAttributeTable {
             }
         }
 
+        *oid_cache = swap_cache;
+
         // Create Arrow arrays from the collected data
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(Int32Array::from(attrelids)),
@@ -177,7 +199,7 @@ impl PgAttributeTable {
         ];
 
         // Create a record batch
-        let batch = RecordBatch::try_new(schema.clone(), arrays)?;
+        let batch = RecordBatch::try_new(this.schema.clone(), arrays)?;
         Ok(batch)
     }
 
@@ -217,11 +239,10 @@ impl PartitionStream for PgAttributeTable {
     }
 
     fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-        let catalog_list = self.catalog_list.clone();
-        let schema = Arc::clone(&self.schema);
+        let this = self.clone();
         Box::pin(RecordBatchStreamAdapter::new(
-            schema.clone(),
-            futures::stream::once(async move { Self::get_data(schema, catalog_list).await }),
+            this.schema.clone(),
+            futures::stream::once(async move { Self::get_data(this).await }),
         ))
     }
 }

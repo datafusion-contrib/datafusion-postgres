@@ -306,6 +306,8 @@ impl SchemaProvider for PgCatalogSchemaProvider {
             PG_CATALOG_TABLE_PG_ATTRIBUTE => {
                 let table = Arc::new(pg_attribute::PgAttributeTable::new(
                     self.catalog_list.clone(),
+                    self.oid_counter.clone(),
+                    self.oid_cache.clone(),
                 ));
                 Ok(Some(Arc::new(
                     StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
