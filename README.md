@@ -1,6 +1,12 @@
 # datafusion-postgres
 
-![Crates.io Version](https://img.shields.io/crates/v/datafusion-postgres?label=datafusion-postgres)
+[![Crates.io Version][crates-badge]][crates-url]
+[![Docs.rs Version][docs-badge]][docs-url]
+
+[crates-badge]: https://img.shields.io/crates/v/datafusion-postgres?label=datafusion-postgres
+[crates-url]: https://crates.io/crates/datafusion-postgres
+[docs-badge]: https://img.shields.io/docsrs/datafusion-postgres
+[docs-url]: https://docs.rs/datafusion-postgres/latest/datafusion_postgres
 
 A PostgreSQL-compatible server for [Apache DataFusion](https://datafusion.apache.org), supporting authentication, role-based access control, and SSL/TLS encryption. Available as both a library and CLI tool.
 
