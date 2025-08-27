@@ -14,9 +14,7 @@ pub fn setup_handlers() -> DfSessionService {
     let session_context = SessionContext::new();
     setup_pg_catalog(&session_context, "datafusion").expect("Failed to setup sesession context");
 
-    let service = DfSessionService::new(Arc::new(session_context), Arc::new(AuthManager::new()));
-
-    service
+    DfSessionService::new(Arc::new(session_context), Arc::new(AuthManager::new()))
 }
 
 #[derive(Debug, Default)]
