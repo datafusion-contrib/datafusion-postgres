@@ -1494,6 +1494,7 @@ dependencies = [
  "bytes",
  "chrono",
  "datafusion",
+ "env_logger",
  "futures",
  "getset",
  "log",

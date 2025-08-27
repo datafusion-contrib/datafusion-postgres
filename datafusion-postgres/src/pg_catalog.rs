@@ -869,6 +869,26 @@ pub fn create_format_type_udf() -> ScalarUDF {
     )
 }
 
+pub fn create_session_user_udf() -> ScalarUDF {
+    let func = move |_args: &[ColumnarValue]| {
+        let mut builder = StringBuilder::new();
+        // TODO: return real user
+        builder.append_value("postgres");
+
+        let array: ArrayRef = Arc::new(builder.finish());
+
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "session_user",
+        vec![],
+        DataType::Utf8,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
 /// Install pg_catalog and postgres UDFs to current `SessionContext`
 pub fn setup_pg_catalog(
     session_context: &SessionContext,
@@ -892,6 +912,7 @@ pub fn setup_pg_catalog(
     session_context.register_udf(create_has_table_privilege_2param_udf());
     session_context.register_udf(create_pg_table_is_visible());
     session_context.register_udf(create_format_type_udf());
+    session_context.register_udf(create_session_user_udf());
 
     Ok(())
 }

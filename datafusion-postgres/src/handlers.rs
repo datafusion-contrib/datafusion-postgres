@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
+use log::warn;
 use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::auth::StartupHandler;
 use pgwire::api::portal::{Format, Portal};
@@ -198,14 +199,12 @@ impl DfSessionService {
                 }
             } else {
                 // pass SET query to datafusion
-                let df = self
-                    .session_context
-                    .sql(query_lower)
-                    .await
-                    .map_err(|err| PgWireError::ApiError(Box::new(err)))?;
+                if let Err(e) = self.session_context.sql(query_lower).await {
+                    warn!("SET statement {query_lower} is not supported by datafusion, error {e}, statement ignored");
+                }
 
-                let resp = df::encode_dataframe(df, &Format::UnifiedText).await?;
-                Ok(Some(Response::Query(resp)))
+                // Always return SET success
+                Ok(Some(Response::Execution(Tag::new("SET"))))
             }
         } else {
             Ok(None)
