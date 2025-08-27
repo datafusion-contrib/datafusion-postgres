@@ -505,8 +505,15 @@ impl ExtendedQueryHandler for DfSessionService {
         let plan = plan
             .clone()
             .replace_params_with_values(&param_values)
-            .map_err(|e| PgWireError::ApiError(Box::new(e)))?; // Fixed: Use &param_values
-        let dataframe = match self.session_context.execute_logical_plan(plan).await {
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?; // Fixed: Use
+                                                               // &param_values
+        let optimised = self
+            .session_context
+            .state()
+            .optimize(&plan)
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+        let dataframe = match self.session_context.execute_logical_plan(optimised).await {
             Ok(df) => df,
             Err(e) => {
                 return Err(PgWireError::ApiError(Box::new(e)));
@@ -538,10 +545,7 @@ impl QueryParser for Parser {
             .create_logical_plan(sql)
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        let optimised = state
-            .optimize(&logical_plan)
-            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        Ok((sql.to_string(), optimised))
+        Ok((sql.to_string(), logical_plan))
     }
 }
 
