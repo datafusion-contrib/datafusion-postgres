@@ -324,7 +324,8 @@ impl SimpleQueryHandler for DfSessionService {
         statement = rewrite(statement, &self.sql_rewrite_rules);
 
         // TODO: improve statement check by using statement directly
-        let query_lower = statement.to_string().to_lowercase().trim().to_string();
+        let query = statement.to_string();
+        let query_lower = query.to_lowercase().trim().to_string();
 
         // Check permissions for the query (skip for SET, transaction, and SHOW statements)
         if !query_lower.starts_with("set")
@@ -336,7 +337,7 @@ impl SimpleQueryHandler for DfSessionService {
             && !query_lower.starts_with("abort")
             && !query_lower.starts_with("show")
         {
-            self.check_query_permission(client, query).await?;
+            self.check_query_permission(client, &query).await?;
         }
 
         if let Some(resp) = self.try_respond_set_statements(&query_lower).await? {
@@ -366,7 +367,7 @@ impl SimpleQueryHandler for DfSessionService {
             )));
         }
 
-        let df_result = self.session_context.sql(query).await;
+        let df_result = self.session_context.sql(&query).await;
 
         // Handle query execution errors and transaction state
         let df = match df_result {
