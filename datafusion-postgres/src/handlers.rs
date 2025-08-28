@@ -2,10 +2,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::auth::{AuthManager, Permission, ResourceType};
+use crate::sql::{parse, rewrite, AliasDuplicatedProjectionRewrite, SqlStatementRewriteRule};
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
+use datafusion::sql::parser::Statement;
 use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::auth::StartupHandler;
 use pgwire::api::portal::{Format, Portal};
@@ -63,6 +65,7 @@ pub struct DfSessionService {
     parser: Arc<Parser>,
     timezone: Arc<Mutex<String>>,
     auth_manager: Arc<AuthManager>,
+    sql_rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>>,
 }
 
 impl DfSessionService {
@@ -70,14 +73,18 @@ impl DfSessionService {
         session_context: Arc<SessionContext>,
         auth_manager: Arc<AuthManager>,
     ) -> DfSessionService {
+        let sql_rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(AliasDuplicatedProjectionRewrite)];
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
+            sql_rewrite_rules: sql_rewrite_rules.clone(),
         });
         DfSessionService {
             session_context,
             parser,
             timezone: Arc::new(Mutex::new("UTC".to_string())),
             auth_manager,
+            sql_rewrite_rules,
         }
     }
 
@@ -308,8 +315,17 @@ impl SimpleQueryHandler for DfSessionService {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        let query_lower = query.to_lowercase().trim().to_string();
         log::debug!("Received query: {query}"); // Log the query for debugging
+        let mut statements = parse(query).map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+        // TODO: deal with multiple statements
+        let mut statement = statements.remove(0);
+
+        // Attempt to rewrite
+        statement = rewrite(statement, &self.sql_rewrite_rules);
+
+        // TODO: improve statement check by using statement directly
+        let query_lower = statement.to_string().to_lowercase().trim().to_string();
 
         // Check permissions for the query (skip for SET, transaction, and SHOW statements)
         if !query_lower.starts_with("set")
@@ -526,6 +542,7 @@ impl ExtendedQueryHandler for DfSessionService {
 
 pub struct Parser {
     session_context: Arc<SessionContext>,
+    sql_rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>>,
 }
 
 #[async_trait]
@@ -538,14 +555,23 @@ impl QueryParser for Parser {
         sql: &str,
         _types: &[Type],
     ) -> PgWireResult<Self::Statement> {
-        log::debug!("Received parse extended query: {sql}"); // Log for debugging
+        log::debug!("Received parse extended query: {sql}"); // Log for
+                                                             // debugging
+        let mut statements = parse(sql).map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+        let mut statement = statements.remove(0);
+
+        // Attempt to rewrite
+        statement = rewrite(statement, &self.sql_rewrite_rules);
+
+        let query = statement.to_string();
+
         let context = &self.session_context;
         let state = context.state();
         let logical_plan = state
-            .create_logical_plan(sql)
+            .statement_to_plan(Statement::Statement(Box::new(statement)))
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        Ok((sql.to_string(), logical_plan))
+        Ok((query, logical_plan))
     }
 }
 

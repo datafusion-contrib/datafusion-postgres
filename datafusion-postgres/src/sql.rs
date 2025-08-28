@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use datafusion::sql::sqlparser::ast::Expr;
 use datafusion::sql::sqlparser::ast::Ident;
 use datafusion::sql::sqlparser::ast::Select;
@@ -15,7 +17,7 @@ pub fn parse(sql: &str) -> Result<Vec<Statement>, ParserError> {
     Parser::parse_sql(&dialect, sql)
 }
 
-pub fn rewrite(mut s: Statement, rules: &[Box<dyn SqlStatementRewriteRule>]) -> Statement {
+pub fn rewrite(mut s: Statement, rules: &[Arc<dyn SqlStatementRewriteRule>]) -> Statement {
     for rule in rules {
         s = rule.rewrite(s);
     }
@@ -23,7 +25,7 @@ pub fn rewrite(mut s: Statement, rules: &[Box<dyn SqlStatementRewriteRule>]) -> 
     s
 }
 
-pub trait SqlStatementRewriteRule {
+pub trait SqlStatementRewriteRule: Send + Sync {
     fn rewrite(&self, s: Statement) -> Statement;
 }
 
@@ -35,7 +37,8 @@ pub trait SqlStatementRewriteRule {
 ///
 /// This rule will add alias to column, when there is a wildcard found in
 /// projection.
-struct AliasDuplicatedProjectionRewrite;
+#[derive(Debug)]
+pub struct AliasDuplicatedProjectionRewrite;
 
 impl AliasDuplicatedProjectionRewrite {
     // Rewrites a SELECT statement to alias explicit columns from the same table as a qualified wildcard.
@@ -103,7 +106,7 @@ impl AliasDuplicatedProjectionRewrite {
                     };
 
                     if let Some(name) = alias_partial {
-                        let alias = format!("__alias_{}", name);
+                        let alias = format!("__alias_{name}");
                         new_projection.push(SelectItem::ExprWithAlias {
                             expr,
                             alias: Ident::new(alias),
@@ -138,8 +141,8 @@ mod tests {
 
     #[test]
     fn test_alias_rewrite() {
-        let rules: Vec<Box<dyn SqlStatementRewriteRule>> =
-            vec![Box::new(AliasDuplicatedProjectionRewrite)];
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(AliasDuplicatedProjectionRewrite)];
 
         let sql = "SELECT n.oid, n.* FROM pg_catalog.pg_namespace n";
         let statement = parse(sql).expect("Failed to parse").remove(0);
