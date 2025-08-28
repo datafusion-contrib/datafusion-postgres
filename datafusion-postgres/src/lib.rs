@@ -1,5 +1,6 @@
 mod handlers;
 pub mod pg_catalog;
+mod sql;
 
 use std::fs::File;
 use std::io::{BufReader, Error as IOError, ErrorKind};
