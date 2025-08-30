@@ -8,7 +8,7 @@ const DBEAVER_QUERIES: &[&str] = &[
     "SET application_name = 'PostgreSQL JDBC Driver'",
     "SET application_name = 'DBeaver 25.1.5 - Main <postgres>'",
     "SELECT current_schema(),session_user",
-    "SELECT n.oid,n.*,d.description FROM pg_catalog.pg_namespace n LEFT OUTER JOIN pg_catalog.pg_description d ON d.objoid=n.oid AND d.objsubid=0 AND d.classoid='pg_namespace' ORDER BY nspsname",
+    "SELECT n.oid,n.*,d.description FROM pg_catalog.pg_namespace n LEFT OUTER JOIN pg_catalog.pg_description d ON d.objoid=n.oid AND d.objsubid=0 AND d.classoid='pg_namespace'::regclass ORDER BY nspname",
     "SELECT n.nspsname = ANY(current_schemas(true)), n.nspsname, t.typname FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON t.typrelid = n.oid WHERE pg_type.oid = 1034",
     "SHOW search_path",
     "SELECT db.oid,db.* FROM pg_catalog.pg_database db WHERE datname='postgres'",
