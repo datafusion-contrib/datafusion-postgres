@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::auth::{AuthManager, Permission, ResourceType};
-use crate::sql::{parse, rewrite, AliasDuplicatedProjectionRewrite, SqlStatementRewriteRule};
+use crate::sql::{
+    parse, rewrite, AliasDuplicatedProjectionRewrite, RemoveUnsupportedTypes,
+    ResolveUnqualifiedIdentifer, SqlStatementRewriteRule,
+};
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::LogicalPlan;
@@ -74,8 +77,11 @@ impl DfSessionService {
         session_context: Arc<SessionContext>,
         auth_manager: Arc<AuthManager>,
     ) -> DfSessionService {
-        let sql_rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
-            vec![Arc::new(AliasDuplicatedProjectionRewrite)];
+        let sql_rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![
+            Arc::new(AliasDuplicatedProjectionRewrite),
+            Arc::new(ResolveUnqualifiedIdentifer),
+            Arc::new(RemoveUnsupportedTypes::new()),
+        ];
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
             sql_rewrite_rules: sql_rewrite_rules.clone(),
