@@ -179,16 +179,18 @@ impl ResolveUnqualifiedIdentifer {
     fn get_table_aliases(tables: &[TableWithJoins]) -> HashSet<String> {
         let mut aliases = HashSet::new();
         for table_with_joins in tables {
-            if let TableFactor::Table { alias, .. } = &table_with_joins.relation {
-                if let Some(alias) = &alias {
-                    aliases.insert(alias.name.value.clone());
-                }
+            if let TableFactor::Table {
+                alias: Some(alias), ..
+            } = &table_with_joins.relation
+            {
+                aliases.insert(alias.name.value.clone());
             }
             for join in &table_with_joins.joins {
-                if let TableFactor::Table { alias, .. } = &join.relation {
-                    if let Some(alias) = &alias {
-                        aliases.insert(alias.name.value.clone());
-                    }
+                if let TableFactor::Table {
+                    alias: Some(alias), ..
+                } = &join.relation
+                {
+                    aliases.insert(alias.name.value.clone());
                 }
             }
         }
