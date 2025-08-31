@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use crate::auth::{AuthManager, Permission, ResourceType};
 use crate::sql::{
-    parse, rewrite, AliasDuplicatedProjectionRewrite, RemoveUnsupportedTypes,
-    ResolveUnqualifiedIdentifer, RewriteArrayAnyOperation, SqlStatementRewriteRule,
+    parse, rewrite, AliasDuplicatedProjectionRewrite, PrependUnqualifiedTableName,
+    RemoveUnsupportedTypes, ResolveUnqualifiedIdentifer, RewriteArrayAnyOperation,
+    SqlStatementRewriteRule,
 };
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
@@ -82,6 +83,7 @@ impl DfSessionService {
             Arc::new(ResolveUnqualifiedIdentifer),
             Arc::new(RemoveUnsupportedTypes::new()),
             Arc::new(RewriteArrayAnyOperation),
+            Arc::new(PrependUnqualifiedTableName::new()),
         ];
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
@@ -297,8 +299,8 @@ impl DfSessionService {
                     Ok(Some(Response::Query(resp)))
                 }
                 "show search_path" => {
-                    let default_catalog = "datafusion";
-                    let resp = Self::mock_show_response("search_path", default_catalog)?;
+                    let default_schema = "public";
+                    let resp = Self::mock_show_response("search_path", default_schema)?;
                     Ok(Some(Response::Query(resp)))
                 }
                 _ => Err(PgWireError::UserError(Box::new(

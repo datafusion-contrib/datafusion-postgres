@@ -11,6 +11,7 @@ use datafusion::sql::sqlparser::ast::FunctionArgumentList;
 use datafusion::sql::sqlparser::ast::FunctionArguments;
 use datafusion::sql::sqlparser::ast::Ident;
 use datafusion::sql::sqlparser::ast::ObjectName;
+use datafusion::sql::sqlparser::ast::ObjectNamePart;
 use datafusion::sql::sqlparser::ast::OrderByKind;
 use datafusion::sql::sqlparser::ast::Query;
 use datafusion::sql::sqlparser::ast::Select;
@@ -401,6 +402,63 @@ impl SqlStatementRewriteRule for RewriteArrayAnyOperation {
     }
 }
 
+/// Prepend qualifier to table_name
+///
+/// Postgres has pg_catalog in search_path by default so it allow access to
+/// `pg_namespace` without `pg_catalog.` qualifier
+#[derive(Debug)]
+pub struct PrependUnqualifiedTableName {
+    table_names: HashSet<String>,
+}
+
+impl PrependUnqualifiedTableName {
+    pub fn new() -> Self {
+        let mut table_names = HashSet::new();
+
+        table_names.insert("pg_namespace".to_owned());
+
+        Self { table_names }
+    }
+}
+
+struct PrependUnqualifiedTableNameVisitor<'a> {
+    table_names: &'a HashSet<String>,
+}
+
+impl<'a> VisitorMut for PrependUnqualifiedTableNameVisitor<'a> {
+    type Break = ();
+
+    fn pre_visit_table_factor(
+        &mut self,
+        table_factor: &mut TableFactor,
+    ) -> ControlFlow<Self::Break> {
+        if let TableFactor::Table { name, .. } = table_factor {
+            if name.0.len() == 1 {
+                let ObjectNamePart::Identifier(ident) = &name.0[0];
+                if self.table_names.contains(&ident.to_string()) {
+                    *name = ObjectName(vec![
+                        ObjectNamePart::Identifier(Ident::new("pg_catalog")),
+                        name.0[0].clone(),
+                    ]);
+                }
+            }
+        }
+
+        ControlFlow::Continue(())
+    }
+}
+
+impl SqlStatementRewriteRule for PrependUnqualifiedTableName {
+    fn rewrite(&self, mut s: Statement) -> Statement {
+        let mut visitor = PrependUnqualifiedTableNameVisitor {
+            table_names: &self.table_names,
+        };
+
+        let _ = s.visit(&mut visitor);
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,6 +580,30 @@ mod tests {
             &rules,
             "SELECT a FROM tbl WHERE a = ANY(current_schemas(true))",
             "SELECT a FROM tbl WHERE array_contains(current_schemas(true), a)"
+        );
+    }
+
+    #[test]
+    fn test_prepend_unqualified_table_name() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(PrependUnqualifiedTableName::new())];
+
+        assert_rewrite!(
+            &rules,
+            "SELECT * FROM pg_catalog.pg_namespace",
+            "SELECT * FROM pg_catalog.pg_namespace"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT * FROM pg_namespace",
+            "SELECT * FROM pg_catalog.pg_namespace"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT typtype, typname, pg_type.oid FROM pg_catalog.pg_type LEFT JOIN pg_namespace as ns ON ns.oid = oid",
+            "SELECT typtype, typname, pg_type.oid FROM pg_catalog.pg_type LEFT JOIN pg_catalog.pg_namespace AS ns ON ns.oid = oid"
         );
     }
 }
