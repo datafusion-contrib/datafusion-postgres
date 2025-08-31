@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::auth::{AuthManager, Permission, ResourceType};
 use crate::sql::{
     parse, rewrite, AliasDuplicatedProjectionRewrite, RemoveUnsupportedTypes,
-    ResolveUnqualifiedIdentifer, SqlStatementRewriteRule,
+    ResolveUnqualifiedIdentifer, RewriteArrayAnyOperation, SqlStatementRewriteRule,
 };
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
@@ -81,6 +81,7 @@ impl DfSessionService {
             Arc::new(AliasDuplicatedProjectionRewrite),
             Arc::new(ResolveUnqualifiedIdentifer),
             Arc::new(RemoveUnsupportedTypes::new()),
+            Arc::new(RewriteArrayAnyOperation),
         ];
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),

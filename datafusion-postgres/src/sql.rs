@@ -2,8 +2,15 @@ use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use datafusion::sql::sqlparser::ast::BinaryOperator;
 use datafusion::sql::sqlparser::ast::Expr;
+use datafusion::sql::sqlparser::ast::Function;
+use datafusion::sql::sqlparser::ast::FunctionArg;
+use datafusion::sql::sqlparser::ast::FunctionArgExpr;
+use datafusion::sql::sqlparser::ast::FunctionArgumentList;
+use datafusion::sql::sqlparser::ast::FunctionArguments;
 use datafusion::sql::sqlparser::ast::Ident;
+use datafusion::sql::sqlparser::ast::ObjectName;
 use datafusion::sql::sqlparser::ast::OrderByKind;
 use datafusion::sql::sqlparser::ast::Query;
 use datafusion::sql::sqlparser::ast::Select;
@@ -13,6 +20,7 @@ use datafusion::sql::sqlparser::ast::SetExpr;
 use datafusion::sql::sqlparser::ast::Statement;
 use datafusion::sql::sqlparser::ast::TableFactor;
 use datafusion::sql::sqlparser::ast::TableWithJoins;
+use datafusion::sql::sqlparser::ast::UnaryOperator;
 use datafusion::sql::sqlparser::ast::Value;
 use datafusion::sql::sqlparser::ast::VisitMut;
 use datafusion::sql::sqlparser::ast::VisitorMut;
@@ -327,6 +335,72 @@ impl SqlStatementRewriteRule for RemoveUnsupportedTypes {
     }
 }
 
+/// Rewrite Postgres's ANY operator to array_contains
+#[derive(Debug)]
+pub struct RewriteArrayAnyOperation;
+
+struct RewriteArrayAnyOperationVisitor;
+
+impl RewriteArrayAnyOperationVisitor {
+    fn any_to_array_cofntains(&self, left: &Expr, right: &Expr) -> Expr {
+        Expr::Function(Function {
+            name: ObjectName::from(vec![Ident::new("array_contains")]),
+            args: FunctionArguments::List(FunctionArgumentList {
+                args: vec![
+                    FunctionArg::Unnamed(FunctionArgExpr::Expr(right.clone())),
+                    FunctionArg::Unnamed(FunctionArgExpr::Expr(left.clone())),
+                ],
+                duplicate_treatment: None,
+                clauses: vec![],
+            }),
+            uses_odbc_syntax: false,
+            parameters: FunctionArguments::None,
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+        })
+    }
+}
+
+impl VisitorMut for RewriteArrayAnyOperationVisitor {
+    type Break = ();
+
+    fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
+        if let Expr::AnyOp {
+            left,
+            compare_op,
+            right,
+            ..
+        } = expr
+        {
+            match compare_op {
+                BinaryOperator::Eq => {
+                    *expr = self.any_to_array_cofntains(left.as_ref(), right.as_ref());
+                }
+                BinaryOperator::NotEq => {
+                    *expr = Expr::UnaryOp {
+                        op: UnaryOperator::Not,
+                        expr: Box::new(self.any_to_array_cofntains(left.as_ref(), right.as_ref())),
+                    }
+                }
+                _ => {}
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+impl SqlStatementRewriteRule for RewriteArrayAnyOperation {
+    fn rewrite(&self, mut s: Statement) -> Statement {
+        let mut visitor = RewriteArrayAnyOperationVisitor;
+
+        let _ = s.visit(&mut visitor);
+
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,6 +499,29 @@ mod tests {
             &rules,
             "SELECT n.* FROM pg_catalog.pg_namespace n WHERE n.nspname = 'pg_catalog' ORDER BY n.nspname",
             "SELECT n.* FROM pg_catalog.pg_namespace AS n WHERE n.nspname = 'pg_catalog' ORDER BY n.nspname"
+        );
+    }
+
+    #[test]
+    fn test_any_to_array_contains() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![Arc::new(RewriteArrayAnyOperation)];
+
+        assert_rewrite!(
+            &rules,
+            "SELECT a = ANY(current_schemas(true))",
+            "SELECT array_contains(current_schemas(true), a)"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT a != ANY(current_schemas(true))",
+            "SELECT NOT array_contains(current_schemas(true), a)"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT a FROM tbl WHERE a = ANY(current_schemas(true))",
+            "SELECT a FROM tbl WHERE array_contains(current_schemas(true), a)"
         );
     }
 }
