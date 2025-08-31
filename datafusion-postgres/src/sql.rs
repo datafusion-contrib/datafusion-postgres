@@ -272,6 +272,7 @@ impl RemoveUnsupportedTypes {
     pub fn new() -> Self {
         let mut unsupported_types = HashSet::new();
         unsupported_types.insert("regclass".to_owned());
+        unsupported_types.insert("regproc".to_owned());
 
         Self { unsupported_types }
     }
