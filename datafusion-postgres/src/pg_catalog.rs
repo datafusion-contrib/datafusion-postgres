@@ -24,6 +24,7 @@ mod pg_attribute;
 mod pg_class;
 mod pg_database;
 mod pg_namespace;
+mod pg_settings;
 
 const PG_CATALOG_TABLE_PG_AGGREGATE: &str = "pg_aggregate";
 const PG_CATALOG_TABLE_PG_AM: &str = "pg_am";
@@ -86,6 +87,7 @@ const PG_CATALOG_TABLE_PG_SUBSCRIPTION_REL: &str = "pg_subscription_rel";
 const PG_CATALOG_TABLE_PG_TABLESPACE: &str = "pg_tablespace";
 const PG_CATALOG_TABLE_PG_TRIGGER: &str = "pg_trigger";
 const PG_CATALOG_TABLE_PG_USER_MAPPING: &str = "pg_user_mapping";
+const PG_CATALOG_VIEW_PG_SETTINGS: &str = "pg_settings";
 
 /// Determine PostgreSQL table type (relkind) from DataFusion TableProvider
 fn get_table_type(table: &Arc<dyn TableProvider>) -> &'static str {
@@ -180,6 +182,7 @@ pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_TABLE_PG_TABLESPACE,
     PG_CATALOG_TABLE_PG_TRIGGER,
     PG_CATALOG_TABLE_PG_USER_MAPPING,
+    PG_CATALOG_VIEW_PG_SETTINGS,
 ];
 
 #[derive(Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
@@ -344,6 +347,10 @@ impl SchemaProvider for PgCatalogSchemaProvider {
                 Ok(Some(Arc::new(
                     StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
                 )))
+            }
+            PG_CATALOG_VIEW_PG_SETTINGS => {
+                let table = pg_settings::PgSettingsView::try_new()?;
+                Ok(Some(Arc::new(table.try_into_memtable()?)))
             }
 
             _ => Ok(None),
