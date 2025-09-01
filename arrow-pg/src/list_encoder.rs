@@ -1,5 +1,6 @@
 use std::{str::FromStr, sync::Arc};
 
+use arrow::array::{BinaryViewArray, StringViewArray};
 #[cfg(not(feature = "datafusion"))]
 use arrow::{
     array::{
@@ -150,6 +151,15 @@ pub(crate) fn encode_list(
                 .collect();
             encode_field(&value, type_, format)
         }
+        DataType::Utf8View => {
+            let value: Vec<Option<&str>> = arr
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .unwrap()
+                .iter()
+                .collect();
+            encode_field(&value, type_, format)
+        }
         DataType::Binary => {
             let value: Vec<Option<_>> = arr
                 .as_any()
@@ -163,6 +173,15 @@ pub(crate) fn encode_list(
             let value: Vec<Option<_>> = arr
                 .as_any()
                 .downcast_ref::<LargeBinaryArray>()
+                .unwrap()
+                .iter()
+                .collect();
+            encode_field(&value, type_, format)
+        }
+        DataType::BinaryView => {
+            let value: Vec<Option<_>> = arr
+                .as_any()
+                .downcast_ref::<BinaryViewArray>()
                 .unwrap()
                 .iter()
                 .collect();
