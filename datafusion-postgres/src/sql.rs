@@ -2,7 +2,11 @@ use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use datafusion::sql::sqlparser::ast::Array;
+use datafusion::sql::sqlparser::ast::ArrayElemTypeDef;
 use datafusion::sql::sqlparser::ast::BinaryOperator;
+use datafusion::sql::sqlparser::ast::CastKind;
+use datafusion::sql::sqlparser::ast::DataType;
 use datafusion::sql::sqlparser::ast::Expr;
 use datafusion::sql::sqlparser::ast::Function;
 use datafusion::sql::sqlparser::ast::FunctionArg;
@@ -23,6 +27,7 @@ use datafusion::sql::sqlparser::ast::TableFactor;
 use datafusion::sql::sqlparser::ast::TableWithJoins;
 use datafusion::sql::sqlparser::ast::UnaryOperator;
 use datafusion::sql::sqlparser::ast::Value;
+use datafusion::sql::sqlparser::ast::ValueWithSpan;
 use datafusion::sql::sqlparser::ast::VisitMut;
 use datafusion::sql::sqlparser::ast::VisitorMut;
 use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
@@ -459,6 +464,87 @@ impl SqlStatementRewriteRule for PrependUnqualifiedTableName {
     }
 }
 
+#[derive(Debug)]
+pub struct FixArrayLiteral;
+
+struct FixArrayLiteralVisitor;
+
+impl FixArrayLiteralVisitor {
+    fn is_string_type(dt: &DataType) -> bool {
+        matches!(
+            dt,
+            DataType::Text | DataType::Varchar(_) | DataType::Char(_) | DataType::String(_)
+        )
+    }
+}
+
+impl VisitorMut for FixArrayLiteralVisitor {
+    type Break = ();
+
+    fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
+        if let Expr::Cast {
+            kind,
+            expr,
+            data_type,
+            ..
+        } = expr
+        {
+            if kind == &CastKind::DoubleColon {
+                if let DataType::Array(arr) = data_type {
+                    // cast some to
+                    if let Expr::Value(ValueWithSpan {
+                        value: Value::SingleQuotedString(array_literal),
+                        ..
+                    }) = expr.as_ref()
+                    {
+                        let items =
+                            array_literal.trim_matches(|c| c == '{' || c == '}' || c == ' ');
+                        let items = items.split(',').map(|s| s.trim()).filter(|s| !s.is_empty());
+
+                        let is_text = match arr {
+                            ArrayElemTypeDef::AngleBracket(dt) => Self::is_string_type(dt.as_ref()),
+                            ArrayElemTypeDef::SquareBracket(dt, _) => {
+                                Self::is_string_type(dt.as_ref())
+                            }
+                            ArrayElemTypeDef::Parenthesis(dt) => Self::is_string_type(dt.as_ref()),
+                            _ => false,
+                        };
+
+                        let elems = items
+                            .map(|s| {
+                                if is_text {
+                                    Expr::Value(
+                                        Value::SingleQuotedString(s.to_string()).with_empty_span(),
+                                    )
+                                } else {
+                                    Expr::Value(
+                                        Value::Number(s.to_string(), false).with_empty_span(),
+                                    )
+                                }
+                            })
+                            .collect();
+                        *expr = Box::new(Expr::Array(Array {
+                            elem: elems,
+                            named: true,
+                        }));
+                    }
+                }
+            }
+        }
+
+        ControlFlow::Continue(())
+    }
+}
+
+impl SqlStatementRewriteRule for FixArrayLiteral {
+    fn rewrite(&self, mut s: Statement) -> Statement {
+        let mut visitor = FixArrayLiteralVisitor;
+
+        let _ = s.visit(&mut visitor);
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -604,6 +690,29 @@ mod tests {
             &rules,
             "SELECT typtype, typname, pg_type.oid FROM pg_catalog.pg_type LEFT JOIN pg_namespace as ns ON ns.oid = oid",
             "SELECT typtype, typname, pg_type.oid FROM pg_catalog.pg_type LEFT JOIN pg_catalog.pg_namespace AS ns ON ns.oid = oid"
+        );
+    }
+
+    #[test]
+    fn test_array_literal_fix() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![Arc::new(FixArrayLiteral)];
+
+        assert_rewrite!(
+            &rules,
+            "SELECT '{a, abc}'::text[]",
+            "SELECT ARRAY['a', 'abc']::TEXT[]"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT '{1, 2}'::int[]",
+            "SELECT ARRAY[1, 2]::INT[]"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT '{t, f}'::bool[]",
+            "SELECT ARRAY[t, f]::BOOL[]"
         );
     }
 }
