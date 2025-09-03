@@ -545,6 +545,44 @@ impl SqlStatementRewriteRule for FixArrayLiteral {
     }
 }
 
+/// Remove qualifier from table function
+///
+/// The query engine doesn't support qualified table function name
+#[derive(Debug)]
+pub struct RemoveTableFunctionQualifier;
+
+struct RemoveTableFunctionQualifierVisitor;
+
+impl VisitorMut for RemoveTableFunctionQualifierVisitor {
+    type Break = ();
+
+    fn pre_visit_table_factor(
+        &mut self,
+        table_factor: &mut TableFactor,
+    ) -> ControlFlow<Self::Break> {
+        if let TableFactor::Table { name, args, .. } = table_factor {
+            if args.is_some() {
+                //  multiple idents in name, which means it's a qualified table name
+                if name.0.len() > 1 {
+                    if let Some(last_ident) = name.0.pop() {
+                        *name = ObjectName(vec![last_ident]);
+                    }
+                }
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+impl SqlStatementRewriteRule for RemoveTableFunctionQualifier {
+    fn rewrite(&self, mut s: Statement) -> Statement {
+        let mut visitor = RemoveTableFunctionQualifierVisitor;
+
+        let _ = s.visit(&mut visitor);
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -713,6 +751,18 @@ mod tests {
             &rules,
             "SELECT '{t, f}'::bool[]",
             "SELECT ARRAY[t, f]::BOOL[]"
+        );
+    }
+
+    #[test]
+    fn test_remove_qualifier_from_table_function() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RemoveTableFunctionQualifier)];
+
+        assert_rewrite!(
+            &rules,
+            "SELECT * FROM pg_catalog.pg_get_keywords()",
+            "SELECT * FROM pg_get_keywords()"
         );
     }
 }

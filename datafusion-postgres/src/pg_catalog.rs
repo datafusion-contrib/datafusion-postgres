@@ -10,13 +10,13 @@ use datafusion::arrow::array::{
 use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::arrow::ipc::reader::FileReader;
 use datafusion::catalog::streaming::StreamingTable;
-use datafusion::catalog::{CatalogProviderList, MemTable, SchemaProvider};
+use datafusion::catalog::{CatalogProviderList, MemTable, SchemaProvider, TableFunctionImpl};
 use datafusion::common::utils::SingleRowListArrayBuilder;
 use datafusion::datasource::{TableProvider, ViewTable};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDF, Volatility};
 use datafusion::physical_plan::streaming::PartitionStream;
-use datafusion::prelude::{create_udf, SessionContext};
+use datafusion::prelude::{create_udf, Expr, SessionContext};
 use postgres_types::Oid;
 use tokio::sync::RwLock;
 
@@ -199,7 +199,7 @@ pub struct PgCatalogSchemaProvider {
     catalog_list: Arc<dyn CatalogProviderList>,
     oid_counter: Arc<AtomicU32>,
     oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
-    static_tables: PgCatalogStaticTables,
+    static_tables: Arc<PgCatalogStaticTables>,
 }
 
 #[async_trait]
@@ -363,12 +363,15 @@ impl SchemaProvider for PgCatalogSchemaProvider {
 }
 
 impl PgCatalogSchemaProvider {
-    pub fn try_new(catalog_list: Arc<dyn CatalogProviderList>) -> Result<PgCatalogSchemaProvider> {
+    pub fn try_new(
+        catalog_list: Arc<dyn CatalogProviderList>,
+        static_tables: Arc<PgCatalogStaticTables>,
+    ) -> Result<PgCatalogSchemaProvider> {
         Ok(Self {
             catalog_list,
             oid_counter: Arc::new(AtomicU32::new(16384)),
             oid_cache: Arc::new(RwLock::new(HashMap::new())),
-            static_tables: PgCatalogStaticTables::try_new()?,
+            static_tables,
         })
     }
 }
@@ -406,10 +409,17 @@ impl ArrowTable {
     }
 }
 
+impl TableFunctionImpl for ArrowTable {
+    fn call(&self, _args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        let table = self.clone().try_into_memtable()?;
+        Ok(Arc::new(table))
+    }
+}
+
 /// pg_catalog table as datafusion table provider
 ///
 /// This implementation only contains static tables
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PgCatalogStaticTables {
     pub pg_aggregate: Arc<dyn TableProvider>,
     pub pg_am: Arc<dyn TableProvider>,
@@ -468,6 +478,8 @@ pub struct PgCatalogStaticTables {
     pub pg_tablespace: Arc<dyn TableProvider>,
     pub pg_trigger: Arc<dyn TableProvider>,
     pub pg_user_mapping: Arc<dyn TableProvider>,
+
+    pub pg_get_keywords: Arc<dyn TableFunctionImpl>,
 }
 
 impl PgCatalogStaticTables {
@@ -654,6 +666,10 @@ impl PgCatalogStaticTables {
             pg_user_mapping: Self::create_arrow_table(
                 include_bytes!("../../pg_catalog_arrow_exports/pg_user_mapping.feather").to_vec(),
             )?,
+
+            pg_get_keywords: Self::create_arrow_table_function(
+                include_bytes!("../../pg_catalog_arrow_exports/pg_get_keywords.feather").to_vec(),
+            )?,
         })
     }
 
@@ -662,6 +678,11 @@ impl PgCatalogStaticTables {
         let table = ArrowTable::from_ipc_data(data_bytes)?;
         let mem_table = table.try_into_memtable()?;
         Ok(Arc::new(mem_table))
+    }
+
+    fn create_arrow_table_function(data_bytes: Vec<u8>) -> Result<Arc<dyn TableFunctionImpl>> {
+        let table = ArrowTable::from_ipc_data(data_bytes)?;
+        Ok(Arc::new(table))
     }
 }
 
@@ -901,8 +922,11 @@ pub fn setup_pg_catalog(
     session_context: &SessionContext,
     catalog_name: &str,
 ) -> Result<(), Box<DataFusionError>> {
-    let pg_catalog =
-        PgCatalogSchemaProvider::try_new(session_context.state().catalog_list().clone())?;
+    let static_tables = Arc::new(PgCatalogStaticTables::try_new()?);
+    let pg_catalog = PgCatalogSchemaProvider::try_new(
+        session_context.state().catalog_list().clone(),
+        static_tables.clone(),
+    )?;
     session_context
         .catalog(catalog_name)
         .ok_or_else(|| {
@@ -920,6 +944,7 @@ pub fn setup_pg_catalog(
     session_context.register_udf(create_pg_table_is_visible());
     session_context.register_udf(create_format_type_udf());
     session_context.register_udf(create_session_user_udf());
+    session_context.register_udtf("pg_get_keywords", static_tables.pg_get_keywords.clone());
 
     Ok(())
 }
@@ -1171,6 +1196,10 @@ mod test {
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
             include_bytes!("../../pg_catalog_arrow_exports/pg_user_mapping.feather").to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!("../../pg_catalog_arrow_exports/pg_get_keywords.feather").to_vec(),
         )
         .expect("Failed to load ipc data");
     }
