@@ -5,7 +5,7 @@ use crate::auth::{AuthManager, Permission, ResourceType};
 use crate::sql::{
     parse, rewrite, AliasDuplicatedProjectionRewrite, FixArrayLiteral, PrependUnqualifiedTableName,
     RemoveTableFunctionQualifier, RemoveUnsupportedTypes, ResolveUnqualifiedIdentifer,
-    RewriteArrayAnyOperation, SqlStatementRewriteRule,
+    RewriteArrayAnyAllOperation, SqlStatementRewriteRule,
 };
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
@@ -82,7 +82,7 @@ impl DfSessionService {
             Arc::new(AliasDuplicatedProjectionRewrite),
             Arc::new(ResolveUnqualifiedIdentifer),
             Arc::new(RemoveUnsupportedTypes::new()),
-            Arc::new(RewriteArrayAnyOperation),
+            Arc::new(RewriteArrayAnyAllOperation),
             Arc::new(PrependUnqualifiedTableName::new()),
             Arc::new(FixArrayLiteral),
             Arc::new(RemoveTableFunctionQualifier),

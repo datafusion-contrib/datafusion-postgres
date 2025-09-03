@@ -343,11 +343,11 @@ impl SqlStatementRewriteRule for RemoveUnsupportedTypes {
 
 /// Rewrite Postgres's ANY operator to array_contains
 #[derive(Debug)]
-pub struct RewriteArrayAnyOperation;
+pub struct RewriteArrayAnyAllOperation;
 
-struct RewriteArrayAnyOperationVisitor;
+struct RewriteArrayAnyAllOperationVisitor;
 
-impl RewriteArrayAnyOperationVisitor {
+impl RewriteArrayAnyAllOperationVisitor {
     fn any_to_array_cofntains(&self, left: &Expr, right: &Expr) -> Expr {
         Expr::Function(Function {
             name: ObjectName::from(vec![Ident::new("array_contains")]),
@@ -369,20 +369,32 @@ impl RewriteArrayAnyOperationVisitor {
     }
 }
 
-impl VisitorMut for RewriteArrayAnyOperationVisitor {
+impl VisitorMut for RewriteArrayAnyAllOperationVisitor {
     type Break = ();
 
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-        if let Expr::AnyOp {
-            left,
-            compare_op,
-            right,
-            ..
-        } = expr
-        {
-            match compare_op {
+        match expr {
+            Expr::AnyOp {
+                left,
+                compare_op,
+                right,
+                ..
+            } => match compare_op {
                 BinaryOperator::Eq => {
                     *expr = self.any_to_array_cofntains(left.as_ref(), right.as_ref());
+                }
+                BinaryOperator::NotEq => {
+                    // TODO:left not equals to any element in array
+                }
+                _ => {}
+            },
+            Expr::AllOp {
+                left,
+                compare_op,
+                right,
+            } => match compare_op {
+                BinaryOperator::Eq => {
+                    // TODO: left equals to every element in array
                 }
                 BinaryOperator::NotEq => {
                     *expr = Expr::UnaryOp {
@@ -391,15 +403,17 @@ impl VisitorMut for RewriteArrayAnyOperationVisitor {
                     }
                 }
                 _ => {}
-            }
+            },
+            _ => {}
         }
+
         ControlFlow::Continue(())
     }
 }
 
-impl SqlStatementRewriteRule for RewriteArrayAnyOperation {
+impl SqlStatementRewriteRule for RewriteArrayAnyAllOperation {
     fn rewrite(&self, mut s: Statement) -> Statement {
-        let mut visitor = RewriteArrayAnyOperationVisitor;
+        let mut visitor = RewriteArrayAnyAllOperationVisitor;
 
         let _ = s.visit(&mut visitor);
 
@@ -686,7 +700,8 @@ mod tests {
 
     #[test]
     fn test_any_to_array_contains() {
-        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![Arc::new(RewriteArrayAnyOperation)];
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RewriteArrayAnyAllOperation)];
 
         assert_rewrite!(
             &rules,
@@ -696,7 +711,7 @@ mod tests {
 
         assert_rewrite!(
             &rules,
-            "SELECT a != ANY(current_schemas(true))",
+            "SELECT a <> ALL(current_schemas(true))",
             "SELECT NOT array_contains(current_schemas(true), a)"
         );
 
