@@ -19,6 +19,10 @@ const DBEAVER_QUERIES: &[&str] = &[
     "SELECT * FROM pg_catalog.pg_enum WHERE 1<>1 LIMIT 1",
     "SELECT reltype FROM pg_catalog.pg_class WHERE 1<>1 LIMIT 1",
     "SELECT t.oid,t.*,c.relkind,format_type(nullif(t.typbasetype, 0), t.typtypmod) as base_type_name, d.description FROM pg_catalog.pg_type t LEFT OUTER JOIN pg_catalog.pg_type et ON et.oid=t.typelem LEFT OUTER JOIN pg_catalog.pg_class c ON c.oid=t.typrelid LEFT OUTER JOIN pg_catalog.pg_description d ON t.oid=d.objoid WHERE t.typname IS NOT NULL AND (c.relkind IS NULL OR c.relkind = 'c') AND (et.typcategory IS NULL OR et.typcategory <> 'C')",
+    "SELECT c.oid,c.*,d.description,pg_catalog.pg_get_expr(c.relpartbound, c.oid) as partition_expr,  pg_catalog.pg_get_partkeydef(c.oid) as partition_key
+    FROM pg_catalog.pg_class c
+    LEFT OUTER JOIN pg_catalog.pg_description d ON d.objoid=c.oid AND d.objsubid=0 AND d.classoid='pg_class'::regclass
+    WHERE c.relnamespace=11 AND c.relkind not in ('i','I','c')"
 ];
 
 #[tokio::test]

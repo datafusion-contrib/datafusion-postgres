@@ -890,7 +890,7 @@ pub fn create_format_type_udf() -> ScalarUDF {
 
     create_udf(
         "format_type",
-        vec![DataType::Int32, DataType::Int32],
+        vec![DataType::Int64, DataType::Int32],
         DataType::Utf8,
         Volatility::Stable,
         Arc::new(func),
@@ -911,6 +911,57 @@ pub fn create_session_user_udf() -> ScalarUDF {
     create_udf(
         "session_user",
         vec![],
+        DataType::Utf8,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_pg_get_expr_udf() -> ScalarUDF {
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let expr = &args[0];
+        let _oid = &args[1];
+
+        // For now, always return true (full access for current user)
+        let mut builder = StringBuilder::new();
+        for _ in 0..expr.len() {
+            builder.append_value("");
+        }
+
+        let array: ArrayRef = Arc::new(builder.finish());
+
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "pg_catalog.pg_get_expr",
+        vec![DataType::Utf8, DataType::Int32],
+        DataType::Utf8,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_pg_get_partkeydef_udf() -> ScalarUDF {
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let oid = &args[0];
+
+        // For now, always return true (full access for current user)
+        let mut builder = StringBuilder::new();
+        for _ in 0..oid.len() {
+            builder.append_value("");
+        }
+
+        let array: ArrayRef = Arc::new(builder.finish());
+
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "pg_catalog.pg_get_partkeydef",
+        vec![DataType::Utf8],
         DataType::Utf8,
         Volatility::Stable,
         Arc::new(func),
@@ -945,6 +996,8 @@ pub fn setup_pg_catalog(
     session_context.register_udf(create_format_type_udf());
     session_context.register_udf(create_session_user_udf());
     session_context.register_udtf("pg_get_keywords", static_tables.pg_get_keywords.clone());
+    session_context.register_udf(create_pg_get_expr_udf());
+    session_context.register_udf(create_pg_get_partkeydef_udf());
 
     Ok(())
 }

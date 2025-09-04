@@ -63,6 +63,7 @@ impl PgClassTable {
             Field::new("relrewrite", DataType::Int32, true), // OID of a rule that rewrites this relation
             Field::new("relfrozenxid", DataType::Int32, false), // All transaction IDs before this have been replaced with a permanent ("frozen") transaction ID
             Field::new("relminmxid", DataType::Int32, false), // All Multixact IDs before this have been replaced with a transaction ID
+            Field::new("relpartbound", DataType::Utf8, true),
         ]));
 
         Self {
@@ -106,6 +107,7 @@ impl PgClassTable {
         let mut relrewrites = Vec::new();
         let mut relfrozenxids = Vec::new();
         let mut relminmxids = Vec::new();
+        let mut relpartbound = Vec::new();
 
         let mut oid_cache = this.oid_cache.write().await;
         // Every time when call pg_catalog we generate a new cache and drop the
@@ -190,6 +192,7 @@ impl PgClassTable {
                                 relrewrites.push(None);
                                 relfrozenxids.push(0);
                                 relminmxids.push(0);
+                                relpartbound.push("".to_string());
                             }
                         }
                     }
@@ -231,6 +234,7 @@ impl PgClassTable {
             Arc::new(Int32Array::from_iter(relrewrites.into_iter())),
             Arc::new(Int32Array::from(relfrozenxids)),
             Arc::new(Int32Array::from(relminmxids)),
+            Arc::new(StringArray::from(relpartbound)),
         ];
 
         // Create a record batch
