@@ -22,6 +22,7 @@ project.
   - Permission control
   - Built-in `pg_catalog` tables
   - Built-in postgres functions for common meta queries
+    - [x] DBeaver compatibility
 - `datafusion-postgres-cli`: A cli tool starts a postgres compatible server for
   datafusion supported file formats, just like python's `SimpleHTTPServer`.
 - `arrow-pg`: A data type mapping, encoding/decoding library for arrow and
