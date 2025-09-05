@@ -16,6 +16,7 @@ use pgwire::tokio::process_socket;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tokio_rustls::rustls::{self, ServerConfig};
 use tokio_rustls::TlsAcceptor;
 
@@ -34,11 +35,23 @@ pub struct ServerOptions {
     port: u16,
     tls_cert_path: Option<String>,
     tls_key_path: Option<String>,
+    max_connections: usize,
+    query_timeout: Option<std::time::Duration>,
 }
 
 impl ServerOptions {
     pub fn new() -> ServerOptions {
         ServerOptions::default()
+    }
+
+    /// Set query timeout from seconds. Use 0 for no timeout.
+    pub fn with_query_timeout_secs(mut self, timeout_secs: u64) -> Self {
+        self.query_timeout = if timeout_secs == 0 {
+            None
+        } else {
+            Some(std::time::Duration::from_secs(timeout_secs))
+        };
+        self
     }
 }
 
@@ -49,6 +62,8 @@ impl Default for ServerOptions {
             port: 5432,
             tls_cert_path: None,
             tls_key_path: None,
+            max_connections: 1000,
+            query_timeout: Some(std::time::Duration::from_secs(30)),
         }
     }
 }
@@ -85,7 +100,7 @@ pub async fn serve(
     let auth_manager = Arc::new(AuthManager::new());
 
     // Create the handler factory with authentication
-    let factory = Arc::new(HandlerFactory::new(session_context, auth_manager));
+    let factory = Arc::new(HandlerFactory::new(session_context, auth_manager, opts.query_timeout));
 
     serve_with_handlers(factory, opts).await
 }
@@ -126,17 +141,31 @@ pub async fn serve_with_handlers(
         info!("Listening on {server_addr} (unencrypted)");
     }
 
+    // Connection limiter to prevent resource exhaustion
+    let connection_semaphore = Arc::new(Semaphore::new(opts.max_connections));
+
     // Accept incoming connections
     loop {
         match listener.accept().await {
-            Ok((socket, _addr)) => {
+            Ok((socket, addr)) => {
                 let factory_ref = handlers.clone();
                 let tls_acceptor_ref = tls_acceptor.clone();
+                let semaphore_ref = connection_semaphore.clone();
 
                 tokio::spawn(async move {
+                    // Acquire connection permit to limit concurrency
+                    let _permit = match semaphore_ref.try_acquire() {
+                        Ok(permit) => permit,
+                        Err(_) => {
+                            warn!("Connection rejected from {addr}: max connections reached");
+                            return;
+                        }
+                    };
+
                     if let Err(e) = process_socket(socket, tls_acceptor_ref, factory_ref).await {
-                        warn!("Error processing socket: {e}");
+                        warn!("Error processing socket from {addr}: {e}");
                     }
+                    // Permit is automatically released when _permit is dropped
                 });
             }
             Err(e) => {

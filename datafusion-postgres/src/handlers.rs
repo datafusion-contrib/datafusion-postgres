@@ -43,9 +43,9 @@ pub struct HandlerFactory {
 }
 
 impl HandlerFactory {
-    pub fn new(session_context: Arc<SessionContext>, auth_manager: Arc<AuthManager>) -> Self {
+    pub fn new(session_context: Arc<SessionContext>, auth_manager: Arc<AuthManager>, query_timeout: Option<std::time::Duration>) -> Self {
         let session_service =
-            Arc::new(DfSessionService::new(session_context, auth_manager.clone()));
+            Arc::new(DfSessionService::new(session_context, auth_manager.clone(), query_timeout));
         HandlerFactory { session_service }
     }
 }
@@ -71,12 +71,14 @@ pub struct DfSessionService {
     timezone: Arc<Mutex<String>>,
     auth_manager: Arc<AuthManager>,
     sql_rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>>,
+    query_timeout: Option<std::time::Duration>,
 }
 
 impl DfSessionService {
     pub fn new(
         session_context: Arc<SessionContext>,
         auth_manager: Arc<AuthManager>,
+        query_timeout: Option<std::time::Duration>,
     ) -> DfSessionService {
         let sql_rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![
             Arc::new(AliasDuplicatedProjectionRewrite),
@@ -97,8 +99,11 @@ impl DfSessionService {
             timezone: Arc::new(Mutex::new("UTC".to_string())),
             auth_manager,
             sql_rewrite_rules,
+            query_timeout,
         }
     }
+
+
 
     /// Check if the current user has permission to execute a query
     async fn check_query_permission<C>(&self, client: &C, query: &str) -> PgWireResult<()>
@@ -378,7 +383,19 @@ impl SimpleQueryHandler for DfSessionService {
             )));
         }
 
-        let df_result = self.session_context.sql(&query).await;
+        let df_result = if let Some(timeout) = self.query_timeout {
+            tokio::time::timeout(timeout, self.session_context.sql(&query))
+                .await
+                .map_err(|_| {
+                    PgWireError::UserError(Box::new(pgwire::error::ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "57014".to_string(), // query_canceled error code
+                        "canceling statement due to query timeout".to_string(),
+                    )))
+                })?
+        } else {
+            self.session_context.sql(&query).await
+        };
 
         // Handle query execution errors and transaction state
         let df = match df_result {
@@ -540,10 +557,23 @@ impl ExtendedQueryHandler for DfSessionService {
             .optimize(&plan)
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-        let dataframe = match self.session_context.execute_logical_plan(optimised).await {
-            Ok(df) => df,
-            Err(e) => {
-                return Err(PgWireError::ApiError(Box::new(e)));
+        let dataframe = if let Some(timeout) = self.query_timeout {
+            tokio::time::timeout(timeout, self.session_context.execute_logical_plan(optimised))
+                .await
+                .map_err(|_| {
+                    PgWireError::UserError(Box::new(pgwire::error::ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "57014".to_string(), // query_canceled error code
+                        "canceling statement due to query timeout".to_string(),
+                    )))
+                })?
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?
+        } else {
+            match self.session_context.execute_logical_plan(optimised).await {
+                Ok(df) => df,
+                Err(e) => {
+                    return Err(PgWireError::ApiError(Box::new(e)));
+                }
             }
         };
         let resp = df::encode_dataframe(dataframe, &portal.result_column_format).await?;
@@ -592,4 +622,77 @@ fn ordered_param_types(types: &HashMap<String, Option<DataType>>) -> Vec<Option<
     let mut types = types.iter().collect::<Vec<_>>();
     types.sort_by(|a, b| a.0.cmp(b.0));
     types.into_iter().map(|pt| pt.1.as_ref()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{auth::AuthManager, ServerOptions};
+    use datafusion::prelude::SessionContext;
+    use std::time::Duration;
+
+    #[test]
+    fn test_server_options_default_timeout() {
+        let opts = ServerOptions::default();
+        assert_eq!(opts.query_timeout, Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn test_server_options_no_timeout() {
+        let mut opts = ServerOptions::new();
+        opts.query_timeout = None;
+        assert_eq!(opts.query_timeout, None);
+    }
+
+    #[test]
+    fn test_handler_factory_with_timeout() {
+        let session_context = Arc::new(SessionContext::new());
+        let auth_manager = Arc::new(AuthManager::new());
+        let timeout = Some(Duration::from_secs(60));
+        
+        let factory = HandlerFactory::new(session_context, auth_manager, timeout);
+        assert_eq!(factory.session_service.query_timeout, timeout);
+    }
+
+    #[test]
+    fn test_session_service_timeout_configuration() {
+        let session_context = Arc::new(SessionContext::new());
+        let auth_manager = Arc::new(AuthManager::new());
+        
+        // Test with timeout
+        let service_with_timeout = DfSessionService::new(
+            session_context.clone(), 
+            auth_manager.clone(), 
+            Some(Duration::from_secs(45))
+        );
+        assert_eq!(service_with_timeout.query_timeout, Some(Duration::from_secs(45)));
+        
+        // Test without timeout (None)
+        let service_no_timeout = DfSessionService::new(
+            session_context, 
+            auth_manager, 
+            None
+        );
+        assert_eq!(service_no_timeout.query_timeout, None);
+    }
+
+    #[test]
+    fn test_timeout_configuration_from_seconds() {
+        // Test 0 seconds = no timeout
+        let opts_no_timeout = ServerOptions::new().with_query_timeout_secs(0);
+        assert_eq!(opts_no_timeout.query_timeout, None);
+        
+        // Test positive seconds = Some(Duration)
+        let opts_with_timeout = ServerOptions::new().with_query_timeout_secs(60);
+        assert_eq!(opts_with_timeout.query_timeout, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn test_max_connections_configuration() {
+        let opts = ServerOptions::new().with_max_connections(500);
+        assert_eq!(opts.max_connections, 500);
+        
+        let opts_default = ServerOptions::default();
+        assert_eq!(opts_default.max_connections, 1000);
+    }
 }
