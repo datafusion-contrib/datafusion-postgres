@@ -34,6 +34,9 @@ use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::parser::ParserError;
 
+mod blacklist;
+pub use blacklist::BlacklistSqlRewriter;
+
 pub fn parse(sql: &str) -> Result<Vec<Statement>, ParserError> {
     let dialect = PostgreSqlDialect {};
 
@@ -287,6 +290,8 @@ impl RemoveUnsupportedTypes {
         let mut unsupported_types = HashSet::new();
         unsupported_types.insert("regclass".to_owned());
         unsupported_types.insert("regproc".to_owned());
+        unsupported_types.insert("regtype".to_owned());
+        unsupported_types.insert("regtype[]".to_owned());
 
         Self { unsupported_types }
     }
@@ -349,11 +354,39 @@ struct RewriteArrayAnyAllOperationVisitor;
 
 impl RewriteArrayAnyAllOperationVisitor {
     fn any_to_array_cofntains(&self, left: &Expr, right: &Expr) -> Expr {
+        dbg!(right);
+        let array = if let Expr::Value(ValueWithSpan {
+            value: Value::SingleQuotedString(array_literal),
+            ..
+        }) = right
+        {
+            let array_literal = array_literal.trim();
+            if array_literal.starts_with('{') && array_literal.ends_with('}') {
+                let items = array_literal.trim_matches(|c| c == '{' || c == '}' || c == ' ');
+                let items = items.split(',').map(|s| s.trim()).filter(|s| !s.is_empty());
+
+                // For now, we assume the data type is string
+                let elems = items
+                    .map(|s| {
+                        Expr::Value(Value::SingleQuotedString(s.to_string()).with_empty_span())
+                    })
+                    .collect();
+                Expr::Array(Array {
+                    elem: elems,
+                    named: true,
+                })
+            } else {
+                right.clone()
+            }
+        } else {
+            right.clone()
+        };
+
         Expr::Function(Function {
             name: ObjectName::from(vec![Ident::new("array_contains")]),
             args: FunctionArguments::List(FunctionArgumentList {
                 args: vec![
-                    FunctionArg::Unnamed(FunctionArgExpr::Expr(right.clone())),
+                    FunctionArg::Unnamed(FunctionArgExpr::Expr(array)),
                     FunctionArg::Unnamed(FunctionArgExpr::Expr(left.clone())),
                 ],
                 duplicate_treatment: None,
@@ -426,25 +459,11 @@ impl SqlStatementRewriteRule for RewriteArrayAnyAllOperation {
 /// Postgres has pg_catalog in search_path by default so it allow access to
 /// `pg_namespace` without `pg_catalog.` qualifier
 #[derive(Debug)]
-pub struct PrependUnqualifiedTableName {
-    table_names: HashSet<String>,
-}
+pub struct PrependUnqualifiedPgTableName;
 
-impl PrependUnqualifiedTableName {
-    pub fn new() -> Self {
-        let mut table_names = HashSet::new();
+struct PrependUnqualifiedPgTableNameVisitor;
 
-        table_names.insert("pg_namespace".to_owned());
-
-        Self { table_names }
-    }
-}
-
-struct PrependUnqualifiedTableNameVisitor<'a> {
-    table_names: &'a HashSet<String>,
-}
-
-impl<'a> VisitorMut for PrependUnqualifiedTableNameVisitor<'a> {
+impl VisitorMut for PrependUnqualifiedPgTableNameVisitor {
     type Break = ();
 
     fn pre_visit_table_factor(
@@ -454,7 +473,7 @@ impl<'a> VisitorMut for PrependUnqualifiedTableNameVisitor<'a> {
         if let TableFactor::Table { name, .. } = table_factor {
             if name.0.len() == 1 {
                 let ObjectNamePart::Identifier(ident) = &name.0[0];
-                if self.table_names.contains(&ident.to_string()) {
+                if ident.value.starts_with("pg_") {
                     *name = ObjectName(vec![
                         ObjectNamePart::Identifier(Ident::new("pg_catalog")),
                         name.0[0].clone(),
@@ -467,11 +486,9 @@ impl<'a> VisitorMut for PrependUnqualifiedTableNameVisitor<'a> {
     }
 }
 
-impl SqlStatementRewriteRule for PrependUnqualifiedTableName {
+impl SqlStatementRewriteRule for PrependUnqualifiedPgTableName {
     fn rewrite(&self, mut s: Statement) -> Statement {
-        let mut visitor = PrependUnqualifiedTableNameVisitor {
-            table_names: &self.table_names,
-        };
+        let mut visitor = PrependUnqualifiedPgTableNameVisitor;
 
         let _ = s.visit(&mut visitor);
         s
@@ -717,6 +734,12 @@ mod tests {
 
         assert_rewrite!(
             &rules,
+            "SELECT a = ANY('{r, l, e}')",
+            "SELECT array_contains(ARRAY['r', 'l', 'e'], a)"
+        );
+
+        assert_rewrite!(
+            &rules,
             "SELECT a FROM tbl WHERE a = ANY(current_schemas(true))",
             "SELECT a FROM tbl WHERE array_contains(current_schemas(true), a)"
         );
@@ -725,7 +748,7 @@ mod tests {
     #[test]
     fn test_prepend_unqualified_table_name() {
         let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
-            vec![Arc::new(PrependUnqualifiedTableName::new())];
+            vec![Arc::new(PrependUnqualifiedPgTableName)];
 
         assert_rewrite!(
             &rules,
