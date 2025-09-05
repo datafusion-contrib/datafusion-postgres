@@ -100,7 +100,11 @@ pub async fn serve(
     let auth_manager = Arc::new(AuthManager::new());
 
     // Create the handler factory with authentication
-    let factory = Arc::new(HandlerFactory::new(session_context, auth_manager, opts.query_timeout));
+    let factory = Arc::new(HandlerFactory::new(
+        session_context,
+        auth_manager,
+        opts.query_timeout,
+    ));
 
     serve_with_handlers(factory, opts).await
 }
