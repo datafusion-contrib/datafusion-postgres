@@ -14,7 +14,11 @@ pub fn setup_handlers() -> DfSessionService {
     let session_context = SessionContext::new();
     setup_pg_catalog(&session_context, "datafusion").expect("Failed to setup sesession context");
 
-    DfSessionService::new(Arc::new(session_context), Arc::new(AuthManager::new()), Some(std::time::Duration::from_secs(30)))
+    DfSessionService::new(
+        Arc::new(session_context),
+        Arc::new(AuthManager::new()),
+        Some(std::time::Duration::from_secs(30)),
+    )
 }
 
 #[derive(Debug, Default)]
