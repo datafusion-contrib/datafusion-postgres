@@ -3,16 +3,16 @@ use std::sync::Arc;
 
 use crate::auth::{AuthManager, Permission, ResourceType};
 use crate::sql::{
-    parse, rewrite, AliasDuplicatedProjectionRewrite, FixArrayLiteral, PrependUnqualifiedTableName,
-    RemoveTableFunctionQualifier, RemoveUnsupportedTypes, ResolveUnqualifiedIdentifer,
-    RewriteArrayAnyAllOperation, SqlStatementRewriteRule,
+    parse, rewrite, AliasDuplicatedProjectionRewrite, BlacklistSqlRewriter, FixArrayLiteral,
+    PrependUnqualifiedPgTableName, RemoveTableFunctionQualifier, RemoveUnsupportedTypes,
+    ResolveUnqualifiedIdentifer, RewriteArrayAnyAllOperation, SqlStatementRewriteRule,
 };
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
 use datafusion::sql::parser::Statement;
-use log::warn;
+use log::{info, warn};
 use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::auth::StartupHandler;
 use pgwire::api::portal::{Format, Portal};
@@ -23,7 +23,7 @@ use pgwire::api::results::{
 };
 use pgwire::api::stmt::QueryParser;
 use pgwire::api::stmt::StoredStatement;
-use pgwire::api::{ClientInfo, PgWireServerHandlers, Type};
+use pgwire::api::{ClientInfo, ErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::response::TransactionStatus;
 use tokio::sync::Mutex;
@@ -62,6 +62,21 @@ impl PgWireServerHandlers for HandlerFactory {
     fn startup_handler(&self) -> Arc<impl StartupHandler> {
         Arc::new(SimpleStartupHandler)
     }
+
+    fn error_handler(&self) -> Arc<impl ErrorHandler> {
+        Arc::new(LoggingErrorHandler)
+    }
+}
+
+struct LoggingErrorHandler;
+
+impl ErrorHandler for LoggingErrorHandler {
+    fn on_error<C>(&self, _client: &C, error: &mut PgWireError)
+    where
+        C: ClientInfo,
+    {
+        info!("Sending error: {error}")
+    }
 }
 
 /// The pgwire handler backed by a datafusion `SessionContext`
@@ -79,11 +94,14 @@ impl DfSessionService {
         auth_manager: Arc<AuthManager>,
     ) -> DfSessionService {
         let sql_rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![
+            // make sure blacklist based rewriter it on the top to prevent sql
+            // being rewritten from other rewriters
+            Arc::new(BlacklistSqlRewriter::new()),
             Arc::new(AliasDuplicatedProjectionRewrite),
             Arc::new(ResolveUnqualifiedIdentifer),
             Arc::new(RemoveUnsupportedTypes::new()),
             Arc::new(RewriteArrayAnyAllOperation),
-            Arc::new(PrependUnqualifiedTableName::new()),
+            Arc::new(PrependUnqualifiedPgTableName),
             Arc::new(FixArrayLiteral),
             Arc::new(RemoveTableFunctionQualifier),
         ];
@@ -529,6 +547,7 @@ impl ExtendedQueryHandler for DfSessionService {
             .get_parameter_types()
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
         let param_values = df::deserialize_parameters(portal, &ordered_param_types(&param_types))?; // Fixed: Use &param_types
+
         let plan = plan
             .clone()
             .replace_params_with_values(&param_values)
