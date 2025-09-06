@@ -42,8 +42,7 @@ pub fn into_pg_type(arrow_type: &DataType) -> PgWireResult<Type> {
         DataType::Float16 | DataType::Float32 => Type::FLOAT4,
         DataType::Float64 => Type::FLOAT8,
         DataType::Decimal128(_, _) => Type::NUMERIC,
-        DataType::Utf8 => Type::VARCHAR,
-        DataType::LargeUtf8 | DataType::Utf8View => Type::TEXT,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Type::TEXT,
         DataType::List(field) | DataType::FixedSizeList(field, _) | DataType::LargeList(field) => {
             match field.data_type() {
                 DataType::Boolean => Type::BOOL_ARRAY,
@@ -67,8 +66,7 @@ pub fn into_pg_type(arrow_type: &DataType) -> PgWireResult<Type> {
                 | DataType::BinaryView => Type::BYTEA_ARRAY,
                 DataType::Float16 | DataType::Float32 => Type::FLOAT4_ARRAY,
                 DataType::Float64 => Type::FLOAT8_ARRAY,
-                DataType::Utf8 => Type::VARCHAR_ARRAY,
-                DataType::LargeUtf8 | DataType::Utf8View => Type::TEXT_ARRAY,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Type::TEXT_ARRAY,
                 struct_type @ DataType::Struct(_) => Type::new(
                     Type::RECORD_ARRAY.name().into(),
                     Type::RECORD_ARRAY.oid(),
