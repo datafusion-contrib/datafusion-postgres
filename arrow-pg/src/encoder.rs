@@ -574,7 +574,7 @@ mod tests {
             {
                 let mut bytes = BytesMut::new();
                 let _sql_text = value.to_sql_text(data_type, &mut bytes);
-                let string = String::from_utf8((&bytes).to_vec());
+                let string = String::from_utf8(bytes.to_vec());
                 self.encoded_value = string.unwrap();
                 Ok(())
             }

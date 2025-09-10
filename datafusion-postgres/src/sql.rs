@@ -296,7 +296,7 @@ struct RemoveUnsupportedTypesVisitor<'a> {
     unsupported_types: &'a HashSet<String>,
 }
 
-impl<'a> VisitorMut for RemoveUnsupportedTypesVisitor<'a> {
+impl VisitorMut for RemoveUnsupportedTypesVisitor<'_> {
     type Break = ();
 
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
@@ -444,7 +444,7 @@ struct PrependUnqualifiedTableNameVisitor<'a> {
     table_names: &'a HashSet<String>,
 }
 
-impl<'a> VisitorMut for PrependUnqualifiedTableNameVisitor<'a> {
+impl VisitorMut for PrependUnqualifiedTableNameVisitor<'_> {
     type Break = ();
 
     fn pre_visit_table_factor(
