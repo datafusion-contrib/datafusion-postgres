@@ -66,11 +66,9 @@ where
         } else if let Some(infer_type) = inferenced_type {
             into_pg_type(infer_type)
         } else {
-            Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                "FATAL".to_string(),
-                "XX000".to_string(),
-                "Unknown parameter type".to_string(),
-            ))))
+            // Default to TEXT for untyped parameters in extended queries
+            // This allows arithmetic operations to work with implicit casting
+            Ok(Type::TEXT)
         }
     }
 
