@@ -222,7 +222,7 @@ impl DfSessionService {
                 if parts.len() >= 3 {
                     let timeout_str = parts[2].trim_matches('"').trim_matches('\'');
                     let mut statement_timeout = self.statement_timeout.lock().await;
-                    
+
                     if timeout_str == "0" || timeout_str.is_empty() {
                         *statement_timeout = None;
                     } else {
@@ -230,14 +230,20 @@ impl DfSessionService {
                         let timeout_ms = if timeout_str.ends_with("ms") {
                             timeout_str.trim_end_matches("ms").parse::<u64>()
                         } else if timeout_str.ends_with("s") {
-                            timeout_str.trim_end_matches("s").parse::<u64>().map(|s| s * 1000)
+                            timeout_str
+                                .trim_end_matches("s")
+                                .parse::<u64>()
+                                .map(|s| s * 1000)
                         } else if timeout_str.ends_with("min") {
-                            timeout_str.trim_end_matches("min").parse::<u64>().map(|m| m * 60 * 1000)
+                            timeout_str
+                                .trim_end_matches("min")
+                                .parse::<u64>()
+                                .map(|m| m * 60 * 1000)
                         } else {
                             // Default to milliseconds
                             timeout_str.parse::<u64>()
                         };
-                        
+
                         match timeout_ms {
                             Ok(ms) if ms > 0 => {
                                 *statement_timeout = Some(std::time::Duration::from_millis(ms));
@@ -609,16 +615,19 @@ impl ExtendedQueryHandler for DfSessionService {
         let dataframe = {
             let timeout = self.statement_timeout.lock().await.clone();
             if let Some(timeout_duration) = timeout {
-                tokio::time::timeout(timeout_duration, self.session_context.execute_logical_plan(optimised))
-                    .await
-                    .map_err(|_| {
-                        PgWireError::UserError(Box::new(pgwire::error::ErrorInfo::new(
-                            "ERROR".to_string(),
-                            "57014".to_string(), // query_canceled error code
-                            "canceling statement due to statement timeout".to_string(),
-                        )))
-                    })?
-                    .map_err(|e| PgWireError::ApiError(Box::new(e)))?
+                tokio::time::timeout(
+                    timeout_duration,
+                    self.session_context.execute_logical_plan(optimised),
+                )
+                .await
+                .map_err(|_| {
+                    PgWireError::UserError(Box::new(pgwire::error::ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "57014".to_string(), // query_canceled error code
+                        "canceling statement due to statement timeout".to_string(),
+                    )))
+                })?
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?
             } else {
                 match self.session_context.execute_logical_plan(optimised).await {
                     Ok(df) => df,
@@ -690,15 +699,21 @@ mod tests {
         let service = DfSessionService::new(session_context, auth_manager);
 
         // Test setting timeout to 5000ms
-        let set_response = service.try_respond_set_statements("set statement_timeout '5000ms'").await.unwrap();
+        let set_response = service
+            .try_respond_set_statements("set statement_timeout '5000ms'")
+            .await
+            .unwrap();
         assert!(set_response.is_some());
-        
+
         // Verify the timeout was set
         let timeout = service.statement_timeout.lock().await.clone();
         assert_eq!(timeout, Some(Duration::from_millis(5000)));
 
         // Test SHOW statement_timeout
-        let show_response = service.try_respond_show_statements("show statement_timeout").await.unwrap();
+        let show_response = service
+            .try_respond_show_statements("show statement_timeout")
+            .await
+            .unwrap();
         assert!(show_response.is_some());
     }
 
@@ -709,11 +724,17 @@ mod tests {
         let service = DfSessionService::new(session_context, auth_manager);
 
         // Set timeout first
-        service.try_respond_set_statements("set statement_timeout '1000ms'").await.unwrap();
-        
+        service
+            .try_respond_set_statements("set statement_timeout '1000ms'")
+            .await
+            .unwrap();
+
         // Disable timeout with 0
-        service.try_respond_set_statements("set statement_timeout '0'").await.unwrap();
-        
+        service
+            .try_respond_set_statements("set statement_timeout '0'")
+            .await
+            .unwrap();
+
         let timeout = service.statement_timeout.lock().await.clone();
         assert_eq!(timeout, None);
     }
