@@ -706,8 +706,38 @@ impl QueryParser for Parser {
         sql: &str,
         _types: &[Type],
     ) -> PgWireResult<Self::Statement> {
-        log::debug!("Received parse extended query: {sql}"); // Log for
-                                                             // debugging
+        log::debug!("Received parse extended query: {sql}"); // Log for debugging
+
+        // Check for transaction commands that shouldn't be parsed by DataFusion
+        let sql_lower = sql.to_lowercase();
+        let sql_trimmed = sql_lower.trim();
+        if matches!(
+            sql_trimmed,
+            "begin"
+                | "begin transaction"
+                | "begin work"
+                | "start transaction"
+                | "commit"
+                | "commit transaction"
+                | "commit work"
+                | "end"
+                | "end transaction"
+                | "rollback"
+                | "rollback transaction"
+                | "rollback work"
+                | "abort"
+        ) {
+            // Return a dummy plan for transaction commands - they'll be handled by transaction handler
+            let dummy_schema = datafusion::common::DFSchema::empty();
+            let dummy_plan = datafusion::logical_expr::LogicalPlan::EmptyRelation(
+                datafusion::logical_expr::EmptyRelation {
+                    produce_one_row: false,
+                    schema: std::sync::Arc::new(dummy_schema),
+                },
+            );
+            return Ok((sql.to_string(), dummy_plan));
+        }
+
         let mut statements = parse(sql).map_err(|e| PgWireError::ApiError(Box::new(e)))?;
         let mut statement = statements.remove(0);
 
