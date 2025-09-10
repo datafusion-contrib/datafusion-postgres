@@ -423,13 +423,16 @@ impl SimpleQueryHandler for DfSessionService {
         C: ClientInfo + Unpin + Send + Sync,
     {
         log::debug!("Received query: {query}"); // Log the query for debugging
-        
+
         // Check for transaction commands early to avoid SQL parsing issues with ABORT
         let query_lower = query.to_lowercase().trim().to_string();
-        if let Some(resp) = self.try_respond_transaction_statements(client, &query_lower).await? {
+        if let Some(resp) = self
+            .try_respond_transaction_statements(client, &query_lower)
+            .await?
+        {
             return Ok(vec![resp]);
         }
-        
+
         let mut statements = parse(query).map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
         // TODO: deal with multiple statements
@@ -461,8 +464,6 @@ impl SimpleQueryHandler for DfSessionService {
         {
             return Ok(vec![resp]);
         }
-
-
 
         if let Some(resp) = self
             .try_respond_show_statements(client, &query_lower)
