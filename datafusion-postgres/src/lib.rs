@@ -186,7 +186,7 @@ mod tests {
     fn test_server_options_max_connections_configuration() {
         let opts = ServerOptions::new().with_max_connections(500);
         assert_eq!(opts.max_connections, 500);
-        
+
         // Test that 0 means no limit
         let opts_no_limit = ServerOptions::new().with_max_connections(0);
         assert_eq!(opts_no_limit.max_connections, 0);
