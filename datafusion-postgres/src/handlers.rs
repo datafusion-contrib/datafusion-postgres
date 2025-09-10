@@ -122,7 +122,10 @@ impl DfSessionService {
     {
         let metadata = client.metadata_mut();
         if let Some(duration) = timeout {
-            metadata.insert(METADATA_STATEMENT_TIMEOUT.to_string(), duration.as_millis().to_string());
+            metadata.insert(
+                METADATA_STATEMENT_TIMEOUT.to_string(),
+                duration.as_millis().to_string(),
+            );
         } else {
             metadata.remove(METADATA_STATEMENT_TIMEOUT);
         }
@@ -439,7 +442,10 @@ impl SimpleQueryHandler for DfSessionService {
             self.check_query_permission(client, &query).await?;
         }
 
-        if let Some(resp) = self.try_respond_set_statements(client, &query_lower).await? {
+        if let Some(resp) = self
+            .try_respond_set_statements(client, &query_lower)
+            .await?
+        {
             return Ok(vec![resp]);
         }
 
@@ -450,7 +456,10 @@ impl SimpleQueryHandler for DfSessionService {
             return Ok(vec![resp]);
         }
 
-        if let Some(resp) = self.try_respond_show_statements(client, &query_lower).await? {
+        if let Some(resp) = self
+            .try_respond_show_statements(client, &query_lower)
+            .await?
+        {
             return Ok(vec![resp]);
         }
 
@@ -755,7 +764,12 @@ mod tests {
             (0, pgwire::messages::startup::SecretKey::I32(0))
         }
 
-        fn set_pid_and_secret_key(&mut self, _pid: i32, _secret_key: pgwire::messages::startup::SecretKey) {}
+        fn set_pid_and_secret_key(
+            &mut self,
+            _pid: i32,
+            _secret_key: pgwire::messages::startup::SecretKey,
+        ) {
+        }
 
         fn state(&self) -> pgwire::api::PgWireConnectionState {
             pgwire::api::PgWireConnectionState::ReadyForQuery
@@ -767,7 +781,11 @@ mod tests {
             pgwire::messages::response::TransactionStatus::Idle
         }
 
-        fn set_transaction_status(&mut self, _new_status: pgwire::messages::response::TransactionStatus) {}
+        fn set_transaction_status(
+            &mut self,
+            _new_status: pgwire::messages::response::TransactionStatus,
+        ) {
+        }
 
         fn metadata(&self) -> &HashMap<String, String> {
             &self.metadata
