@@ -354,7 +354,7 @@ impl DfSessionService {
                     Ok(Some(Response::Query(resp)))
                 }
                 "show statement_timeout" => {
-                    let timeout = self.statement_timeout.lock().await.clone();
+                    let timeout = *self.statement_timeout.lock().await;
                     let timeout_str = match timeout {
                         Some(duration) => format!("{}ms", duration.as_millis()),
                         None => "0".to_string(),
@@ -436,7 +436,7 @@ impl SimpleQueryHandler for DfSessionService {
         }
 
         let df_result = {
-            let timeout = self.statement_timeout.lock().await.clone();
+            let timeout = *self.statement_timeout.lock().await;
             if let Some(timeout_duration) = timeout {
                 tokio::time::timeout(timeout_duration, self.session_context.sql(&query))
                     .await
@@ -613,7 +613,7 @@ impl ExtendedQueryHandler for DfSessionService {
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
         let dataframe = {
-            let timeout = self.statement_timeout.lock().await.clone();
+            let timeout = *self.statement_timeout.lock().await;
             if let Some(timeout_duration) = timeout {
                 tokio::time::timeout(
                     timeout_duration,
@@ -706,7 +706,7 @@ mod tests {
         assert!(set_response.is_some());
 
         // Verify the timeout was set
-        let timeout = service.statement_timeout.lock().await.clone();
+        let timeout = *service.statement_timeout.lock().await;
         assert_eq!(timeout, Some(Duration::from_millis(5000)));
 
         // Test SHOW statement_timeout
@@ -735,7 +735,7 @@ mod tests {
             .await
             .unwrap();
 
-        let timeout = service.statement_timeout.lock().await.clone();
+        let timeout = *service.statement_timeout.lock().await;
         assert_eq!(timeout, None);
     }
 }
