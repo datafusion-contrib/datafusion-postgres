@@ -1,15 +1,14 @@
 use std::{str::FromStr, sync::Arc};
 
-use arrow::array::{BinaryViewArray, StringViewArray};
 #[cfg(not(feature = "datafusion"))]
 use arrow::{
     array::{
-        timezone::Tz, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        Decimal256Array, DurationMicrosecondArray, LargeBinaryArray, LargeListArray,
-        LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray, Time32MillisecondArray,
-        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray,
+        timezone::Tz, Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+        Decimal128Array, Decimal256Array, DurationMicrosecondArray, LargeBinaryArray,
+        LargeListArray, LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray,
+        StringViewArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray,
     },
     datatypes::{
         DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,
@@ -21,12 +20,12 @@ use arrow::{
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::{
     array::{
-        timezone::Tz, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        Decimal256Array, DurationMicrosecondArray, LargeBinaryArray, LargeListArray,
-        LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray, Time32MillisecondArray,
-        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray,
+        timezone::Tz, Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+        Decimal128Array, Decimal256Array, DurationMicrosecondArray, LargeBinaryArray,
+        LargeListArray, LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray,
+        StringViewArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray,
     },
     datatypes::{
         DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,

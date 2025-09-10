@@ -31,6 +31,9 @@ use tokio::sync::Mutex;
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
 
+// Metadata keys for session-level settings
+const METADATA_STATEMENT_TIMEOUT: &str = "statement_timeout_ms";
+
 /// Simple startup handler that does no authentication
 /// For production, use DfAuthSource with proper pgwire authentication handlers
 pub struct SimpleStartupHandler;
@@ -115,6 +118,34 @@ impl DfSessionService {
             timezone: Arc::new(Mutex::new("UTC".to_string())),
             auth_manager,
             sql_rewrite_rules,
+        }
+    }
+
+    /// Get statement timeout from client metadata
+    fn get_statement_timeout<C>(client: &C) -> Option<std::time::Duration>
+    where
+        C: ClientInfo,
+    {
+        client
+            .metadata()
+            .get(METADATA_STATEMENT_TIMEOUT)
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(std::time::Duration::from_millis)
+    }
+
+    /// Set statement timeout in client metadata
+    fn set_statement_timeout<C>(client: &mut C, timeout: Option<std::time::Duration>)
+    where
+        C: ClientInfo,
+    {
+        let metadata = client.metadata_mut();
+        if let Some(duration) = timeout {
+            metadata.insert(
+                METADATA_STATEMENT_TIMEOUT.to_string(),
+                duration.as_millis().to_string(),
+            );
+        } else {
+            metadata.remove(METADATA_STATEMENT_TIMEOUT);
         }
     }
 
@@ -212,10 +243,14 @@ impl DfSessionService {
         Ok(QueryResponse::new(Arc::new(fields), Box::pin(row_stream)))
     }
 
-    async fn try_respond_set_statements<'a>(
+    async fn try_respond_set_statements<'a, C>(
         &self,
+        client: &mut C,
         query_lower: &str,
-    ) -> PgWireResult<Option<Response<'a>>> {
+    ) -> PgWireResult<Option<Response<'a>>>
+    where
+        C: ClientInfo,
+    {
         if query_lower.starts_with("set") {
             if query_lower.starts_with("set time zone") {
                 let parts: Vec<&str> = query_lower.split_whitespace().collect();
@@ -230,6 +265,49 @@ impl DfSessionService {
                             "ERROR".to_string(),
                             "42601".to_string(),
                             "Invalid SET TIME ZONE syntax".to_string(),
+                        ),
+                    )))
+                }
+            } else if query_lower.starts_with("set statement_timeout") {
+                let parts: Vec<&str> = query_lower.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    let timeout_str = parts[2].trim_matches('"').trim_matches('\'');
+
+                    let timeout = if timeout_str == "0" || timeout_str.is_empty() {
+                        None
+                    } else {
+                        // Parse timeout value (supports ms, s, min formats)
+                        let timeout_ms = if timeout_str.ends_with("ms") {
+                            timeout_str.trim_end_matches("ms").parse::<u64>()
+                        } else if timeout_str.ends_with("s") {
+                            timeout_str
+                                .trim_end_matches("s")
+                                .parse::<u64>()
+                                .map(|s| s * 1000)
+                        } else if timeout_str.ends_with("min") {
+                            timeout_str
+                                .trim_end_matches("min")
+                                .parse::<u64>()
+                                .map(|m| m * 60 * 1000)
+                        } else {
+                            // Default to milliseconds
+                            timeout_str.parse::<u64>()
+                        };
+
+                        match timeout_ms {
+                            Ok(ms) if ms > 0 => Some(std::time::Duration::from_millis(ms)),
+                            _ => None,
+                        }
+                    };
+
+                    Self::set_statement_timeout(client, timeout);
+                    Ok(Some(Response::Execution(Tag::new("SET"))))
+                } else {
+                    Err(PgWireError::UserError(Box::new(
+                        pgwire::error::ErrorInfo::new(
+                            "ERROR".to_string(),
+                            "42601".to_string(),
+                            "Invalid SET statement_timeout syntax".to_string(),
                         ),
                     )))
                 }
@@ -292,10 +370,14 @@ impl DfSessionService {
         }
     }
 
-    async fn try_respond_show_statements<'a>(
+    async fn try_respond_show_statements<'a, C>(
         &self,
+        client: &C,
         query_lower: &str,
-    ) -> PgWireResult<Option<Response<'a>>> {
+    ) -> PgWireResult<Option<Response<'a>>>
+    where
+        C: ClientInfo,
+    {
         if query_lower.starts_with("show ") {
             match query_lower.strip_suffix(";").unwrap_or(query_lower) {
                 "show time zone" => {
@@ -321,6 +403,15 @@ impl DfSessionService {
                 "show search_path" => {
                     let default_schema = "public";
                     let resp = Self::mock_show_response("search_path", default_schema)?;
+                    Ok(Some(Response::Query(resp)))
+                }
+                "show statement_timeout" => {
+                    let timeout = Self::get_statement_timeout(client);
+                    let timeout_str = match timeout {
+                        Some(duration) => format!("{}ms", duration.as_millis()),
+                        None => "0".to_string(),
+                    };
+                    let resp = Self::mock_show_response("statement_timeout", &timeout_str)?;
                     Ok(Some(Response::Query(resp)))
                 }
                 _ => Err(PgWireError::UserError(Box::new(
@@ -369,7 +460,10 @@ impl SimpleQueryHandler for DfSessionService {
             self.check_query_permission(client, &query).await?;
         }
 
-        if let Some(resp) = self.try_respond_set_statements(&query_lower).await? {
+        if let Some(resp) = self
+            .try_respond_set_statements(client, &query_lower)
+            .await?
+        {
             return Ok(vec![resp]);
         }
 
@@ -380,7 +474,10 @@ impl SimpleQueryHandler for DfSessionService {
             return Ok(vec![resp]);
         }
 
-        if let Some(resp) = self.try_respond_show_statements(&query_lower).await? {
+        if let Some(resp) = self
+            .try_respond_show_statements(client, &query_lower)
+            .await?
+        {
             return Ok(vec![resp]);
         }
 
@@ -396,7 +493,22 @@ impl SimpleQueryHandler for DfSessionService {
             )));
         }
 
-        let df_result = self.session_context.sql(&query).await;
+        let df_result = {
+            let timeout = Self::get_statement_timeout(client);
+            if let Some(timeout_duration) = timeout {
+                tokio::time::timeout(timeout_duration, self.session_context.sql(&query))
+                    .await
+                    .map_err(|_| {
+                        PgWireError::UserError(Box::new(pgwire::error::ErrorInfo::new(
+                            "ERROR".to_string(),
+                            "57014".to_string(), // query_canceled error code
+                            "canceling statement due to statement timeout".to_string(),
+                        )))
+                    })?
+            } else {
+                self.session_context.sql(&query).await
+            }
+        };
 
         // Handle query execution errors and transaction state
         let df = match df_result {
@@ -514,7 +626,7 @@ impl ExtendedQueryHandler for DfSessionService {
                 .await?;
         }
 
-        if let Some(resp) = self.try_respond_set_statements(&query).await? {
+        if let Some(resp) = self.try_respond_set_statements(client, &query).await? {
             return Ok(resp);
         }
 
@@ -525,7 +637,7 @@ impl ExtendedQueryHandler for DfSessionService {
             return Ok(resp);
         }
 
-        if let Some(resp) = self.try_respond_show_statements(&query).await? {
+        if let Some(resp) = self.try_respond_show_statements(client, &query).await? {
             return Ok(resp);
         }
 
@@ -559,10 +671,29 @@ impl ExtendedQueryHandler for DfSessionService {
             .optimize(&plan)
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-        let dataframe = match self.session_context.execute_logical_plan(optimised).await {
-            Ok(df) => df,
-            Err(e) => {
-                return Err(PgWireError::ApiError(Box::new(e)));
+        let dataframe = {
+            let timeout = Self::get_statement_timeout(client);
+            if let Some(timeout_duration) = timeout {
+                tokio::time::timeout(
+                    timeout_duration,
+                    self.session_context.execute_logical_plan(optimised),
+                )
+                .await
+                .map_err(|_| {
+                    PgWireError::UserError(Box::new(pgwire::error::ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "57014".to_string(), // query_canceled error code
+                        "canceling statement due to statement timeout".to_string(),
+                    )))
+                })?
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?
+            } else {
+                match self.session_context.execute_logical_plan(optimised).await {
+                    Ok(df) => df,
+                    Err(e) => {
+                        return Err(PgWireError::ApiError(Box::new(e)));
+                    }
+                }
             }
         };
         let resp = df::encode_dataframe(dataframe, &portal.result_column_format).await?;
@@ -611,4 +742,129 @@ fn ordered_param_types(types: &HashMap<String, Option<DataType>>) -> Vec<Option<
     let mut types = types.iter().collect::<Vec<_>>();
     types.sort_by(|a, b| a.0.cmp(b.0));
     types.into_iter().map(|pt| pt.1.as_ref()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::AuthManager;
+    use datafusion::prelude::SessionContext;
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    struct MockClient {
+        metadata: HashMap<String, String>,
+    }
+
+    impl MockClient {
+        fn new() -> Self {
+            Self {
+                metadata: HashMap::new(),
+            }
+        }
+    }
+
+    impl ClientInfo for MockClient {
+        fn socket_addr(&self) -> std::net::SocketAddr {
+            "127.0.0.1:5432".parse().unwrap()
+        }
+
+        fn is_secure(&self) -> bool {
+            false
+        }
+
+        fn protocol_version(&self) -> pgwire::messages::ProtocolVersion {
+            pgwire::messages::ProtocolVersion::PROTOCOL3_0
+        }
+
+        fn set_protocol_version(&mut self, _version: pgwire::messages::ProtocolVersion) {}
+
+        fn pid_and_secret_key(&self) -> (i32, pgwire::messages::startup::SecretKey) {
+            (0, pgwire::messages::startup::SecretKey::I32(0))
+        }
+
+        fn set_pid_and_secret_key(
+            &mut self,
+            _pid: i32,
+            _secret_key: pgwire::messages::startup::SecretKey,
+        ) {
+        }
+
+        fn state(&self) -> pgwire::api::PgWireConnectionState {
+            pgwire::api::PgWireConnectionState::ReadyForQuery
+        }
+
+        fn set_state(&mut self, _new_state: pgwire::api::PgWireConnectionState) {}
+
+        fn transaction_status(&self) -> pgwire::messages::response::TransactionStatus {
+            pgwire::messages::response::TransactionStatus::Idle
+        }
+
+        fn set_transaction_status(
+            &mut self,
+            _new_status: pgwire::messages::response::TransactionStatus,
+        ) {
+        }
+
+        fn metadata(&self) -> &HashMap<String, String> {
+            &self.metadata
+        }
+
+        fn metadata_mut(&mut self) -> &mut HashMap<String, String> {
+            &mut self.metadata
+        }
+
+        fn client_certificates<'a>(&self) -> Option<&[rustls_pki_types::CertificateDer<'a>]> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn test_statement_timeout_set_and_show() {
+        let session_context = Arc::new(SessionContext::new());
+        let auth_manager = Arc::new(AuthManager::new());
+        let service = DfSessionService::new(session_context, auth_manager);
+        let mut client = MockClient::new();
+
+        // Test setting timeout to 5000ms
+        let set_response = service
+            .try_respond_set_statements(&mut client, "set statement_timeout '5000ms'")
+            .await
+            .unwrap();
+        assert!(set_response.is_some());
+
+        // Verify the timeout was set in client metadata
+        let timeout = DfSessionService::get_statement_timeout(&client);
+        assert_eq!(timeout, Some(Duration::from_millis(5000)));
+
+        // Test SHOW statement_timeout
+        let show_response = service
+            .try_respond_show_statements(&client, "show statement_timeout")
+            .await
+            .unwrap();
+        assert!(show_response.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_statement_timeout_disable() {
+        let session_context = Arc::new(SessionContext::new());
+        let auth_manager = Arc::new(AuthManager::new());
+        let service = DfSessionService::new(session_context, auth_manager);
+        let mut client = MockClient::new();
+
+        // Set timeout first
+        service
+            .try_respond_set_statements(&mut client, "set statement_timeout '1000ms'")
+            .await
+            .unwrap();
+
+        // Disable timeout with 0
+        service
+            .try_respond_set_statements(&mut client, "set statement_timeout '0'")
+            .await
+            .unwrap();
+
+        let timeout = DfSessionService::get_statement_timeout(&client);
+        assert_eq!(timeout, None);
+    }
 }
