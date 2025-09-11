@@ -11,7 +11,7 @@ use futures::{stream, StreamExt};
 use pgwire::api::portal::{Format, Portal};
 use pgwire::api::results::QueryResponse;
 use pgwire::api::Type;
-use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::data::DataRow;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
@@ -262,11 +262,10 @@ where
             }
             // TODO: add more advanced types (composite types, ranges, etc.)
             _ => {
-                return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                    "FATAL".to_string(),
-                    "XX000".to_string(),
-                    format!("Unsupported parameter type: {pg_type}"),
-                ))));
+                // Default to string/text for unsupported parameter types
+                // This allows graceful degradation instead of fatal errors
+                let value = portal.parameter::<String>(i, &pg_type)?;
+                deserialized_params.push(ScalarValue::Utf8(value));
             }
         }
     }
