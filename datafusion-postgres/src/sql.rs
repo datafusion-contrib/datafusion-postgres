@@ -354,7 +354,6 @@ struct RewriteArrayAnyAllOperationVisitor;
 
 impl RewriteArrayAnyAllOperationVisitor {
     fn any_to_array_cofntains(&self, left: &Expr, right: &Expr) -> Expr {
-        dbg!(right);
         let array = if let Expr::Value(ValueWithSpan {
             value: Value::SingleQuotedString(array_literal),
             ..
