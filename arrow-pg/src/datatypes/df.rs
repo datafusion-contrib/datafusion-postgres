@@ -66,8 +66,6 @@ where
         } else if let Some(infer_type) = inferenced_type {
             into_pg_type(infer_type)
         } else {
-            // Default to TEXT for untyped parameters in extended queries
-            // This allows arithmetic operations to work with implicit casting
             Ok(Type::UNKNOWN)
         }
     }
@@ -263,7 +261,8 @@ where
             // TODO: add more advanced types (composite types, ranges, etc.)
             _ => {
                 // the client didn't provide type information and we are also
-                // unable to inference the type.
+                // unable to inference the type, or it's a type that we haven't
+                // supported:
                 //
                 // In this case we retry to resolve it as String or StringArray
                 let value = portal.parameter::<String>(i, &pg_type)?;
