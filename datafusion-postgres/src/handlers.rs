@@ -667,6 +667,7 @@ impl ExtendedQueryHandler for DfSessionService {
         let param_types = plan
             .get_parameter_types()
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
         let param_values = df::deserialize_parameters(portal, &ordered_param_types(&param_types))?; // Fixed: Use &param_types
 
         let plan = plan
@@ -697,12 +698,10 @@ impl ExtendedQueryHandler for DfSessionService {
                 })?
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?
             } else {
-                match self.session_context.execute_logical_plan(optimised).await {
-                    Ok(df) => df,
-                    Err(e) => {
-                        return Err(PgWireError::ApiError(Box::new(e)));
-                    }
-                }
+                self.session_context
+                    .execute_logical_plan(optimised)
+                    .await
+                    .map_err(|e| PgWireError::ApiError(Box::new(e)))?
             }
         };
         let resp = df::encode_dataframe(dataframe, &portal.result_column_format).await?;

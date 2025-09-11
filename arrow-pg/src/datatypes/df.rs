@@ -68,7 +68,7 @@ where
         } else {
             // Default to TEXT for untyped parameters in extended queries
             // This allows arithmetic operations to work with implicit casting
-            Ok(Type::TEXT)
+            Ok(Type::UNKNOWN)
         }
     }
 
@@ -262,10 +262,27 @@ where
             }
             // TODO: add more advanced types (composite types, ranges, etc.)
             _ => {
-                // Default to string/text for unsupported parameter types
-                // This allows graceful degradation instead of fatal errors
+                // the client didn't provide type information and we are also
+                // unable to inference the type.
+                //
+                // In this case we retry to resolve it as String or StringArray
                 let value = portal.parameter::<String>(i, &pg_type)?;
-                deserialized_params.push(ScalarValue::Utf8(value));
+                if let Some(value) = value {
+                    if value.starts_with('{') && value.ends_with('}') {
+                        // Looks like an array
+                        let items = value.trim_matches(|c| c == '{' || c == '}' || c == ' ');
+                        let items = items.split(',').map(|s| s.trim());
+                        let scalar_values: Vec<ScalarValue> = items
+                            .map(|s| ScalarValue::Utf8(Some(s.to_string())))
+                            .collect();
+
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(&scalar_values, &DataType::Utf8),
+                        ));
+                    } else {
+                        deserialized_params.push(ScalarValue::Utf8(Some(value)));
+                    }
+                }
             }
         }
     }
