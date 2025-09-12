@@ -784,7 +784,7 @@ impl QueryParser for Parser {
 
         // Check for transaction commands that shouldn't be parsed by DataFusion
         if let Some(plan) = self
-            .try_shortcut_parse_plan(&sql)
+            .try_shortcut_parse_plan(sql)
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?
         {
             return Ok((sql.to_string(), plan));
