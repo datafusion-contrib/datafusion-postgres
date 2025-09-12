@@ -26,6 +26,7 @@ mod pg_database;
 mod pg_get_expr_udf;
 mod pg_namespace;
 mod pg_settings;
+mod pg_tables;
 mod pg_views;
 
 const PG_CATALOG_TABLE_PG_AGGREGATE: &str = "pg_aggregate";
@@ -90,6 +91,9 @@ const PG_CATALOG_TABLE_PG_TABLESPACE: &str = "pg_tablespace";
 const PG_CATALOG_TABLE_PG_TRIGGER: &str = "pg_trigger";
 const PG_CATALOG_TABLE_PG_USER_MAPPING: &str = "pg_user_mapping";
 const PG_CATALOG_VIEW_PG_SETTINGS: &str = "pg_settings";
+const PG_CATALOG_VIEW_PG_VIEWS: &str = "pg_views";
+const PG_CATALOG_VIEW_PG_MATVIEWS: &str = "pg_matviews";
+const PG_CATALOG_VIEW_PG_TABLES: &str = "pg_tables";
 
 /// Determine PostgreSQL table type (relkind) from DataFusion TableProvider
 fn get_table_type(table: &Arc<dyn TableProvider>) -> &'static str {
@@ -185,6 +189,8 @@ pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_TABLE_PG_TRIGGER,
     PG_CATALOG_TABLE_PG_USER_MAPPING,
     PG_CATALOG_VIEW_PG_SETTINGS,
+    PG_CATALOG_VIEW_PG_VIEWS,
+    PG_CATALOG_VIEW_PG_MATVIEWS,
 ];
 
 #[derive(Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
@@ -316,9 +322,10 @@ impl SchemaProvider for PgCatalogSchemaProvider {
                     self.oid_counter.clone(),
                     self.oid_cache.clone(),
                 ));
-                Ok(Some(Arc::new(
-                    StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
-                )))
+                Ok(Some(Arc::new(StreamingTable::try_new(
+                    Arc::clone(table.schema()),
+                    vec![table],
+                )?)))
             }
             PG_CATALOG_TABLE_PG_CLASS => {
                 let table = Arc::new(pg_class::PgClassTable::new(
@@ -326,9 +333,10 @@ impl SchemaProvider for PgCatalogSchemaProvider {
                     self.oid_counter.clone(),
                     self.oid_cache.clone(),
                 ));
-                Ok(Some(Arc::new(
-                    StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
-                )))
+                Ok(Some(Arc::new(StreamingTable::try_new(
+                    Arc::clone(table.schema()),
+                    vec![table],
+                )?)))
             }
             PG_CATALOG_TABLE_PG_DATABASE => {
                 let table = Arc::new(pg_database::PgDatabaseTable::new(
@@ -336,9 +344,10 @@ impl SchemaProvider for PgCatalogSchemaProvider {
                     self.oid_counter.clone(),
                     self.oid_cache.clone(),
                 ));
-                Ok(Some(Arc::new(
-                    StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
-                )))
+                Ok(Some(Arc::new(StreamingTable::try_new(
+                    Arc::clone(table.schema()),
+                    vec![table],
+                )?)))
             }
             PG_CATALOG_TABLE_PG_NAMESPACE => {
                 let table = Arc::new(pg_namespace::PgNamespaceTable::new(
@@ -346,12 +355,28 @@ impl SchemaProvider for PgCatalogSchemaProvider {
                     self.oid_counter.clone(),
                     self.oid_cache.clone(),
                 ));
-                Ok(Some(Arc::new(
-                    StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
-                )))
+                Ok(Some(Arc::new(StreamingTable::try_new(
+                    Arc::clone(table.schema()),
+                    vec![table],
+                )?)))
+            }
+            PG_CATALOG_VIEW_PG_TABLES => {
+                let table = Arc::new(pg_tables::PgTablesTable::new(self.catalog_list.clone()));
+                Ok(Some(Arc::new(StreamingTable::try_new(
+                    Arc::clone(table.schema()),
+                    vec![table],
+                )?)))
             }
             PG_CATALOG_VIEW_PG_SETTINGS => {
                 let table = pg_settings::PgSettingsView::try_new()?;
+                Ok(Some(Arc::new(table.try_into_memtable()?)))
+            }
+            PG_CATALOG_VIEW_PG_VIEWS => {
+                let table = pg_views::PgViewsTable::new();
+                Ok(Some(Arc::new(table.try_into_memtable()?)))
+            }
+            PG_CATALOG_VIEW_PG_MATVIEWS => {
+                let table = pg_views::PgMatviewsTable::new();
                 Ok(Some(Arc::new(table.try_into_memtable()?)))
             }
 
