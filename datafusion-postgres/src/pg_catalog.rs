@@ -836,7 +836,7 @@ pub fn create_pg_get_userbyid_udf() -> ScalarUDF {
     )
 }
 
-pub fn create_pg_table_is_visible() -> ScalarUDF {
+pub fn create_pg_table_is_visible(name: &str) -> ScalarUDF {
     // Define the function implementation
     let func = move |args: &[ColumnarValue]| {
         let args = ColumnarValue::values_to_arrays(args)?;
@@ -855,7 +855,7 @@ pub fn create_pg_table_is_visible() -> ScalarUDF {
 
     // Wrap the implementation in a scalar function
     create_udf(
-        "pg_catalog.pg_table_is_visible",
+        name,
         vec![DataType::Int32],
         DataType::Boolean,
         Volatility::Stable,
@@ -863,12 +863,12 @@ pub fn create_pg_table_is_visible() -> ScalarUDF {
     )
 }
 
-pub fn create_has_table_privilege_3param_udf() -> ScalarUDF {
+pub fn create_has_privilege_3param_udf(name: &str) -> ScalarUDF {
     // Define the function implementation for 3-parameter version
     let func = move |args: &[ColumnarValue]| {
         let args = ColumnarValue::values_to_arrays(args)?;
         let user = &args[0]; // User (can be name or OID)
-        let _table = &args[1]; // Table (can be name or OID)
+        let _obj = &args[1]; // Table (can be name or OID)
         let _privilege = &args[2]; // Privilege type (SELECT, INSERT, etc.)
 
         // For now, always return true (full access)
@@ -884,7 +884,7 @@ pub fn create_has_table_privilege_3param_udf() -> ScalarUDF {
 
     // Wrap the implementation in a scalar function
     create_udf(
-        "has_table_privilege",
+        name,
         vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],
         DataType::Boolean,
         Volatility::Stable,
@@ -892,16 +892,16 @@ pub fn create_has_table_privilege_3param_udf() -> ScalarUDF {
     )
 }
 
-pub fn create_has_table_privilege_2param_udf() -> ScalarUDF {
+pub fn create_has_privilege_2param_udf(name: &str) -> ScalarUDF {
     // Define the function implementation for 2-parameter version (current user, table, privilege)
     let func = move |args: &[ColumnarValue]| {
         let args = ColumnarValue::values_to_arrays(args)?;
-        let table = &args[0]; // Table (can be name or OID)
+        let obj = &args[0]; // Table (can be name or OID)
         let _privilege = &args[1]; // Privilege type (SELECT, INSERT, etc.)
 
         // For now, always return true (full access for current user)
-        let mut builder = BooleanArray::builder(table.len());
-        for _ in 0..table.len() {
+        let mut builder = BooleanArray::builder(obj.len());
+        for _ in 0..obj.len() {
             builder.append_value(true);
         }
         let array: ArrayRef = Arc::new(builder.finish());
@@ -911,7 +911,7 @@ pub fn create_has_table_privilege_2param_udf() -> ScalarUDF {
 
     // Wrap the implementation in a scalar function
     create_udf(
-        "has_table_privilege",
+        name,
         vec![DataType::Utf8, DataType::Utf8],
         DataType::Boolean,
         Volatility::Stable,
@@ -970,7 +970,6 @@ pub fn create_pg_get_partkeydef_udf() -> ScalarUDF {
         let args = ColumnarValue::values_to_arrays(args)?;
         let oid = &args[0];
 
-        // For now, always return true (full access for current user)
         let mut builder = StringBuilder::new();
         for _ in 0..oid.len() {
             builder.append_value("");
@@ -1016,9 +1015,32 @@ pub fn setup_pg_catalog(
     session_context.register_udf(create_current_schemas_udf("pg_catalog.current_schemas"));
     session_context.register_udf(create_version_udf());
     session_context.register_udf(create_pg_get_userbyid_udf());
-    session_context.register_udf(create_has_table_privilege_2param_udf());
-    session_context.register_udf(create_has_table_privilege_3param_udf());
-    session_context.register_udf(create_pg_table_is_visible());
+    session_context.register_udf(create_has_privilege_2param_udf("has_table_privilege"));
+    session_context.register_udf(create_has_privilege_2param_udf(
+        "pg_catalog.has_table_privilege",
+    ));
+    session_context.register_udf(create_has_privilege_2param_udf("has_schema_privilege"));
+    session_context.register_udf(create_has_privilege_2param_udf(
+        "pg_catalog.has_schema_privilege",
+    ));
+    session_context.register_udf(create_has_privilege_2param_udf("has_any_column_privilege"));
+    session_context.register_udf(create_has_privilege_2param_udf(
+        "pg_catalog.has_any_column_privilege",
+    ));
+    session_context.register_udf(create_has_privilege_3param_udf("has_table_privilege"));
+    session_context.register_udf(create_has_privilege_3param_udf(
+        "pg_catalog.has_table_privilege",
+    ));
+    session_context.register_udf(create_has_privilege_3param_udf("has_schema_privilege"));
+    session_context.register_udf(create_has_privilege_3param_udf(
+        "pg_catalog.has_schema_privilege",
+    ));
+    session_context.register_udf(create_has_privilege_3param_udf("has_any_column_privilege"));
+    session_context.register_udf(create_has_privilege_3param_udf(
+        "pg_catalog.has_any_column_privilege",
+    ));
+    session_context.register_udf(create_pg_table_is_visible("pg_catalog"));
+    session_context.register_udf(create_pg_table_is_visible("pg_catalog.pg_table_is_visible"));
     session_context.register_udf(create_format_type_udf());
     session_context.register_udf(create_session_user_udf());
     session_context.register_udtf("pg_get_keywords", static_tables.pg_get_keywords.clone());

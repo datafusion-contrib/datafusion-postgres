@@ -613,6 +613,57 @@ impl SqlStatementRewriteRule for RemoveTableFunctionQualifier {
     }
 }
 
+/// Replace `current_user` with `session_user()`
+#[derive(Debug)]
+pub struct CurrentUserVariableToSessionUserFunctionCall;
+
+struct CurrentUserVariableToSessionUserFunctionCallVisitor;
+
+impl VisitorMut for CurrentUserVariableToSessionUserFunctionCallVisitor {
+    type Break = ();
+
+    fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
+        if let Expr::Identifier(ident) = expr {
+            if ident.quote_style.is_none() && ident.value.to_lowercase() == "current_user" {
+                *expr = Expr::Function(Function {
+                    name: ObjectName::from(vec![Ident::new("session_user")]),
+                    args: FunctionArguments::None,
+                    uses_odbc_syntax: false,
+                    parameters: FunctionArguments::None,
+                    filter: None,
+                    null_treatment: None,
+                    over: None,
+                    within_group: vec![],
+                });
+            }
+        }
+
+        if let Expr::Function(func) = expr {
+            let fname = func
+                .name
+                .0
+                .iter()
+                .map(|ident| ident.to_string())
+                .collect::<Vec<String>>()
+                .join(".");
+            if fname.to_lowercase() == "current_user" {
+                func.name = ObjectName::from(vec![Ident::new("session_user")])
+            }
+        }
+
+        ControlFlow::Continue(())
+    }
+}
+
+impl SqlStatementRewriteRule for CurrentUserVariableToSessionUserFunctionCall {
+    fn rewrite(&self, mut s: Statement) -> Statement {
+        let mut visitor = CurrentUserVariableToSessionUserFunctionCallVisitor;
+
+        let _ = s.visit(&mut visitor);
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,6 +851,22 @@ mod tests {
             &rules,
             "SELECT * FROM pg_catalog.pg_get_keywords()",
             "SELECT * FROM pg_get_keywords()"
+        );
+    }
+
+    #[test]
+    fn test_current_user() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(CurrentUserVariableToSessionUserFunctionCall)];
+
+        assert_rewrite!(&rules, "SELECT current_user", "SELECT session_user");
+
+        assert_rewrite!(&rules, "SELECT CURRENT_USER", "SELECT session_user");
+
+        assert_rewrite!(
+            &rules,
+            "SELECT is_null(current_user)",
+            "SELECT is_null(session_user)"
         );
     }
 }
