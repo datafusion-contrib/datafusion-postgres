@@ -20,6 +20,7 @@ use datafusion::prelude::{create_udf, Expr, SessionContext};
 use postgres_types::Oid;
 use tokio::sync::RwLock;
 
+mod empty_table;
 mod pg_attribute;
 mod pg_class;
 mod pg_database;
@@ -94,6 +95,7 @@ const PG_CATALOG_VIEW_PG_SETTINGS: &str = "pg_settings";
 const PG_CATALOG_VIEW_PG_VIEWS: &str = "pg_views";
 const PG_CATALOG_VIEW_PG_MATVIEWS: &str = "pg_matviews";
 const PG_CATALOG_VIEW_PG_TABLES: &str = "pg_tables";
+const PG_CATALOG_VIEW_PG_STAT_USER_TABELS: &str = "pg_stat_user_tables";
 
 /// Determine PostgreSQL table type (relkind) from DataFusion TableProvider
 fn get_table_type(table: &Arc<dyn TableProvider>) -> &'static str {
@@ -191,6 +193,7 @@ pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_VIEW_PG_SETTINGS,
     PG_CATALOG_VIEW_PG_VIEWS,
     PG_CATALOG_VIEW_PG_MATVIEWS,
+    PG_CATALOG_VIEW_PG_STAT_USER_TABELS,
 ];
 
 #[derive(Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
@@ -371,13 +374,10 @@ impl SchemaProvider for PgCatalogSchemaProvider {
                 let table = pg_settings::PgSettingsView::try_new()?;
                 Ok(Some(Arc::new(table.try_into_memtable()?)))
             }
-            PG_CATALOG_VIEW_PG_VIEWS => {
-                let table = pg_views::PgViewsTable::new();
-                Ok(Some(Arc::new(table.try_into_memtable()?)))
-            }
-            PG_CATALOG_VIEW_PG_MATVIEWS => {
-                let table = pg_views::PgMatviewsTable::new();
-                Ok(Some(Arc::new(table.try_into_memtable()?)))
+            PG_CATALOG_VIEW_PG_VIEWS => Ok(Some(Arc::new(pg_views::pg_views()?))),
+            PG_CATALOG_VIEW_PG_MATVIEWS => Ok(Some(Arc::new(pg_views::pg_matviews()?))),
+            PG_CATALOG_VIEW_PG_STAT_USER_TABELS => {
+                Ok(Some(Arc::new(pg_views::pg_stat_user_tables()?)))
             }
 
             _ => Ok(None),
