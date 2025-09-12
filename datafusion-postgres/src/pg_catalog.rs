@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{
-    as_boolean_array, ArrayRef, BooleanArray, BooleanBuilder, RecordBatch, StringArray,
-    StringBuilder,
+    as_boolean_array, ArrayRef, BooleanBuilder, RecordBatch, StringArray, StringBuilder,
 };
 use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::arrow::ipc::reader::FileReader;
@@ -21,6 +20,7 @@ use postgres_types::Oid;
 use tokio::sync::RwLock;
 
 mod empty_table;
+mod has_privilege_udf;
 mod pg_attribute;
 mod pg_class;
 mod pg_database;
@@ -863,62 +863,6 @@ pub fn create_pg_table_is_visible(name: &str) -> ScalarUDF {
     )
 }
 
-pub fn create_has_privilege_3param_udf(name: &str) -> ScalarUDF {
-    // Define the function implementation for 3-parameter version
-    let func = move |args: &[ColumnarValue]| {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        let user = &args[0]; // User (can be name or OID)
-        let _obj = &args[1]; // Table (can be name or OID)
-        let _privilege = &args[2]; // Privilege type (SELECT, INSERT, etc.)
-
-        // For now, always return true (full access)
-        let mut builder = BooleanArray::builder(user.len());
-        for _ in 0..user.len() {
-            builder.append_value(true);
-        }
-
-        let array: ArrayRef = Arc::new(builder.finish());
-
-        Ok(ColumnarValue::Array(array))
-    };
-
-    // Wrap the implementation in a scalar function
-    create_udf(
-        name,
-        vec![DataType::Utf8, DataType::Utf8, DataType::Utf8],
-        DataType::Boolean,
-        Volatility::Stable,
-        Arc::new(func),
-    )
-}
-
-pub fn create_has_privilege_2param_udf(name: &str) -> ScalarUDF {
-    // Define the function implementation for 2-parameter version (current user, table, privilege)
-    let func = move |args: &[ColumnarValue]| {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        let obj = &args[0]; // Table (can be name or OID)
-        let _privilege = &args[1]; // Privilege type (SELECT, INSERT, etc.)
-
-        // For now, always return true (full access for current user)
-        let mut builder = BooleanArray::builder(obj.len());
-        for _ in 0..obj.len() {
-            builder.append_value(true);
-        }
-        let array: ArrayRef = Arc::new(builder.finish());
-
-        Ok(ColumnarValue::Array(array))
-    };
-
-    // Wrap the implementation in a scalar function
-    create_udf(
-        name,
-        vec![DataType::Utf8, DataType::Utf8],
-        DataType::Boolean,
-        Volatility::Stable,
-        Arc::new(func),
-    )
-}
-
 pub fn create_format_type_udf() -> ScalarUDF {
     let func = move |args: &[ColumnarValue]| {
         let args = ColumnarValue::values_to_arrays(args)?;
@@ -1015,28 +959,22 @@ pub fn setup_pg_catalog(
     session_context.register_udf(create_current_schemas_udf("pg_catalog.current_schemas"));
     session_context.register_udf(create_version_udf());
     session_context.register_udf(create_pg_get_userbyid_udf());
-    session_context.register_udf(create_has_privilege_2param_udf("has_table_privilege"));
-    session_context.register_udf(create_has_privilege_2param_udf(
+    session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
+        "has_table_privilege",
+    ));
+    session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
         "pg_catalog.has_table_privilege",
     ));
-    session_context.register_udf(create_has_privilege_2param_udf("has_schema_privilege"));
-    session_context.register_udf(create_has_privilege_2param_udf(
+    session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
+        "has_schema_privilege",
+    ));
+    session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
         "pg_catalog.has_schema_privilege",
     ));
-    session_context.register_udf(create_has_privilege_2param_udf("has_any_column_privilege"));
-    session_context.register_udf(create_has_privilege_2param_udf(
-        "pg_catalog.has_any_column_privilege",
+    session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
+        "has_any_column_privilege",
     ));
-    session_context.register_udf(create_has_privilege_3param_udf("has_table_privilege"));
-    session_context.register_udf(create_has_privilege_3param_udf(
-        "pg_catalog.has_table_privilege",
-    ));
-    session_context.register_udf(create_has_privilege_3param_udf("has_schema_privilege"));
-    session_context.register_udf(create_has_privilege_3param_udf(
-        "pg_catalog.has_schema_privilege",
-    ));
-    session_context.register_udf(create_has_privilege_3param_udf("has_any_column_privilege"));
-    session_context.register_udf(create_has_privilege_3param_udf(
+    session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
         "pg_catalog.has_any_column_privilege",
     ));
     session_context.register_udf(create_pg_table_is_visible("pg_catalog"));
@@ -1044,7 +982,7 @@ pub fn setup_pg_catalog(
     session_context.register_udf(create_format_type_udf());
     session_context.register_udf(create_session_user_udf());
     session_context.register_udtf("pg_get_keywords", static_tables.pg_get_keywords.clone());
-    session_context.register_udf(pg_get_expr_udf::PgGetExprUDF::new().into_scalar_udf());
+    session_context.register_udf(pg_get_expr_udf::create_pg_get_expr_udf());
     session_context.register_udf(create_pg_get_partkeydef_udf());
 
     Ok(())

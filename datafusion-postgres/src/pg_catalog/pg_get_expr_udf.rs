@@ -72,3 +72,7 @@ impl ScalarUDFImpl for PgGetExprUDF {
         self
     }
 }
+
+pub fn create_pg_get_expr_udf() -> ScalarUDF {
+    PgGetExprUDF::new().into_scalar_udf()
+}
