@@ -9,7 +9,9 @@ use crate::sql::{
     RewriteArrayAnyAllOperation, SqlStatementRewriteRule,
 };
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::common::ToDFSchema;
+use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
 use datafusion::sql::parser::Statement;
@@ -718,24 +720,15 @@ pub struct Parser {
     sql_rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>>,
 }
 
-#[async_trait]
-impl QueryParser for Parser {
-    type Statement = (String, LogicalPlan);
-
-    async fn parse_sql<C>(
-        &self,
-        _client: &C,
-        sql: &str,
-        _types: &[Type],
-    ) -> PgWireResult<Self::Statement> {
-        log::debug!("Received parse extended query: {sql}"); // Log for debugging
-
+impl Parser {
+    fn try_shortcut_parse_plan(&self, sql: &str) -> Result<Option<LogicalPlan>, DataFusionError> {
         // Check for transaction commands that shouldn't be parsed by DataFusion
         let sql_lower = sql.to_lowercase();
         let sql_trimmed = sql_lower.trim();
+
         if matches!(
             sql_trimmed,
-            "begin"
+            "" | "begin"
                 | "begin transaction"
                 | "begin work"
                 | "start transaction"
@@ -751,13 +744,50 @@ impl QueryParser for Parser {
         ) {
             // Return a dummy plan for transaction commands - they'll be handled by transaction handler
             let dummy_schema = datafusion::common::DFSchema::empty();
-            let dummy_plan = datafusion::logical_expr::LogicalPlan::EmptyRelation(
+            return Ok(Some(LogicalPlan::EmptyRelation(
                 datafusion::logical_expr::EmptyRelation {
                     produce_one_row: false,
-                    schema: std::sync::Arc::new(dummy_schema),
+                    schema: Arc::new(dummy_schema),
                 },
-            );
-            return Ok((sql.to_string(), dummy_plan));
+            )));
+        }
+
+        // show statement may not be supported by datafusion
+        if sql_trimmed.starts_with("show") {
+            // Return a dummy plan for transaction commands - they'll be handled by transaction handler
+            let show_schema =
+                Arc::new(Schema::new(vec![Field::new("show", DataType::Utf8, false)]));
+            let df_schema = show_schema.to_dfschema()?;
+            return Ok(Some(LogicalPlan::EmptyRelation(
+                datafusion::logical_expr::EmptyRelation {
+                    produce_one_row: true,
+                    schema: Arc::new(df_schema),
+                },
+            )));
+        }
+
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl QueryParser for Parser {
+    type Statement = (String, LogicalPlan);
+
+    async fn parse_sql<C>(
+        &self,
+        _client: &C,
+        sql: &str,
+        _types: &[Type],
+    ) -> PgWireResult<Self::Statement> {
+        log::debug!("Received parse extended query: {sql}"); // Log for debugging
+
+        // Check for transaction commands that shouldn't be parsed by DataFusion
+        if let Some(plan) = self
+            .try_shortcut_parse_plan(&sql)
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?
+        {
+            return Ok((sql.to_string(), plan));
         }
 
         let mut statements = parse(sql).map_err(|e| PgWireError::ApiError(Box::new(e)))?;
