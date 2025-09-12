@@ -420,13 +420,15 @@ impl DfSessionService {
                     let resp = Self::mock_show_response("statement_timeout", &timeout_str)?;
                     Ok(Some(Response::Query(resp)))
                 }
-                _ => Err(PgWireError::UserError(Box::new(
-                    pgwire::error::ErrorInfo::new(
-                        "ERROR".to_string(),
-                        "42704".to_string(),
-                        format!("Unrecognized SHOW command: {query_lower}"),
-                    ),
-                ))),
+                "show transaction isolation level" => {
+                    let resp = Self::mock_show_response("transaction_isolation", "read_committed")?;
+                    Ok(Some(Response::Query(resp)))
+                }
+                _ => {
+                    info!("Unsupported show statement: {query_lower}");
+                    let resp = Self::mock_show_response("unsupported_show_statement", "")?;
+                    Ok(Some(Response::Query(resp)))
+                }
             }
         } else {
             Ok(None)

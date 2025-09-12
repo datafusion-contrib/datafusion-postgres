@@ -26,6 +26,7 @@ mod pg_database;
 mod pg_get_expr_udf;
 mod pg_namespace;
 mod pg_settings;
+mod pg_views;
 
 const PG_CATALOG_TABLE_PG_AGGREGATE: &str = "pg_aggregate";
 const PG_CATALOG_TABLE_PG_AM: &str = "pg_am";
@@ -687,7 +688,7 @@ impl PgCatalogStaticTables {
     }
 }
 
-pub fn create_current_schemas_udf() -> ScalarUDF {
+pub fn create_current_schemas_udf(name: &str) -> ScalarUDF {
     // Define the function implementation
     let func = move |args: &[ColumnarValue]| {
         let args = ColumnarValue::values_to_arrays(args)?;
@@ -710,7 +711,7 @@ pub fn create_current_schemas_udf() -> ScalarUDF {
 
     // Wrap the implementation in a scalar function
     create_udf(
-        "current_schemas",
+        name,
         vec![DataType::Boolean],
         DataType::List(Arc::new(Field::new("schema", DataType::Utf8, false))),
         Volatility::Immutable,
@@ -718,7 +719,7 @@ pub fn create_current_schemas_udf() -> ScalarUDF {
     )
 }
 
-pub fn create_current_schema_udf() -> ScalarUDF {
+pub fn create_current_schema_udf(name: &str) -> ScalarUDF {
     // Define the function implementation
     let func = move |_args: &[ColumnarValue]| {
         // Create a UTF8 array with a single value
@@ -731,7 +732,28 @@ pub fn create_current_schema_udf() -> ScalarUDF {
 
     // Wrap the implementation in a scalar function
     create_udf(
-        "current_schema",
+        name,
+        vec![],
+        DataType::Utf8,
+        Volatility::Immutable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_current_database_udf(name: &str) -> ScalarUDF {
+    // Define the function implementation
+    let func = move |_args: &[ColumnarValue]| {
+        // Create a UTF8 array with a single value
+        let mut builder = StringBuilder::new();
+        builder.append_value("datafusion");
+        let array: ArrayRef = Arc::new(builder.finish());
+
+        Ok(ColumnarValue::Array(array))
+    };
+
+    // Wrap the implementation in a scalar function
+    create_udf(
+        name,
         vec![],
         DataType::Utf8,
         Volatility::Immutable,
@@ -962,11 +984,15 @@ pub fn setup_pg_catalog(
         })?
         .register_schema("pg_catalog", Arc::new(pg_catalog))?;
 
-    session_context.register_udf(create_current_schema_udf());
-    session_context.register_udf(create_current_schemas_udf());
+    session_context.register_udf(create_current_database_udf("current_database"));
+    session_context.register_udf(create_current_schema_udf("current_schema"));
+    session_context.register_udf(create_current_schema_udf("pg_catalog.current_schema"));
+    session_context.register_udf(create_current_schemas_udf("current_schemas"));
+    session_context.register_udf(create_current_schemas_udf("pg_catalog.current_schemas"));
     session_context.register_udf(create_version_udf());
     session_context.register_udf(create_pg_get_userbyid_udf());
     session_context.register_udf(create_has_table_privilege_2param_udf());
+    session_context.register_udf(create_has_table_privilege_3param_udf());
     session_context.register_udf(create_pg_table_is_visible());
     session_context.register_udf(create_format_type_udf());
     session_context.register_udf(create_session_user_udf());
