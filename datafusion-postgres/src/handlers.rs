@@ -1081,9 +1081,11 @@ mod tests {
         let service = DfSessionService::new(session_context, auth_manager);
         let mut client = MockClient::new();
 
-        // Test setting timeout to 5000ms
+        // Test setting timeout using structured AST parsing
+        use crate::sql::parse;
+        let set_statements = parse("SET statement_timeout = '5000ms'").unwrap();
         let set_response = service
-            .try_respond_set_statements(&mut client, "set statement_timeout '5000ms'")
+            .try_handle_structured_statement(&mut client, &set_statements[0])
             .await
             .unwrap();
         assert!(set_response.is_some());
@@ -1092,9 +1094,10 @@ mod tests {
         let timeout = DfSessionService::get_statement_timeout(&client);
         assert_eq!(timeout, Some(Duration::from_millis(5000)));
 
-        // Test SHOW statement_timeout
+        // Test SHOW statement_timeout using structured AST parsing
+        let show_statements = parse("SHOW statement_timeout").unwrap();
         let show_response = service
-            .try_respond_show_statements(&client, "show statement_timeout")
+            .try_handle_structured_statement(&mut client, &show_statements[0])
             .await
             .unwrap();
         assert!(show_response.is_some());
@@ -1107,15 +1110,18 @@ mod tests {
         let service = DfSessionService::new(session_context, auth_manager);
         let mut client = MockClient::new();
 
-        // Set timeout first
+        // Set timeout first using structured AST
+        use crate::sql::parse;
+        let set_statements = parse("SET statement_timeout = '1000ms'").unwrap();
         service
-            .try_respond_set_statements(&mut client, "set statement_timeout '1000ms'")
+            .try_handle_structured_statement(&mut client, &set_statements[0])
             .await
             .unwrap();
 
-        // Disable timeout with 0
+        // Disable timeout with 0 using structured AST
+        let disable_statements = parse("SET statement_timeout = '0'").unwrap();
         service
-            .try_respond_set_statements(&mut client, "set statement_timeout '0'")
+            .try_handle_structured_statement(&mut client, &disable_statements[0])
             .await
             .unwrap();
 
