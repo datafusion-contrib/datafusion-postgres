@@ -6,7 +6,7 @@ use datafusion::arrow::array::{
     ArrayRef, BooleanArray, Float64Array, Int16Array, Int32Array, RecordBatch, StringArray,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::catalog::CatalogProviderList;
+use datafusion::datasource::TableType;
 use datafusion::error::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -14,22 +14,24 @@ use datafusion::physical_plan::streaming::PartitionStream;
 use postgres_types::Oid;
 use tokio::sync::RwLock;
 
-use super::{get_table_type_with_name, OidCacheKey};
+use crate::pg_catalog::catalog_info::{table_type_to_string, CatalogInfo};
+
+use super::OidCacheKey;
 
 #[derive(Debug, Clone)]
-pub(crate) struct PgClassTable {
+pub(crate) struct PgClassTable<C> {
     schema: SchemaRef,
-    catalog_list: Arc<dyn CatalogProviderList>,
+    catalog_list: C,
     oid_counter: Arc<AtomicU32>,
     oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
 }
 
-impl PgClassTable {
+impl<C: CatalogInfo> PgClassTable<C> {
     pub(crate) fn new(
-        catalog_list: Arc<dyn CatalogProviderList>,
+        catalog_list: C,
         oid_counter: Arc<AtomicU32>,
         oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
-    ) -> PgClassTable {
+    ) -> Self {
         // Define the schema for pg_class
         // This matches key columns from PostgreSQL's pg_class
         let schema = Arc::new(Schema::new(vec![
@@ -75,7 +77,7 @@ impl PgClassTable {
     }
 
     /// Generate record batches based on the current state of the catalog
-    async fn get_data(this: PgClassTable) -> Result<RecordBatch> {
+    async fn get_data(this: Self) -> Result<RecordBatch> {
         // Vectors to store column data
         let mut oids = Vec::new();
         let mut relnames = Vec::new();
@@ -124,23 +126,24 @@ impl PgClassTable {
             };
             swap_cache.insert(cache_key, catalog_oid);
 
-            if let Some(catalog) = this.catalog_list.catalog(&catalog_name) {
-                for schema_name in catalog.schema_names() {
-                    if let Some(schema) = catalog.schema(&schema_name) {
-                        let cache_key =
-                            OidCacheKey::Schema(catalog_name.clone(), schema_name.clone());
-                        let schema_oid = if let Some(oid) = oid_cache.get(&cache_key) {
-                            *oid
-                        } else {
-                            this.oid_counter.fetch_add(1, Ordering::Relaxed)
-                        };
-                        swap_cache.insert(cache_key, schema_oid);
+            if let Some(schema_names) = this.catalog_list.schema_names(&catalog_name) {
+                for schema_name in schema_names {
+                    let cache_key = OidCacheKey::Schema(catalog_name.clone(), schema_name.clone());
+                    let schema_oid = if let Some(oid) = oid_cache.get(&cache_key) {
+                        *oid
+                    } else {
+                        this.oid_counter.fetch_add(1, Ordering::Relaxed)
+                    };
+                    swap_cache.insert(cache_key, schema_oid);
 
-                        // Add an entry for the schema itself (as a namespace)
-                        // (In a full implementation, this would go in pg_namespace)
+                    // Add an entry for the schema itself (as a namespace)
+                    // (In a full implementation, this would go in pg_namespace)
 
-                        // Now process all tables in this schema
-                        for table_name in schema.table_names() {
+                    // Now process all tables in this schema
+                    if let Some(table_names) =
+                        this.catalog_list.table_names(&catalog_name, &schema_name)
+                    {
+                        for table_name in table_names {
                             let cache_key = OidCacheKey::Table(
                                 catalog_name.clone(),
                                 schema_name.clone(),
@@ -153,13 +156,20 @@ impl PgClassTable {
                             };
                             swap_cache.insert(cache_key, table_oid);
 
-                            if let Some(table) = schema.table(&table_name).await? {
+                            if let Some(table_schema) = this
+                                .catalog_list
+                                .table_schema(&catalog_name, &schema_name, &table_name)
+                                .await?
+                            {
                                 // Determine the correct table type based on the table provider and context
-                                let table_type =
-                                    get_table_type_with_name(&table, &table_name, &schema_name);
+                                let table_type = this
+                                    .catalog_list
+                                    .table_type(&catalog_name, &schema_name, &table_name)
+                                    .await?
+                                    .unwrap_or(TableType::Temporary);
 
                                 // Get column count from schema
-                                let column_count = table.schema().fields().len() as i16;
+                                let column_count = table_schema.fields().len() as i16;
 
                                 // Add table entry
                                 oids.push(table_oid as i32);
@@ -178,7 +188,7 @@ impl PgClassTable {
                                 relhasindexes.push(false);
                                 relisshareds.push(false);
                                 relpersistences.push("p".to_string()); // Permanent
-                                relkinds.push(table_type.to_string());
+                                relkinds.push(table_type_to_string(&table_type));
                                 relnattses.push(column_count);
                                 relcheckses.push(0);
                                 relhasruleses.push(false);
@@ -244,7 +254,7 @@ impl PgClassTable {
     }
 }
 
-impl PartitionStream for PgClassTable {
+impl<C: CatalogInfo> PartitionStream for PgClassTable<C> {
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }

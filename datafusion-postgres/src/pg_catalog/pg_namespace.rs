@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::catalog::CatalogProviderList;
 use datafusion::error::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -12,19 +11,21 @@ use datafusion::physical_plan::streaming::PartitionStream;
 use postgres_types::Oid;
 use tokio::sync::RwLock;
 
+use crate::pg_catalog::catalog_info::CatalogInfo;
+
 use super::OidCacheKey;
 
 #[derive(Debug, Clone)]
-pub(crate) struct PgNamespaceTable {
+pub(crate) struct PgNamespaceTable<C> {
     schema: SchemaRef,
-    catalog_list: Arc<dyn CatalogProviderList>,
+    catalog_list: C,
     oid_counter: Arc<AtomicU32>,
     oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
 }
 
-impl PgNamespaceTable {
+impl<C: CatalogInfo> PgNamespaceTable<C> {
     pub(crate) fn new(
-        catalog_list: Arc<dyn CatalogProviderList>,
+        catalog_list: C,
         oid_counter: Arc<AtomicU32>,
         oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
     ) -> Self {
@@ -47,7 +48,7 @@ impl PgNamespaceTable {
     }
 
     /// Generate record batches based on the current state of the catalog
-    async fn get_data(this: PgNamespaceTable) -> Result<RecordBatch> {
+    async fn get_data(this: Self) -> Result<RecordBatch> {
         // Vectors to store column data
         let mut oids = Vec::new();
         let mut nspnames = Vec::new();
@@ -62,8 +63,8 @@ impl PgNamespaceTable {
 
         // Now add all schemas from DataFusion catalogs
         for catalog_name in this.catalog_list.catalog_names() {
-            if let Some(catalog) = this.catalog_list.catalog(&catalog_name) {
-                for schema_name in catalog.schema_names() {
+            if let Some(schema_names) = this.catalog_list.schema_names(&catalog_name) {
+                for schema_name in schema_names {
                     let cache_key = OidCacheKey::Schema(catalog_name.clone(), schema_name.clone());
                     let schema_oid = if let Some(oid) = oid_cache.get(&cache_key) {
                         *oid
@@ -107,7 +108,7 @@ impl PgNamespaceTable {
     }
 }
 
-impl PartitionStream for PgNamespaceTable {
+impl<C: CatalogInfo> PartitionStream for PgNamespaceTable<C> {
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }

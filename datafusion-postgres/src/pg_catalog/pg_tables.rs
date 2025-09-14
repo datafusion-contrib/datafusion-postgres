@@ -2,20 +2,21 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::catalog::CatalogProviderList;
 use datafusion::error::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::PartitionStream;
 
+use crate::pg_catalog::catalog_info::CatalogInfo;
+
 #[derive(Debug, Clone)]
-pub(crate) struct PgTablesTable {
+pub(crate) struct PgTablesTable<C> {
     schema: SchemaRef,
-    catalog_list: Arc<dyn CatalogProviderList>,
+    catalog_list: C,
 }
 
-impl PgTablesTable {
-    pub(crate) fn new(catalog_list: Arc<dyn CatalogProviderList>) -> PgTablesTable {
+impl<C: CatalogInfo> PgTablesTable<C> {
+    pub(crate) fn new(catalog_list: C) -> Self {
         // Define the schema for pg_class
         // This matches key columns from PostgreSQL's pg_class
         let schema = Arc::new(Schema::new(vec![
@@ -36,7 +37,7 @@ impl PgTablesTable {
     }
 
     /// Generate record batches based on the current state of the catalog
-    async fn get_data(this: PgTablesTable) -> Result<RecordBatch> {
+    async fn get_data(this: Self) -> Result<RecordBatch> {
         // Vectors to store column data
         let mut schema_names = Vec::new();
         let mut table_names = Vec::new();
@@ -49,11 +50,13 @@ impl PgTablesTable {
 
         // Iterate through all catalogs and schemas
         for catalog_name in this.catalog_list.catalog_names() {
-            if let Some(catalog) = this.catalog_list.catalog(&catalog_name) {
-                for schema_name in catalog.schema_names() {
-                    if let Some(schema) = catalog.schema(&schema_name) {
+            if let Some(catalog_schema_names) = this.catalog_list.schema_names(&catalog_name) {
+                for schema_name in catalog_schema_names {
+                    if let Some(catalog_table_names) =
+                        this.catalog_list.table_names(&catalog_name, &schema_name)
+                    {
                         // Now process all tables in this schema
-                        for table_name in schema.table_names() {
+                        for table_name in catalog_table_names {
                             schema_names.push(schema_name.to_string());
                             table_names.push(table_name.to_string());
                             table_owners.push("postgres".to_string());
@@ -87,7 +90,7 @@ impl PgTablesTable {
     }
 }
 
-impl PartitionStream for PgTablesTable {
+impl<C: CatalogInfo> PartitionStream for PgTablesTable<C> {
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }

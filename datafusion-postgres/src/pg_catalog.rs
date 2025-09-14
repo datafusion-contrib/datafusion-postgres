@@ -9,9 +9,9 @@ use datafusion::arrow::array::{
 use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::arrow::ipc::reader::FileReader;
 use datafusion::catalog::streaming::StreamingTable;
-use datafusion::catalog::{CatalogProviderList, MemTable, SchemaProvider, TableFunctionImpl};
+use datafusion::catalog::{MemTable, SchemaProvider, TableFunctionImpl};
 use datafusion::common::utils::SingleRowListArrayBuilder;
-use datafusion::datasource::{TableProvider, ViewTable};
+use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDF, Volatility};
 use datafusion::physical_plan::streaming::PartitionStream;
@@ -19,6 +19,9 @@ use datafusion::prelude::{create_udf, Expr, SessionContext};
 use postgres_types::Oid;
 use tokio::sync::RwLock;
 
+use crate::pg_catalog::catalog_info::CatalogInfo;
+
+pub mod catalog_info;
 pub mod empty_table;
 pub mod has_privilege_udf;
 pub mod pg_attribute;
@@ -96,37 +99,6 @@ const PG_CATALOG_VIEW_PG_VIEWS: &str = "pg_views";
 const PG_CATALOG_VIEW_PG_MATVIEWS: &str = "pg_matviews";
 const PG_CATALOG_VIEW_PG_TABLES: &str = "pg_tables";
 const PG_CATALOG_VIEW_PG_STAT_USER_TABELS: &str = "pg_stat_user_tables";
-
-/// Determine PostgreSQL table type (relkind) from DataFusion TableProvider
-fn get_table_type(table: &Arc<dyn TableProvider>) -> &'static str {
-    // Use Any trait to determine the actual table provider type
-    if table.as_any().is::<ViewTable>() {
-        "v" // view
-    } else {
-        "r" // All other table types (StreamingTable, MemTable, etc.) are treated as regular tables
-    }
-}
-
-/// Determine PostgreSQL table type (relkind) with table name context
-fn get_table_type_with_name(
-    table: &Arc<dyn TableProvider>,
-    table_name: &str,
-    schema_name: &str,
-) -> &'static str {
-    // Check if this is a system catalog table
-    if schema_name == "pg_catalog" || schema_name == "information_schema" {
-        if table_name.starts_with("pg_")
-            || table_name.contains("_table")
-            || table_name.contains("_column")
-        {
-            "r" // System tables are still regular tables in PostgreSQL
-        } else {
-            "v" // Some system objects might be views
-        }
-    } else {
-        get_table_type(table)
-    }
-}
 
 pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_TABLE_PG_AGGREGATE,
@@ -206,15 +178,15 @@ pub(crate) enum OidCacheKey {
 
 // Create custom schema provider for pg_catalog
 #[derive(Debug)]
-pub struct PgCatalogSchemaProvider {
-    catalog_list: Arc<dyn CatalogProviderList>,
+pub struct PgCatalogSchemaProvider<C> {
+    catalog_list: C,
     oid_counter: Arc<AtomicU32>,
     oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
     static_tables: Arc<PgCatalogStaticTables>,
 }
 
 #[async_trait]
-impl SchemaProvider for PgCatalogSchemaProvider {
+impl<C: CatalogInfo> SchemaProvider for PgCatalogSchemaProvider<C> {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -389,11 +361,11 @@ impl SchemaProvider for PgCatalogSchemaProvider {
     }
 }
 
-impl PgCatalogSchemaProvider {
+impl<C: CatalogInfo> PgCatalogSchemaProvider<C> {
     pub fn try_new(
-        catalog_list: Arc<dyn CatalogProviderList>,
+        catalog_list: C,
         static_tables: Arc<PgCatalogStaticTables>,
-    ) -> Result<PgCatalogSchemaProvider> {
+    ) -> Result<PgCatalogSchemaProvider<C>> {
         Ok(Self {
             catalog_list,
             oid_counter: Arc::new(AtomicU32::new(16384)),

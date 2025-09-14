@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::catalog::CatalogProviderList;
 use datafusion::error::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -12,19 +11,21 @@ use datafusion::physical_plan::streaming::PartitionStream;
 use postgres_types::Oid;
 use tokio::sync::RwLock;
 
+use crate::pg_catalog::catalog_info::CatalogInfo;
+
 use super::OidCacheKey;
 
 #[derive(Debug, Clone)]
-pub(crate) struct PgDatabaseTable {
+pub(crate) struct PgDatabaseTable<C> {
     schema: SchemaRef,
-    catalog_list: Arc<dyn CatalogProviderList>,
+    catalog_list: C,
     oid_counter: Arc<AtomicU32>,
     oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
 }
 
-impl PgDatabaseTable {
+impl<C: CatalogInfo> PgDatabaseTable<C> {
     pub(crate) fn new(
-        catalog_list: Arc<dyn CatalogProviderList>,
+        catalog_list: C,
         oid_counter: Arc<AtomicU32>,
         oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
     ) -> Self {
@@ -56,7 +57,7 @@ impl PgDatabaseTable {
     }
 
     /// Generate record batches based on the current state of the catalog
-    async fn get_data(this: PgDatabaseTable) -> Result<RecordBatch> {
+    async fn get_data(this: Self) -> Result<RecordBatch> {
         // Vectors to store column data
         let mut oids = Vec::new();
         let mut datnames = Vec::new();
@@ -171,7 +172,7 @@ impl PgDatabaseTable {
     }
 }
 
-impl PartitionStream for PgDatabaseTable {
+impl<C: CatalogInfo> PartitionStream for PgDatabaseTable<C> {
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }

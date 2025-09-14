@@ -6,7 +6,6 @@ use datafusion::arrow::array::{
     ArrayRef, BooleanArray, Int16Array, Int32Array, RecordBatch, StringArray,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::catalog::CatalogProviderList;
 use datafusion::error::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -14,19 +13,21 @@ use datafusion::physical_plan::streaming::PartitionStream;
 use postgres_types::Oid;
 use tokio::sync::RwLock;
 
+use crate::pg_catalog::catalog_info::CatalogInfo;
+
 use super::OidCacheKey;
 
 #[derive(Debug, Clone)]
-pub(crate) struct PgAttributeTable {
+pub(crate) struct PgAttributeTable<C> {
     schema: SchemaRef,
-    catalog_list: Arc<dyn CatalogProviderList>,
+    catalog_list: C,
     oid_counter: Arc<AtomicU32>,
     oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
 }
 
-impl PgAttributeTable {
+impl<C: CatalogInfo> PgAttributeTable<C> {
     pub(crate) fn new(
-        catalog_list: Arc<dyn CatalogProviderList>,
+        catalog_list: C,
         oid_counter: Arc<AtomicU32>,
         oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
     ) -> Self {
@@ -105,11 +106,13 @@ impl PgAttributeTable {
         let mut swap_cache = HashMap::new();
 
         for catalog_name in this.catalog_list.catalog_names() {
-            if let Some(catalog) = this.catalog_list.catalog(&catalog_name) {
-                for schema_name in catalog.schema_names() {
-                    if let Some(schema_provider) = catalog.schema(&schema_name) {
+            if let Some(schema_names) = this.catalog_list.schema_names(&catalog_name) {
+                for schema_name in schema_names {
+                    if let Some(table_names) =
+                        this.catalog_list.table_names(&catalog_name, &schema_name)
+                    {
                         // Process all tables in this schema
-                        for table_name in schema_provider.table_names() {
+                        for table_name in table_names {
                             let cache_key = OidCacheKey::Table(
                                 catalog_name.clone(),
                                 schema_name.clone(),
@@ -122,9 +125,11 @@ impl PgAttributeTable {
                             };
                             swap_cache.insert(cache_key, table_oid);
 
-                            if let Some(table) = schema_provider.table(&table_name).await? {
-                                let table_schema = table.schema();
-
+                            if let Some(table_schema) = this
+                                .catalog_list
+                                .table_schema(&catalog_name, &schema_name, &table_name)
+                                .await?
+                            {
                                 // Add column entries for this table
                                 for (column_idx, field) in table_schema.fields().iter().enumerate()
                                 {
@@ -233,7 +238,7 @@ impl PgAttributeTable {
     }
 }
 
-impl PartitionStream for PgAttributeTable {
+impl<C: CatalogInfo> PartitionStream for PgAttributeTable<C> {
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }
