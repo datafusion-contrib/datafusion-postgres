@@ -419,90 +419,6 @@ impl DfSessionService {
         }
     }
 
-    /// Legacy string-based SET statement handler (deprecated - use structured AST instead)
-    #[deprecated(note = "Use try_handle_structured_statement instead")]
-    async fn try_respond_set_statements<'a, C>(
-        &self,
-        client: &mut C,
-        query_lower: &str,
-    ) -> PgWireResult<Option<Response<'a>>>
-    where
-        C: ClientInfo,
-    {
-        if query_lower.starts_with("set") {
-            if query_lower.starts_with("set time zone") {
-                let parts: Vec<&str> = query_lower.split_whitespace().collect();
-                if parts.len() >= 4 {
-                    let tz = parts[3].trim_matches('"');
-                    let mut timezone = self.timezone.lock().await;
-                    *timezone = tz.to_string();
-                    Ok(Some(Response::Execution(Tag::new("SET"))))
-                } else {
-                    Err(PgWireError::UserError(Box::new(
-                        pgwire::error::ErrorInfo::new(
-                            "ERROR".to_string(),
-                            "42601".to_string(),
-                            "Invalid SET TIME ZONE syntax".to_string(),
-                        ),
-                    )))
-                }
-            } else if query_lower.starts_with("set statement_timeout") {
-                let parts: Vec<&str> = query_lower.split_whitespace().collect();
-                if parts.len() >= 3 {
-                    let timeout_str = parts[2].trim_matches('"').trim_matches('\'');
-
-                    let timeout = if timeout_str == "0" || timeout_str.is_empty() {
-                        None
-                    } else {
-                        // Parse timeout value (supports ms, s, min formats)
-                        let timeout_ms = if timeout_str.ends_with("ms") {
-                            timeout_str.trim_end_matches("ms").parse::<u64>()
-                        } else if timeout_str.ends_with("s") {
-                            timeout_str
-                                .trim_end_matches("s")
-                                .parse::<u64>()
-                                .map(|s| s * 1000)
-                        } else if timeout_str.ends_with("min") {
-                            timeout_str
-                                .trim_end_matches("min")
-                                .parse::<u64>()
-                                .map(|m| m * 60 * 1000)
-                        } else {
-                            // Default to milliseconds
-                            timeout_str.parse::<u64>()
-                        };
-
-                        match timeout_ms {
-                            Ok(ms) if ms > 0 => Some(std::time::Duration::from_millis(ms)),
-                            _ => None,
-                        }
-                    };
-
-                    Self::set_statement_timeout(client, timeout);
-                    Ok(Some(Response::Execution(Tag::new("SET"))))
-                } else {
-                    Err(PgWireError::UserError(Box::new(
-                        pgwire::error::ErrorInfo::new(
-                            "ERROR".to_string(),
-                            "42601".to_string(),
-                            "Invalid SET statement_timeout syntax".to_string(),
-                        ),
-                    )))
-                }
-            } else {
-                // pass SET query to datafusion
-                if let Err(e) = self.session_context.sql(query_lower).await {
-                    warn!("SET statement {query_lower} is not supported by datafusion, error {e}, statement ignored");
-                }
-
-                // Always return SET success
-                Ok(Some(Response::Execution(Tag::new("SET"))))
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
     async fn try_respond_transaction_statements<'a, C>(
         &self,
         client: &C,
@@ -555,7 +471,7 @@ impl DfSessionService {
     }
 
     /// Legacy string-based SHOW statement handler (deprecated - use structured AST instead)
-    #[deprecated(note = "Use try_handle_structured_statement instead")]
+    #[allow(dead_code)]
     async fn try_respond_show_statements<'a, C>(
         &self,
         client: &C,
