@@ -419,6 +419,8 @@ impl DfSessionService {
         }
     }
 
+    /// Legacy string-based SET statement handler (deprecated - use structured AST instead)
+    #[deprecated(note = "Use try_handle_structured_statement instead")]
     async fn try_respond_set_statements<'a, C>(
         &self,
         client: &mut C,
@@ -552,6 +554,8 @@ impl DfSessionService {
         }
     }
 
+    /// Legacy string-based SHOW statement handler (deprecated - use structured AST instead) 
+    #[deprecated(note = "Use try_handle_structured_statement instead")]
     async fn try_respond_show_statements<'a, C>(
         &self,
         client: &C,
@@ -794,34 +798,34 @@ impl ExtendedQueryHandler for DfSessionService {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        let query = portal
-            .statement
-            .statement
-            .0
-            .to_lowercase()
-            .trim()
-            .to_string();
-        log::debug!("Received execute extended query: {query}"); // Log for debugging
+        let original_sql = &portal.statement.statement.0;
+        log::debug!("Received execute extended query: {original_sql}"); // Log for debugging
 
-        // Check permissions for the query (skip for SET and SHOW statements)
-        if !query.starts_with("set") && !query.starts_with("show") {
-            self.check_query_permission(client, &portal.statement.statement.0)
-                .await?;
+        // Handle SET/SHOW statements using structured AST (re-parse for AST access)
+        if let Ok(parsed_statements) = crate::sql::parse(original_sql) {
+            if let Some(statement) = parsed_statements.first() {
+                if let Some(resp) = self.try_handle_structured_statement(client, statement).await? {
+                    return Ok(resp);
+                }
+            }
         }
 
-        if let Some(resp) = self.try_respond_set_statements(client, &query).await? {
-            return Ok(resp);
-        }
-
+        // Handle transaction statements
+        let query_lower = original_sql.to_lowercase().trim().to_string();
         if let Some(resp) = self
-            .try_respond_transaction_statements(client, &query)
+            .try_respond_transaction_statements(client, &query_lower)
             .await?
         {
             return Ok(resp);
         }
 
-        if let Some(resp) = self.try_respond_show_statements(client, &query).await? {
-            return Ok(resp);
+        // Check permissions for non-SET/SHOW/transaction statements
+        if !query_lower.starts_with("set") 
+            && !query_lower.starts_with("show") 
+            && !query_lower.starts_with("begin")
+            && !query_lower.starts_with("commit")
+            && !query_lower.starts_with("rollback") {
+            self.check_query_permission(client, original_sql).await?;
         }
 
         // Check if we're in a failed transaction and block non-transaction
@@ -920,18 +924,22 @@ impl Parser {
             )));
         }
 
-        // show statement may not be supported by datafusion
-        if sql_trimmed.starts_with("show") {
-            // Return a dummy plan for transaction commands - they'll be handled by transaction handler
-            let show_schema =
-                Arc::new(Schema::new(vec![Field::new("show", DataType::Utf8, false)]));
-            let df_schema = show_schema.to_dfschema()?;
-            return Ok(Some(LogicalPlan::EmptyRelation(
-                datafusion::logical_expr::EmptyRelation {
-                    produce_one_row: true,
-                    schema: Arc::new(df_schema),
-                },
-            )));
+        // Parse and check for SET/SHOW statements using structured AST
+        if let Ok(parsed_statements) = crate::sql::parse(sql) {
+            if let Some(statement) = parsed_statements.first() {
+                if matches!(statement, SqlStatement::SetVariable { .. } | SqlStatement::ShowVariable { .. }) {
+                    // Return a dummy plan for SET/SHOW commands - they'll be handled by structured handler
+                    let show_schema =
+                        Arc::new(Schema::new(vec![Field::new("show", DataType::Utf8, false)]));
+                    let df_schema = show_schema.to_dfschema()?;
+                    return Ok(Some(LogicalPlan::EmptyRelation(
+                        datafusion::logical_expr::EmptyRelation {
+                            produce_one_row: true,
+                            schema: Arc::new(df_schema),
+                        },
+                    )));
+                }
+            }
         }
 
         Ok(None)
