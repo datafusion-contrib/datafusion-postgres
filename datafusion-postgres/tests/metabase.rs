@@ -46,8 +46,6 @@ pub async fn test_metabase_startup_sql() {
     for query in METABASE_QUERIES {
         SimpleQueryHandler::do_query(&service, &mut client, query)
             .await
-            .expect(&format!(
-                "failed to run sql: \n--------------\n {query}\n--------------\n"
-            ));
+            .unwrap_or_else(|_| panic!("failed to run sql: \n--------------\n {query}\n--------------\n"));
     }
 }
