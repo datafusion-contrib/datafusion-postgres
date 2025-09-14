@@ -49,11 +49,15 @@ impl<C: CatalogInfo> PgTablesTable<C> {
         let mut row_security = Vec::new();
 
         // Iterate through all catalogs and schemas
-        for catalog_name in this.catalog_list.catalog_names()? {
-            if let Some(catalog_schema_names) = this.catalog_list.schema_names(&catalog_name)? {
+        for catalog_name in this.catalog_list.catalog_names().await? {
+            if let Some(catalog_schema_names) =
+                this.catalog_list.schema_names(&catalog_name).await?
+            {
                 for schema_name in catalog_schema_names {
-                    if let Some(catalog_table_names) =
-                        this.catalog_list.table_names(&catalog_name, &schema_name)?
+                    if let Some(catalog_table_names) = this
+                        .catalog_list
+                        .table_names(&catalog_name, &schema_name)
+                        .await?
                     {
                         // Now process all tables in this schema
                         for table_name in catalog_table_names {

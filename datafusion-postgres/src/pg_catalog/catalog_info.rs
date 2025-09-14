@@ -10,11 +10,14 @@ use datafusion::{
 /// Define the interface for retrieve catalog data for pg_catalog tables
 #[async_trait]
 pub trait CatalogInfo: Clone + Send + Sync + Debug + 'static {
-    fn catalog_names(&self) -> Result<Vec<String>, DataFusionError>;
+    async fn catalog_names(&self) -> Result<Vec<String>, DataFusionError>;
 
-    fn schema_names(&self, catalog_name: &str) -> Result<Option<Vec<String>>, DataFusionError>;
+    async fn schema_names(
+        &self,
+        catalog_name: &str,
+    ) -> Result<Option<Vec<String>>, DataFusionError>;
 
-    fn table_names(
+    async fn table_names(
         &self,
         catalog_name: &str,
         schema_name: &str,
@@ -37,15 +40,18 @@ pub trait CatalogInfo: Clone + Send + Sync + Debug + 'static {
 
 #[async_trait]
 impl CatalogInfo for Arc<dyn CatalogProviderList> {
-    fn catalog_names(&self) -> Result<Vec<String>, DataFusionError> {
+    async fn catalog_names(&self) -> Result<Vec<String>, DataFusionError> {
         Ok(CatalogProviderList::catalog_names(self.as_ref()))
     }
 
-    fn schema_names(&self, catalog_name: &str) -> Result<Option<Vec<String>>, DataFusionError> {
+    async fn schema_names(
+        &self,
+        catalog_name: &str,
+    ) -> Result<Option<Vec<String>>, DataFusionError> {
         Ok(self.catalog(catalog_name).map(|c| c.schema_names()))
     }
 
-    fn table_names(
+    async fn table_names(
         &self,
         catalog_name: &str,
         schema_name: &str,

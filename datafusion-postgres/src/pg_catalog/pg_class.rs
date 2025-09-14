@@ -117,7 +117,7 @@ impl<C: CatalogInfo> PgClassTable<C> {
         let mut swap_cache = HashMap::new();
 
         // Iterate through all catalogs and schemas
-        for catalog_name in this.catalog_list.catalog_names()? {
+        for catalog_name in this.catalog_list.catalog_names().await? {
             let cache_key = OidCacheKey::Catalog(catalog_name.clone());
             let catalog_oid = if let Some(oid) = oid_cache.get(&cache_key) {
                 *oid
@@ -126,7 +126,7 @@ impl<C: CatalogInfo> PgClassTable<C> {
             };
             swap_cache.insert(cache_key, catalog_oid);
 
-            if let Some(schema_names) = this.catalog_list.schema_names(&catalog_name)? {
+            if let Some(schema_names) = this.catalog_list.schema_names(&catalog_name).await? {
                 for schema_name in schema_names {
                     let cache_key = OidCacheKey::Schema(catalog_name.clone(), schema_name.clone());
                     let schema_oid = if let Some(oid) = oid_cache.get(&cache_key) {
@@ -140,8 +140,10 @@ impl<C: CatalogInfo> PgClassTable<C> {
                     // (In a full implementation, this would go in pg_namespace)
 
                     // Now process all tables in this schema
-                    if let Some(table_names) =
-                        this.catalog_list.table_names(&catalog_name, &schema_name)?
+                    if let Some(table_names) = this
+                        .catalog_list
+                        .table_names(&catalog_name, &schema_name)
+                        .await?
                     {
                         for table_name in table_names {
                             let cache_key = OidCacheKey::Table(

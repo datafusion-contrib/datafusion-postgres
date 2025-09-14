@@ -105,11 +105,13 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
         // original one in case that schemas or tables were dropped.
         let mut swap_cache = HashMap::new();
 
-        for catalog_name in this.catalog_list.catalog_names()? {
-            if let Some(schema_names) = this.catalog_list.schema_names(&catalog_name)? {
+        for catalog_name in this.catalog_list.catalog_names().await? {
+            if let Some(schema_names) = this.catalog_list.schema_names(&catalog_name).await? {
                 for schema_name in schema_names {
-                    if let Some(table_names) =
-                        this.catalog_list.table_names(&catalog_name, &schema_name)?
+                    if let Some(table_names) = this
+                        .catalog_list
+                        .table_names(&catalog_name, &schema_name)
+                        .await?
                     {
                         // Process all tables in this schema
                         for table_name in table_names {

@@ -62,8 +62,8 @@ impl<C: CatalogInfo> PgNamespaceTable<C> {
         let mut oid_cache = this.oid_cache.write().await;
 
         // Now add all schemas from DataFusion catalogs
-        for catalog_name in this.catalog_list.catalog_names()? {
-            if let Some(schema_names) = this.catalog_list.schema_names(&catalog_name)? {
+        for catalog_name in this.catalog_list.catalog_names().await? {
+            if let Some(schema_names) = this.catalog_list.schema_names(&catalog_name).await? {
                 for schema_name in schema_names {
                     let cache_key = OidCacheKey::Schema(catalog_name.clone(), schema_name.clone());
                     let schema_oid = if let Some(oid) = oid_cache.get(&cache_key) {
