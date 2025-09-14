@@ -554,7 +554,7 @@ impl DfSessionService {
         }
     }
 
-    /// Legacy string-based SHOW statement handler (deprecated - use structured AST instead) 
+    /// Legacy string-based SHOW statement handler (deprecated - use structured AST instead)
     #[deprecated(note = "Use try_handle_structured_statement instead")]
     async fn try_respond_show_statements<'a, C>(
         &self,
@@ -804,7 +804,10 @@ impl ExtendedQueryHandler for DfSessionService {
         // Handle SET/SHOW statements using structured AST (re-parse for AST access)
         if let Ok(parsed_statements) = crate::sql::parse(original_sql) {
             if let Some(statement) = parsed_statements.first() {
-                if let Some(resp) = self.try_handle_structured_statement(client, statement).await? {
+                if let Some(resp) = self
+                    .try_handle_structured_statement(client, statement)
+                    .await?
+                {
                     return Ok(resp);
                 }
             }
@@ -820,11 +823,12 @@ impl ExtendedQueryHandler for DfSessionService {
         }
 
         // Check permissions for non-SET/SHOW/transaction statements
-        if !query_lower.starts_with("set") 
-            && !query_lower.starts_with("show") 
+        if !query_lower.starts_with("set")
+            && !query_lower.starts_with("show")
             && !query_lower.starts_with("begin")
             && !query_lower.starts_with("commit")
-            && !query_lower.starts_with("rollback") {
+            && !query_lower.starts_with("rollback")
+        {
             self.check_query_permission(client, original_sql).await?;
         }
 
@@ -927,7 +931,10 @@ impl Parser {
         // Parse and check for SET/SHOW statements using structured AST
         if let Ok(parsed_statements) = crate::sql::parse(sql) {
             if let Some(statement) = parsed_statements.first() {
-                if matches!(statement, SqlStatement::SetVariable { .. } | SqlStatement::ShowVariable { .. }) {
+                if matches!(
+                    statement,
+                    SqlStatement::SetVariable { .. } | SqlStatement::ShowVariable { .. }
+                ) {
                     // Return a dummy plan for SET/SHOW commands - they'll be handled by structured handler
                     let show_schema =
                         Arc::new(Schema::new(vec![Field::new("show", DataType::Utf8, false)]));

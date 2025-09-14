@@ -138,6 +138,8 @@ pub async fn test_pgcli_startup_sql() {
     for query in PGCLI_QUERIES {
         SimpleQueryHandler::do_query(&service, &mut client, query)
             .await
-            .unwrap_or_else(|_| panic!("failed to run sql:\n--------------\n {query}\n--------------\n"));
+            .unwrap_or_else(|_| {
+                panic!("failed to run sql:\n--------------\n {query}\n--------------\n")
+            });
     }
 }
