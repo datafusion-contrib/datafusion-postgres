@@ -10,11 +10,15 @@ use datafusion::{
 /// Define the interface for retrieve catalog data for pg_catalog tables
 #[async_trait]
 pub trait CatalogInfo: Clone + Send + Sync + Debug + 'static {
-    fn catalog_names(&self) -> Vec<String>;
+    fn catalog_names(&self) -> Result<Vec<String>, DataFusionError>;
 
-    fn schema_names(&self, catalog_name: &str) -> Option<Vec<String>>;
+    fn schema_names(&self, catalog_name: &str) -> Result<Option<Vec<String>>, DataFusionError>;
 
-    fn table_names(&self, catalog_name: &str, schema_name: &str) -> Option<Vec<String>>;
+    fn table_names(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+    ) -> Result<Option<Vec<String>>, DataFusionError>;
 
     async fn table_schema(
         &self,
@@ -33,18 +37,23 @@ pub trait CatalogInfo: Clone + Send + Sync + Debug + 'static {
 
 #[async_trait]
 impl CatalogInfo for Arc<dyn CatalogProviderList> {
-    fn catalog_names(&self) -> Vec<String> {
-        CatalogProviderList::catalog_names(self.as_ref())
+    fn catalog_names(&self) -> Result<Vec<String>, DataFusionError> {
+        Ok(CatalogProviderList::catalog_names(self.as_ref()))
     }
 
-    fn schema_names(&self, catalog_name: &str) -> Option<Vec<String>> {
-        self.catalog(catalog_name).map(|c| c.schema_names())
+    fn schema_names(&self, catalog_name: &str) -> Result<Option<Vec<String>>, DataFusionError> {
+        Ok(self.catalog(catalog_name).map(|c| c.schema_names()))
     }
 
-    fn table_names(&self, catalog_name: &str, schema_name: &str) -> Option<Vec<String>> {
-        self.catalog(catalog_name)
+    fn table_names(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+    ) -> Result<Option<Vec<String>>, DataFusionError> {
+        Ok(self
+            .catalog(catalog_name)
             .and_then(|c| c.schema(schema_name))
-            .map(|s| s.table_names())
+            .map(|s| s.table_names()))
     }
 
     async fn table_schema(

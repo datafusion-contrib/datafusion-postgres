@@ -80,7 +80,7 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
         let mut oid_cache = this.oid_cache.write().await;
 
         // Add a record for each catalog (treating catalogs as "databases")
-        for catalog_name in this.catalog_list.catalog_names() {
+        for catalog_name in this.catalog_list.catalog_names()? {
             let cache_key = OidCacheKey::Catalog(catalog_name.clone());
             let catalog_oid = if let Some(oid) = oid_cache.get(&cache_key) {
                 *oid
