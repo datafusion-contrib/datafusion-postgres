@@ -664,6 +664,43 @@ impl SqlStatementRewriteRule for CurrentUserVariableToSessionUserFunctionCall {
     }
 }
 
+/// Fix collate and regex calls
+#[derive(Debug)]
+pub struct FixCollate;
+
+struct FixCollateVisitor;
+
+impl VisitorMut for FixCollateVisitor {
+    type Break = ();
+
+    fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
+        match expr {
+            Expr::Collate { expr: inner, .. } => {
+                *expr = inner.as_ref().clone();
+            }
+            Expr::BinaryOp { op, .. } => {
+                if let BinaryOperator::PGCustomBinaryOperator(ops) = op {
+                    if *ops == ["pg_catalog", "~"] {
+                        *op = BinaryOperator::PGRegexMatch;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        ControlFlow::Continue(())
+    }
+}
+
+impl SqlStatementRewriteRule for FixCollate {
+    fn rewrite(&self, mut s: Statement) -> Statement {
+        let mut visitor = FixCollateVisitor;
+
+        let _ = s.visit(&mut visitor);
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -868,5 +905,12 @@ mod tests {
             "SELECT is_null(current_user)",
             "SELECT is_null(session_user)"
         );
+    }
+
+    #[test]
+    fn test_collate_fix() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![Arc::new(FixCollate)];
+
+        assert_rewrite!(&rules, "SELECT c.oid, c.relname FROM pg_catalog.pg_class c WHERE c.relname OPERATOR(pg_catalog.~) '^(tablename)$' COLLATE pg_catalog.default AND pg_catalog.pg_table_is_visible(c.oid) ORDER BY 2, 3;", "SELECT c.oid, c.relname FROM pg_catalog.pg_class AS c WHERE c.relname ~ '^(tablename)$' AND pg_catalog.pg_table_is_visible(c.oid) ORDER BY 2, 3");
     }
 }

@@ -4,9 +4,9 @@ use std::sync::Arc;
 use crate::auth::{AuthManager, Permission, ResourceType};
 use crate::sql::{
     parse, rewrite, AliasDuplicatedProjectionRewrite, BlacklistSqlRewriter,
-    CurrentUserVariableToSessionUserFunctionCall, FixArrayLiteral, PrependUnqualifiedPgTableName,
-    RemoveTableFunctionQualifier, RemoveUnsupportedTypes, ResolveUnqualifiedIdentifer,
-    RewriteArrayAnyAllOperation, SqlStatementRewriteRule,
+    CurrentUserVariableToSessionUserFunctionCall, FixArrayLiteral, FixCollate,
+    PrependUnqualifiedPgTableName, RemoveTableFunctionQualifier, RemoveUnsupportedTypes,
+    ResolveUnqualifiedIdentifer, RewriteArrayAnyAllOperation, SqlStatementRewriteRule,
 };
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -111,6 +111,7 @@ impl DfSessionService {
             Arc::new(FixArrayLiteral),
             Arc::new(RemoveTableFunctionQualifier),
             Arc::new(CurrentUserVariableToSessionUserFunctionCall),
+            Arc::new(FixCollate),
         ];
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
@@ -464,6 +465,7 @@ impl SimpleQueryHandler for DfSessionService {
 
         // Attempt to rewrite
         statement = rewrite(statement, &self.sql_rewrite_rules);
+        dbg!(&statement);
 
         // TODO: improve statement check by using statement directly
         let query = statement.to_string();
