@@ -40,9 +40,8 @@
             cargo-nextest
             cargo-release
             curl
-            gnuplot ## for cargo bench
             pythonEnv
-            postgresql
+            postgresql.out
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
