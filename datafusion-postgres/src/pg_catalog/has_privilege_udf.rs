@@ -8,7 +8,7 @@ use datafusion::{
     logical_expr::{ScalarUDFImpl, Signature, TypeSignature, Volatility},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub struct PgHasPrivilegeUDF {
     signature: Signature,
     name: String,
