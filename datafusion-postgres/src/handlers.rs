@@ -5,8 +5,9 @@ use crate::auth::{AuthManager, Permission, ResourceType};
 use crate::sql::{
     parse, rewrite, AliasDuplicatedProjectionRewrite, BlacklistSqlRewriter,
     CurrentUserVariableToSessionUserFunctionCall, FixArrayLiteral, FixCollate,
-    PrependUnqualifiedPgTableName, RemoveTableFunctionQualifier, RemoveUnsupportedTypes,
-    ResolveUnqualifiedIdentifer, RewriteArrayAnyAllOperation, SqlStatementRewriteRule,
+    PrependUnqualifiedPgTableName, RemoveQualifier, RemoveSubqueryFromProjection,
+    RemoveUnsupportedTypes, ResolveUnqualifiedIdentifer, RewriteArrayAnyAllOperation,
+    SqlStatementRewriteRule,
 };
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -105,13 +106,14 @@ impl DfSessionService {
             Arc::new(BlacklistSqlRewriter::new()),
             Arc::new(AliasDuplicatedProjectionRewrite),
             Arc::new(ResolveUnqualifiedIdentifer),
-            Arc::new(RemoveUnsupportedTypes::new()),
             Arc::new(RewriteArrayAnyAllOperation),
             Arc::new(PrependUnqualifiedPgTableName),
+            Arc::new(RemoveQualifier),
+            Arc::new(RemoveUnsupportedTypes::new()),
             Arc::new(FixArrayLiteral),
-            Arc::new(RemoveTableFunctionQualifier),
             Arc::new(CurrentUserVariableToSessionUserFunctionCall),
             Arc::new(FixCollate),
+            Arc::new(RemoveSubqueryFromProjection),
         ];
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),

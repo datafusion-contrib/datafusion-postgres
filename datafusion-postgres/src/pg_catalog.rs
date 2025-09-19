@@ -686,7 +686,7 @@ impl PgCatalogStaticTables {
     }
 }
 
-pub fn create_current_schemas_udf(name: &str) -> ScalarUDF {
+pub fn create_current_schemas_udf() -> ScalarUDF {
     // Define the function implementation
     let func = move |args: &[ColumnarValue]| {
         let args = ColumnarValue::values_to_arrays(args)?;
@@ -709,7 +709,7 @@ pub fn create_current_schemas_udf(name: &str) -> ScalarUDF {
 
     // Wrap the implementation in a scalar function
     create_udf(
-        name,
+        "current_schemas",
         vec![DataType::Boolean],
         DataType::List(Arc::new(Field::new("schema", DataType::Utf8, false))),
         Volatility::Immutable,
@@ -717,7 +717,7 @@ pub fn create_current_schemas_udf(name: &str) -> ScalarUDF {
     )
 }
 
-pub fn create_current_schema_udf(name: &str) -> ScalarUDF {
+pub fn create_current_schema_udf() -> ScalarUDF {
     // Define the function implementation
     let func = move |_args: &[ColumnarValue]| {
         // Create a UTF8 array with a single value
@@ -730,7 +730,7 @@ pub fn create_current_schema_udf(name: &str) -> ScalarUDF {
 
     // Wrap the implementation in a scalar function
     create_udf(
-        name,
+        "current_schema",
         vec![],
         DataType::Utf8,
         Volatility::Immutable,
@@ -738,7 +738,7 @@ pub fn create_current_schema_udf(name: &str) -> ScalarUDF {
     )
 }
 
-pub fn create_current_database_udf(name: &str) -> ScalarUDF {
+pub fn create_current_database_udf() -> ScalarUDF {
     // Define the function implementation
     let func = move |_args: &[ColumnarValue]| {
         // Create a UTF8 array with a single value
@@ -751,30 +751,7 @@ pub fn create_current_database_udf(name: &str) -> ScalarUDF {
 
     // Wrap the implementation in a scalar function
     create_udf(
-        name,
-        vec![],
-        DataType::Utf8,
-        Volatility::Immutable,
-        Arc::new(func),
-    )
-}
-
-pub fn create_version_udf() -> ScalarUDF {
-    // Define the function implementation
-    let func = move |_args: &[ColumnarValue]| {
-        // Create a UTF8 array with version information
-        let mut builder = StringBuilder::new();
-        // TODO: improve version string generation
-        builder
-            .append_value("DataFusion PostgreSQL 48.0.0 on x86_64-pc-linux-gnu, compiled by Rust");
-        let array: ArrayRef = Arc::new(builder.finish());
-
-        Ok(ColumnarValue::Array(array))
-    };
-
-    // Wrap the implementation in a scalar function
-    create_udf(
-        "version",
+        "current_database",
         vec![],
         DataType::Utf8,
         Volatility::Immutable,
@@ -801,7 +778,7 @@ pub fn create_pg_get_userbyid_udf() -> ScalarUDF {
 
     // Wrap the implementation in a scalar function
     create_udf(
-        "pg_catalog.pg_get_userbyid",
+        "pg_get_userbyid",
         vec![DataType::Int32],
         DataType::Utf8,
         Volatility::Stable,
@@ -809,7 +786,7 @@ pub fn create_pg_get_userbyid_udf() -> ScalarUDF {
     )
 }
 
-pub fn create_pg_table_is_visible(name: &str) -> ScalarUDF {
+pub fn create_pg_table_is_visible() -> ScalarUDF {
     // Define the function implementation
     let func = move |args: &[ColumnarValue]| {
         let args = ColumnarValue::values_to_arrays(args)?;
@@ -828,7 +805,7 @@ pub fn create_pg_table_is_visible(name: &str) -> ScalarUDF {
 
     // Wrap the implementation in a scalar function
     create_udf(
-        name,
+        "pg_table_is_visible",
         vec![DataType::Int32],
         DataType::Boolean,
         Volatility::Stable,
@@ -836,9 +813,9 @@ pub fn create_pg_table_is_visible(name: &str) -> ScalarUDF {
     )
 }
 
-pub fn create_format_type_udf(name: &str) -> ScalarUDF {
+pub fn create_format_type_udf() -> ScalarUDF {
     create_udf(
-        name,
+        "format_type",
         vec![DataType::Int64, DataType::Int32],
         DataType::Utf8,
         Volatility::Stable,
@@ -882,7 +859,7 @@ pub fn create_pg_get_partkeydef_udf() -> ScalarUDF {
     };
 
     create_udf(
-        "pg_catalog.pg_get_partkeydef",
+        "pg_get_partkeydef",
         vec![DataType::Utf8],
         DataType::Utf8,
         Volatility::Stable,
@@ -890,7 +867,7 @@ pub fn create_pg_get_partkeydef_udf() -> ScalarUDF {
     )
 }
 
-pub fn create_pg_relation_is_publishable_udf(name: &str) -> ScalarUDF {
+pub fn create_pg_relation_is_publishable_udf() -> ScalarUDF {
     let func = move |args: &[ColumnarValue]| {
         let args = ColumnarValue::values_to_arrays(args)?;
         let oid = &args[0];
@@ -906,9 +883,33 @@ pub fn create_pg_relation_is_publishable_udf(name: &str) -> ScalarUDF {
     };
 
     create_udf(
-        name,
+        "pg_relation_is_publishable",
         vec![DataType::Int32],
         DataType::Boolean,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_pg_get_statisticsobjdef_columns_udf() -> ScalarUDF {
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let oid = &args[0];
+
+        let mut builder = BooleanBuilder::new();
+        for _ in 0..oid.len() {
+            builder.append_null();
+        }
+
+        let array: ArrayRef = Arc::new(builder.finish());
+
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "pg_get_statisticsobjdef_columns",
+        vec![DataType::UInt32],
+        DataType::Utf8,
         Volatility::Stable,
         Arc::new(func),
     )
@@ -933,42 +934,28 @@ pub fn setup_pg_catalog(
         })?
         .register_schema("pg_catalog", Arc::new(pg_catalog))?;
 
-    session_context.register_udf(create_current_database_udf("current_database"));
-    session_context.register_udf(create_current_schema_udf("current_schema"));
-    session_context.register_udf(create_current_schema_udf("pg_catalog.current_schema"));
-    session_context.register_udf(create_current_schemas_udf("current_schemas"));
-    session_context.register_udf(create_current_schemas_udf("pg_catalog.current_schemas"));
-    session_context.register_udf(create_version_udf());
+    session_context.register_udf(create_current_database_udf());
+    session_context.register_udf(create_current_schema_udf());
+    session_context.register_udf(create_current_schemas_udf());
+    //    session_context.register_udf(create_version_udf());
     session_context.register_udf(create_pg_get_userbyid_udf());
     session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
         "has_table_privilege",
     ));
     session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
-        "pg_catalog.has_table_privilege",
-    ));
-    session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
         "has_schema_privilege",
-    ));
-    session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
-        "pg_catalog.has_schema_privilege",
     ));
     session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
         "has_any_column_privilege",
     ));
-    session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
-        "pg_catalog.has_any_column_privilege",
-    ));
-    session_context.register_udf(create_pg_table_is_visible("pg_table_is_visible"));
-    session_context.register_udf(create_pg_table_is_visible("pg_catalog.pg_table_is_visible"));
-    session_context.register_udf(create_format_type_udf("format_type"));
-    session_context.register_udf(create_format_type_udf("pg_catalog.format_type"));
+    session_context.register_udf(create_pg_table_is_visible());
+    session_context.register_udf(create_format_type_udf());
     session_context.register_udf(create_session_user_udf());
     session_context.register_udtf("pg_get_keywords", static_tables.pg_get_keywords.clone());
     session_context.register_udf(pg_get_expr_udf::create_pg_get_expr_udf());
     session_context.register_udf(create_pg_get_partkeydef_udf());
-    session_context.register_udf(create_pg_relation_is_publishable_udf(
-        "pg_catalog.pg_relation_is_publishable",
-    ));
+    session_context.register_udf(create_pg_relation_is_publishable_udf());
+    session_context.register_udf(create_pg_get_statisticsobjdef_columns_udf());
 
     Ok(())
 }

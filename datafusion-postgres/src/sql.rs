@@ -296,6 +296,7 @@ impl RemoveUnsupportedTypes {
             "regtype",
             "regtype[]",
             "regnamespace",
+            "oid",
         ] {
             unsupported_types.insert(item.to_owned());
             unsupported_types.insert(format!("pg_catalog.{item}"));
@@ -329,22 +330,6 @@ impl VisitorMut for RemoveUnsupportedTypesVisitor<'_> {
                 expr: value,
                 ..
             } => {
-                dbg!(&data_type);
-                // rewrite custom pg_catalog. qualified types
-                let data_type_str = data_type.to_string();
-                match data_type_str.as_str() {
-                    "pg_catalog.text" => {
-                        *data_type = DataType::Text;
-                    }
-                    "pg_catalog.int2[]" => {
-                        *data_type = DataType::Array(ArrayElemTypeDef::SquareBracket(
-                            Box::new(DataType::Int16),
-                            None,
-                        ));
-                    }
-                    _ => {}
-                }
-
                 if self
                     .unsupported_types
                     .contains(data_type.to_string().to_lowercase().as_str())
@@ -493,14 +478,17 @@ impl VisitorMut for PrependUnqualifiedPgTableNameVisitor {
         &mut self,
         table_factor: &mut TableFactor,
     ) -> ControlFlow<Self::Break> {
-        if let TableFactor::Table { name, .. } = table_factor {
-            if name.0.len() == 1 {
-                let ObjectNamePart::Identifier(ident) = &name.0[0];
-                if ident.value.starts_with("pg_") {
-                    *name = ObjectName(vec![
-                        ObjectNamePart::Identifier(Ident::new("pg_catalog")),
-                        name.0[0].clone(),
-                    ]);
+        if let TableFactor::Table { name, args, .. } = table_factor {
+            // not a table function
+            if args.is_none() {
+                if name.0.len() == 1 {
+                    let ObjectNamePart::Identifier(ident) = &name.0[0];
+                    if ident.value.starts_with("pg_") {
+                        *name = ObjectName(vec![
+                            ObjectNamePart::Identifier(Ident::new("pg_catalog")),
+                            name.0[0].clone(),
+                        ]);
+                    }
                 }
             }
         }
@@ -599,21 +587,25 @@ impl SqlStatementRewriteRule for FixArrayLiteral {
     }
 }
 
-/// Remove qualifier from table function
+/// Remove qualifier from unsupported items
 ///
-/// The query engine doesn't support qualified table function name
+/// This rewriter removes qualifier from following items:
+/// 1. type cast: for example: `pg_catalog.text`
+/// 2. function name: for example: `pg_catalog.array_to_string`,
+/// 3. table function name
 #[derive(Debug)]
-pub struct RemoveTableFunctionQualifier;
+pub struct RemoveQualifier;
 
-struct RemoveTableFunctionQualifierVisitor;
+struct RemoveQualifierVisitor;
 
-impl VisitorMut for RemoveTableFunctionQualifierVisitor {
+impl VisitorMut for RemoveQualifierVisitor {
     type Break = ();
 
     fn pre_visit_table_factor(
         &mut self,
         table_factor: &mut TableFactor,
     ) -> ControlFlow<Self::Break> {
+        // remove table function qualifier
         if let TableFactor::Table { name, args, .. } = table_factor {
             if args.is_some() {
                 //  multiple idents in name, which means it's a qualified table name
@@ -626,11 +618,44 @@ impl VisitorMut for RemoveTableFunctionQualifierVisitor {
         }
         ControlFlow::Continue(())
     }
+
+    fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
+        match expr {
+            Expr::Cast { data_type, .. } => {
+                // rewrite custom pg_catalog. qualified types
+                let data_type_str = data_type.to_string();
+                match data_type_str.as_str() {
+                    "pg_catalog.text" => {
+                        *data_type = DataType::Text;
+                    }
+                    "pg_catalog.int2[]" => {
+                        *data_type = DataType::Array(ArrayElemTypeDef::SquareBracket(
+                            Box::new(DataType::Int16),
+                            None,
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            Expr::Function(function) => {
+                // remove qualifier from pg_catalog.function
+                let name = &mut function.name;
+                if name.0.len() > 1 {
+                    if let Some(last_ident) = name.0.pop() {
+                        *name = ObjectName(vec![last_ident]);
+                    }
+                }
+            }
+
+            _ => {}
+        }
+        ControlFlow::Continue(())
+    }
 }
 
-impl SqlStatementRewriteRule for RemoveTableFunctionQualifier {
+impl SqlStatementRewriteRule for RemoveQualifier {
     fn rewrite(&self, mut s: Statement) -> Statement {
-        let mut visitor = RemoveTableFunctionQualifierVisitor;
+        let mut visitor = RemoveQualifierVisitor;
 
         let _ = s.visit(&mut visitor);
         s
@@ -725,6 +750,47 @@ impl SqlStatementRewriteRule for FixCollate {
     }
 }
 
+/// Datafusion doesn't support subquery on projection
+#[derive(Debug)]
+pub struct RemoveSubqueryFromProjection;
+
+struct RemoveSubqueryFromProjectionVisitor;
+
+impl VisitorMut for RemoveSubqueryFromProjectionVisitor {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, query: &mut Query) -> ControlFlow<Self::Break> {
+        if let SetExpr::Select(select) = query.body.as_mut() {
+            for projection in &mut select.projection {
+                match projection {
+                    SelectItem::UnnamedExpr(expr) => {
+                        if let Expr::Subquery(_) = expr {
+                            *expr = Expr::Value(Value::Null.with_empty_span());
+                        }
+                    }
+                    SelectItem::ExprWithAlias { expr, .. } => {
+                        if let Expr::Subquery(_) = expr {
+                            *expr = Expr::Value(Value::Null.with_empty_span());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        ControlFlow::Continue(())
+    }
+}
+
+impl SqlStatementRewriteRule for RemoveSubqueryFromProjection {
+    fn rewrite(&self, mut s: Statement) -> Statement {
+        let mut visitor = RemoveSubqueryFromProjectionVisitor;
+        let _ = s.visit(&mut visitor);
+
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -798,8 +864,10 @@ mod tests {
 
     #[test]
     fn test_remove_unsupported_types() {
-        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
-            vec![Arc::new(RemoveUnsupportedTypes::new())];
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![
+            Arc::new(RemoveQualifier),
+            Arc::new(RemoveUnsupportedTypes::new()),
+        ];
 
         assert_rewrite!(
             &rules,
@@ -915,8 +983,7 @@ mod tests {
 
     #[test]
     fn test_remove_qualifier_from_table_function() {
-        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
-            vec![Arc::new(RemoveTableFunctionQualifier)];
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![Arc::new(RemoveQualifier)];
 
         assert_rewrite!(
             &rules,
@@ -946,5 +1013,15 @@ mod tests {
         let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![Arc::new(FixCollate)];
 
         assert_rewrite!(&rules, "SELECT c.oid, c.relname FROM pg_catalog.pg_class c WHERE c.relname OPERATOR(pg_catalog.~) '^(tablename)$' COLLATE pg_catalog.default AND pg_catalog.pg_table_is_visible(c.oid) ORDER BY 2, 3;", "SELECT c.oid, c.relname FROM pg_catalog.pg_class AS c WHERE c.relname ~ '^(tablename)$' AND pg_catalog.pg_table_is_visible(c.oid) ORDER BY 2, 3");
+    }
+
+    #[test]
+    fn test_remove_subquery() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RemoveSubqueryFromProjection)];
+
+        assert_rewrite!(&rules,
+            "SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), (SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true) FROM pg_catalog.pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef), a.attnotnull, (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type t WHERE c.oid = a.attcollation AND t.oid = a.atttypid AND a.attcollation <> t.typcollation LIMIT 1) AS attcollation, a.attidentity, a.attgenerated FROM pg_catalog.pg_attribute a WHERE a.attrelid = '16384' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;",
+            "SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), NULL, a.attnotnull, NULL AS attcollation, a.attidentity, a.attgenerated FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = '16384' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum");
     }
 }

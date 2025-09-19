@@ -30,12 +30,12 @@ impl PgGetExprUDF {
                 ],
                 Volatility::Stable,
             ),
-            name: "pg_catalog.pg_get_expr",
+            name: "pg_get_expr",
         }
     }
 
     pub fn into_scalar_udf(self) -> ScalarUDF {
-        ScalarUDF::new_from_impl(self).with_aliases(vec!["pg_get_expr"])
+        ScalarUDF::new_from_impl(self)
     }
 }
 

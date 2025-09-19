@@ -22,15 +22,16 @@ const PSQL_QUERIES: &[&str] = &[
           pg_catalog.format_type(a.atttypid, a.atttypmod),
           (SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true)
            FROM pg_catalog.pg_attrdef d
-           WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef LIMIT 1),
+           WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef),
           a.attnotnull,
           (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type t
-           WHERE c.oid = a.attcollation AND t.oid = a.atttypid AND a.attcollation <> t.typcollation LIMIT 1) AS attcollation,
+           WHERE c.oid = a.attcollation AND t.oid = a.atttypid AND a.attcollation <> t.typcollation) AS attcollation,
           a.attidentity,
           a.attgenerated
         FROM pg_catalog.pg_attribute a
         WHERE a.attrelid = '16384' AND a.attnum > 0 AND NOT a.attisdropped
         ORDER BY a.attnum;",
+    // the following queries should return empty results at least for now
     "SELECT pol.polname, pol.polpermissive,
           CASE WHEN pol.polroles = '{0}' THEN NULL ELSE pg_catalog.array_to_string(array(select rolname from pg_catalog.pg_roles where oid = any (pol.polroles) order by 1),',') END,
           pg_catalog.pg_get_expr(pol.polqual, pol.polrelid),
@@ -43,7 +44,8 @@ const PSQL_QUERIES: &[&str] = &[
             END AS cmd
         FROM pg_catalog.pg_policy pol
         WHERE pol.polrelid = '16384' ORDER BY 1;",
-    " SELECT oid, stxrelid::pg_catalog.regclass, stxnamespace::pg_catalog.regnamespace::pg_catalog.text AS nsp, stxname,
+
+    "SELECT oid, stxrelid::pg_catalog.regclass, stxnamespace::pg_catalog.regnamespace::pg_catalog.text AS nsp, stxname,
         pg_catalog.pg_get_statisticsobjdef_columns(oid) AS columns,
           'd' = any(stxkind) AS ndist_enabled,
           'f' = any(stxkind) AS deps_enabled,
@@ -52,6 +54,7 @@ const PSQL_QUERIES: &[&str] = &[
         FROM pg_catalog.pg_statistic_ext
         WHERE stxrelid = '16384'
         ORDER BY nsp, stxname;",
+
     "SELECT pubname
              , NULL
              , NULL
@@ -78,11 +81,13 @@ const PSQL_QUERIES: &[&str] = &[
         FROM pg_catalog.pg_publication p
         WHERE p.puballtables AND pg_catalog.pg_relation_is_publishable('16384')
         ORDER BY 1;",
+
     "SELECT c.oid::pg_catalog.regclass
         FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i
         WHERE c.oid = i.inhparent AND i.inhrelid = '16384'
           AND c.relkind != 'p' AND c.relkind != 'I'
         ORDER BY inhseqno;",
+
     "SELECT c.oid::pg_catalog.regclass, c.relkind, inhdetachpending, pg_catalog.pg_get_expr(c.relpartbound, c.oid)
         FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i
         WHERE c.oid = i.inhrelid AND i.inhparent = '16384'
