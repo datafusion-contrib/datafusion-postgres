@@ -23,6 +23,7 @@ use crate::pg_catalog::catalog_info::CatalogInfo;
 
 pub mod catalog_info;
 pub mod empty_table;
+pub mod format_type;
 pub mod has_privilege_udf;
 pub mod pg_attribute;
 pub mod pg_class;
@@ -835,29 +836,13 @@ pub fn create_pg_table_is_visible(name: &str) -> ScalarUDF {
     )
 }
 
-pub fn create_format_type_udf() -> ScalarUDF {
-    let func = move |args: &[ColumnarValue]| {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        let type_oids = &args[0]; // Table (can be name or OID)
-        let _type_mods = &args[1]; // Privilege type (SELECT, INSERT, etc.)
-
-        // For now, always return true (full access for current user)
-        let mut builder = StringBuilder::new();
-        for _ in 0..type_oids.len() {
-            builder.append_value("???");
-        }
-
-        let array: ArrayRef = Arc::new(builder.finish());
-
-        Ok(ColumnarValue::Array(array))
-    };
-
+pub fn create_format_type_udf(name: &str) -> ScalarUDF {
     create_udf(
-        "format_type",
+        name,
         vec![DataType::Int64, DataType::Int32],
         DataType::Utf8,
         Volatility::Stable,
-        Arc::new(func),
+        Arc::new(format_type::format_type_impl),
     )
 }
 
@@ -900,6 +885,30 @@ pub fn create_pg_get_partkeydef_udf() -> ScalarUDF {
         "pg_catalog.pg_get_partkeydef",
         vec![DataType::Utf8],
         DataType::Utf8,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_pg_relation_is_publishable_udf(name: &str) -> ScalarUDF {
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let oid = &args[0];
+
+        let mut builder = BooleanBuilder::new();
+        for _ in 0..oid.len() {
+            builder.append_value(true);
+        }
+
+        let array: ArrayRef = Arc::new(builder.finish());
+
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        name,
+        vec![DataType::Int32],
+        DataType::Boolean,
         Volatility::Stable,
         Arc::new(func),
     )
@@ -951,11 +960,15 @@ pub fn setup_pg_catalog(
     ));
     session_context.register_udf(create_pg_table_is_visible("pg_table_is_visible"));
     session_context.register_udf(create_pg_table_is_visible("pg_catalog.pg_table_is_visible"));
-    session_context.register_udf(create_format_type_udf());
+    session_context.register_udf(create_format_type_udf("format_type"));
+    session_context.register_udf(create_format_type_udf("pg_catalog.format_type"));
     session_context.register_udf(create_session_user_udf());
     session_context.register_udtf("pg_get_keywords", static_tables.pg_get_keywords.clone());
     session_context.register_udf(pg_get_expr_udf::create_pg_get_expr_udf());
     session_context.register_udf(create_pg_get_partkeydef_udf());
+    session_context.register_udf(create_pg_relation_is_publishable_udf(
+        "pg_catalog.pg_relation_is_publishable",
+    ));
 
     Ok(())
 }

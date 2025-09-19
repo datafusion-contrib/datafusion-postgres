@@ -280,6 +280,7 @@ impl SqlStatementRewriteRule for ResolveUnqualifiedIdentifer {
 }
 
 /// Remove datafusion unsupported type annotations
+/// it also removes pg_catalog as qualifier
 #[derive(Debug)]
 pub struct RemoveUnsupportedTypes {
     unsupported_types: HashSet<String>,
@@ -288,10 +289,17 @@ pub struct RemoveUnsupportedTypes {
 impl RemoveUnsupportedTypes {
     pub fn new() -> Self {
         let mut unsupported_types = HashSet::new();
-        unsupported_types.insert("regclass".to_owned());
-        unsupported_types.insert("regproc".to_owned());
-        unsupported_types.insert("regtype".to_owned());
-        unsupported_types.insert("regtype[]".to_owned());
+
+        for item in [
+            "regclass",
+            "regproc",
+            "regtype",
+            "regtype[]",
+            "regnamespace",
+        ] {
+            unsupported_types.insert(item.to_owned());
+            unsupported_types.insert(format!("pg_catalog.{item}"));
+        }
 
         Self { unsupported_types }
     }
@@ -321,6 +329,22 @@ impl VisitorMut for RemoveUnsupportedTypesVisitor<'_> {
                 expr: value,
                 ..
             } => {
+                dbg!(&data_type);
+                // rewrite custom pg_catalog. qualified types
+                let data_type_str = data_type.to_string();
+                match data_type_str.as_str() {
+                    "pg_catalog.text" => {
+                        *data_type = DataType::Text;
+                    }
+                    "pg_catalog.int2[]" => {
+                        *data_type = DataType::Array(ArrayElemTypeDef::SquareBracket(
+                            Box::new(DataType::Int16),
+                            None,
+                        ));
+                    }
+                    _ => {}
+                }
+
                 if self
                     .unsupported_types
                     .contains(data_type.to_string().to_lowercase().as_str())
@@ -799,6 +823,16 @@ mod tests {
             &rules,
             "SELECT n.* FROM pg_catalog.pg_namespace n WHERE n.nspname = 'pg_catalog' ORDER BY n.nspname",
             "SELECT n.* FROM pg_catalog.pg_namespace AS n WHERE n.nspname = 'pg_catalog' ORDER BY n.nspname"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, c.relhastriggers, c.relrowsecurity, c.relforcerowsecurity, false AS relhasoids, c.relispartition, '', c.reltablespace, CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::pg_catalog.regtype::pg_catalog.text END, c.relpersistence, c.relreplident, am.amname
+    FROM pg_catalog.pg_class c
+     LEFT JOIN pg_catalog.pg_class tc ON (c.reltoastrelid = tc.oid)
+    LEFT JOIN pg_catalog.pg_am am ON (c.relam = am.oid)
+    WHERE c.oid = '16386'",
+            "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, c.relhastriggers, c.relrowsecurity, c.relforcerowsecurity, false AS relhasoids, c.relispartition, '', c.reltablespace, CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::TEXT END, c.relpersistence, c.relreplident, am.amname FROM pg_catalog.pg_class AS c LEFT JOIN pg_catalog.pg_class AS tc ON (c.reltoastrelid = tc.oid) LEFT JOIN pg_catalog.pg_am AS am ON (c.relam = am.oid) WHERE c.oid = '16386'"
         );
     }
 
