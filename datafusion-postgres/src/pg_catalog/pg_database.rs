@@ -105,7 +105,7 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
             datnames.push(catalog_name.clone());
             datdbas.push(10); // Default owner (assuming 10 = postgres user)
             encodings.push(6); // 6 = UTF8 in PostgreSQL
-            datlocproviders.push("".to_string());
+            datlocproviders.push("libc".to_string());
             datcollates.push("en_US.UTF-8".to_string()); // Default collation
             datctypes.push("en_US.UTF-8".to_string()); // Default ctype
             datistemplates.push(false);
@@ -136,7 +136,7 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
             datnames.push(default_datname);
             datdbas.push(10);
             encodings.push(6);
-            datlocproviders.push("".to_string());
+            datlocproviders.push("libc".to_string());
             datcollates.push("en_US.UTF-8".to_string());
             datctypes.push("en_US.UTF-8".to_string());
             datistemplates.push(false);
