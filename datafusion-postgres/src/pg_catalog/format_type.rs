@@ -1,9 +1,15 @@
 use std::sync::Arc;
 
 use datafusion::{
-    arrow::array::{Array, StringBuilder},
+    arrow::{
+        array::{Array, StringBuilder},
+        datatypes::DataType,
+    },
     common::{cast::as_int32_array, DataFusionError},
-    logical_expr::ColumnarValue,
+    logical_expr::{
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
+        Volatility,
+    },
 };
 
 pub(crate) fn format_type_impl(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
@@ -193,4 +199,53 @@ fn get_array_base_type(array_oid: i32) -> Option<i32> {
         2951 => Some(2950), // _uuid -> uuid
         _ => None,
     }
+}
+
+#[derive(Debug)]
+pub struct FormatTypeUDF {
+    signature: Signature,
+}
+
+impl FormatTypeUDF {
+    pub(crate) fn new() -> Self {
+        Self {
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Exact(vec![DataType::Int64, DataType::Int32]),
+                    TypeSignature::Exact(vec![DataType::Int32, DataType::Int32]),
+                ],
+                Volatility::Stable,
+            ),
+        }
+    }
+
+    pub fn into_scalar_udf(self) -> ScalarUDF {
+        ScalarUDF::new_from_impl(self)
+    }
+}
+
+impl ScalarUDFImpl for FormatTypeUDF {
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
+        Ok(DataType::Utf8)
+    }
+
+    fn name(&self) -> &str {
+        "format_type"
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue, DataFusionError> {
+        format_type_impl(&args.args)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+pub fn create_format_type_udf() -> ScalarUDF {
+    FormatTypeUDF::new().into_scalar_udf()
 }

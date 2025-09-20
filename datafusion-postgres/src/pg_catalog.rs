@@ -813,16 +813,6 @@ pub fn create_pg_table_is_visible() -> ScalarUDF {
     )
 }
 
-pub fn create_format_type_udf() -> ScalarUDF {
-    create_udf(
-        "format_type",
-        vec![DataType::Int32, DataType::Int32],
-        DataType::Utf8,
-        Volatility::Stable,
-        Arc::new(format_type::format_type_impl),
-    )
-}
-
 pub fn create_session_user_udf() -> ScalarUDF {
     let func = move |_args: &[ColumnarValue]| {
         let mut builder = StringBuilder::new();
@@ -949,7 +939,7 @@ pub fn setup_pg_catalog(
         "has_any_column_privilege",
     ));
     session_context.register_udf(create_pg_table_is_visible());
-    session_context.register_udf(create_format_type_udf());
+    session_context.register_udf(format_type::create_format_type_udf());
     session_context.register_udf(create_session_user_udf());
     session_context.register_udtf("pg_get_keywords", static_tables.pg_get_keywords.clone());
     session_context.register_udf(pg_get_expr_udf::create_pg_get_expr_udf());

@@ -11,7 +11,6 @@ use datafusion::{
 #[derive(Debug)]
 pub struct PgGetExprUDF {
     signature: Signature,
-    name: &'static str,
 }
 
 impl PgGetExprUDF {
@@ -30,7 +29,6 @@ impl PgGetExprUDF {
                 ],
                 Volatility::Stable,
             ),
-            name: "pg_get_expr",
         }
     }
 
@@ -49,7 +47,7 @@ impl ScalarUDFImpl for PgGetExprUDF {
     }
 
     fn name(&self) -> &str {
-        self.name
+        "pg_get_expr"
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
