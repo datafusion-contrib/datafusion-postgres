@@ -2,12 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::auth::{AuthManager, Permission, ResourceType};
-use crate::sql::{
-    parse, rewrite, AliasDuplicatedProjectionRewrite, BlacklistSqlRewriter,
-    CurrentUserVariableToSessionUserFunctionCall, FixArrayLiteral, PrependUnqualifiedPgTableName,
-    RemoveTableFunctionQualifier, RemoveUnsupportedTypes, ResolveUnqualifiedIdentifer,
-    RewriteArrayAnyAllOperation, SqlStatementRewriteRule,
-};
+use crate::sql::PostgresCompatibilityParser;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::ToDFSchema;
@@ -91,7 +86,6 @@ pub struct DfSessionService {
     parser: Arc<Parser>,
     timezone: Arc<Mutex<String>>,
     auth_manager: Arc<AuthManager>,
-    sql_rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>>,
 }
 
 impl DfSessionService {
@@ -99,29 +93,15 @@ impl DfSessionService {
         session_context: Arc<SessionContext>,
         auth_manager: Arc<AuthManager>,
     ) -> DfSessionService {
-        let sql_rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![
-            // make sure blacklist based rewriter it on the top to prevent sql
-            // being rewritten from other rewriters
-            Arc::new(BlacklistSqlRewriter::new()),
-            Arc::new(AliasDuplicatedProjectionRewrite),
-            Arc::new(ResolveUnqualifiedIdentifer),
-            Arc::new(RemoveUnsupportedTypes::new()),
-            Arc::new(RewriteArrayAnyAllOperation),
-            Arc::new(PrependUnqualifiedPgTableName),
-            Arc::new(FixArrayLiteral),
-            Arc::new(RemoveTableFunctionQualifier),
-            Arc::new(CurrentUserVariableToSessionUserFunctionCall),
-        ];
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
-            sql_rewrite_rules: sql_rewrite_rules.clone(),
+            sql_parser: PostgresCompatibilityParser::new(),
         });
         DfSessionService {
             session_context,
             parser,
             timezone: Arc::new(Mutex::new("UTC".to_string())),
             auth_manager,
-            sql_rewrite_rules,
         }
     }
 
@@ -457,13 +437,14 @@ impl SimpleQueryHandler for DfSessionService {
             return Ok(vec![resp]);
         }
 
-        let mut statements = parse(query).map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+        let mut statements = self
+            .parser
+            .sql_parser
+            .parse(query)
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
         // TODO: deal with multiple statements
-        let mut statement = statements.remove(0);
-
-        // Attempt to rewrite
-        statement = rewrite(statement, &self.sql_rewrite_rules);
+        let statement = statements.remove(0);
 
         // TODO: improve statement check by using statement directly
         let query = statement.to_string();
@@ -717,7 +698,7 @@ impl ExtendedQueryHandler for DfSessionService {
 
 pub struct Parser {
     session_context: Arc<SessionContext>,
-    sql_rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>>,
+    sql_parser: PostgresCompatibilityParser,
 }
 
 impl Parser {
@@ -790,11 +771,11 @@ impl QueryParser for Parser {
             return Ok((sql.to_string(), plan));
         }
 
-        let mut statements = parse(sql).map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        let mut statement = statements.remove(0);
-
-        // Attempt to rewrite
-        statement = rewrite(statement, &self.sql_rewrite_rules);
+        let mut statements = self
+            .sql_parser
+            .parse(sql)
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+        let statement = statements.remove(0);
 
         let query = statement.to_string();
 

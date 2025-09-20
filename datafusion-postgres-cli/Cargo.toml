@@ -15,7 +15,7 @@ rust-version.workspace = true
 [dependencies]
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
 tokio = { workspace = true, features = ["full"] }
-datafusion-postgres = { path = "../datafusion-postgres", version = "0.8.1" }
+datafusion-postgres = { path = "../datafusion-postgres", version = "0.9.0" }
 structopt = { version = "0.3", default-features = false }
 log = "0.4"
 env_logger = "0.11"

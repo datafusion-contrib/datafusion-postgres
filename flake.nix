@@ -16,10 +16,12 @@
         pkgs = nixpkgs.legacyPackages.${system};
         pythonEnv = pkgs.python3.withPackages (ps: with ps; [
           psycopg2-binary
+          psycopg
           pyarrow
         ]);
         buildInputs = with pkgs; [
           llvmPackages.libclang
+          libpq
         ];
       in
       {
