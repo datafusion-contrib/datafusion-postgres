@@ -3,4 +3,4 @@
 .envrc
 .vscode
 .aider*
-/test_env
+/tests-integration/test_env
