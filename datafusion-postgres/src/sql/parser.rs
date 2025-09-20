@@ -7,17 +7,17 @@ use datafusion::sql::sqlparser::parser::ParserError;
 use datafusion::sql::sqlparser::tokenizer::Token;
 use datafusion::sql::sqlparser::tokenizer::TokenWithSpan;
 
-use crate::sql::AliasDuplicatedProjectionRewrite;
-use crate::sql::CurrentUserVariableToSessionUserFunctionCall;
-use crate::sql::FixArrayLiteral;
-use crate::sql::FixCollate;
-use crate::sql::PrependUnqualifiedPgTableName;
-use crate::sql::RemoveQualifier;
-use crate::sql::RemoveSubqueryFromProjection;
-use crate::sql::RemoveUnsupportedTypes;
-use crate::sql::ResolveUnqualifiedIdentifer;
-use crate::sql::RewriteArrayAnyAllOperation;
-use crate::sql::SqlStatementRewriteRule;
+use super::rules::AliasDuplicatedProjectionRewrite;
+use super::rules::CurrentUserVariableToSessionUserFunctionCall;
+use super::rules::FixArrayLiteral;
+use super::rules::FixCollate;
+use super::rules::PrependUnqualifiedPgTableName;
+use super::rules::RemoveQualifier;
+use super::rules::RemoveSubqueryFromProjection;
+use super::rules::RemoveUnsupportedTypes;
+use super::rules::ResolveUnqualifiedIdentifer;
+use super::rules::RewriteArrayAnyAllOperation;
+use super::rules::SqlStatementRewriteRule;
 
 const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
     // pgcli startup query
