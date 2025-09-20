@@ -460,15 +460,13 @@ impl VisitorMut for PrependUnqualifiedPgTableNameVisitor {
     ) -> ControlFlow<Self::Break> {
         if let TableFactor::Table { name, args, .. } = table_factor {
             // not a table function
-            if args.is_none() {
-                if name.0.len() == 1 {
-                    let ObjectNamePart::Identifier(ident) = &name.0[0];
-                    if ident.value.starts_with("pg_") {
-                        *name = ObjectName(vec![
-                            ObjectNamePart::Identifier(Ident::new("pg_catalog")),
-                            name.0[0].clone(),
-                        ]);
-                    }
+            if args.is_none() && name.0.len() == 1 {
+                let ObjectNamePart::Identifier(ident) = &name.0[0];
+                if ident.value.starts_with("pg_") {
+                    *name = ObjectName(vec![
+                        ObjectNamePart::Identifier(Ident::new("pg_catalog")),
+                        name.0[0].clone(),
+                    ]);
                 }
             }
         }

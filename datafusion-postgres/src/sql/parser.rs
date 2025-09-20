@@ -239,7 +239,7 @@ impl PostgresCompatibilityParser {
                         }
                     });
                 if matches {
-                    return Ok(MatchResult::Matches(replacement.clone()));
+                    return Ok(MatchResult::Matches(Box::new(replacement.clone())));
                 }
             } else {
                 continue;
@@ -256,7 +256,7 @@ impl PostgresCompatibilityParser {
 
     pub fn parse(&self, input: &str) -> Result<Vec<Statement>, ParserError> {
         let statements = match self.parse_and_replace(input)? {
-            MatchResult::Matches(statement) => vec![statement],
+            MatchResult::Matches(statement) => vec![*statement],
             MatchResult::Unmatches(tokens) => self.parse_tokens(tokens)?,
         };
 
@@ -275,7 +275,7 @@ impl PostgresCompatibilityParser {
 }
 
 pub(crate) enum MatchResult {
-    Matches(Statement),
+    Matches(Box<Statement>),
     Unmatches(Vec<TokenWithSpan>),
 }
 
