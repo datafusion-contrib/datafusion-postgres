@@ -486,189 +486,412 @@ impl PgCatalogStaticTables {
     pub fn try_new() -> Result<Self> {
         Ok(Self {
             pg_aggregate: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_aggregate.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_aggregate.feather"
+                ))
+                .to_vec(),
             )?,
             pg_am: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_am.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_am.feather"
+                ))
+                .to_vec(),
             )?,
             pg_amop: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_amop.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_amop.feather"
+                ))
+                .to_vec(),
             )?,
             pg_amproc: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_amproc.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_amproc.feather"
+                ))
+                .to_vec(),
             )?,
             pg_cast: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_cast.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_cast.feather"
+                ))
+                .to_vec(),
             )?,
             pg_collation: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_collation.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_collation.feather"
+                ))
+                .to_vec(),
             )?,
             pg_conversion: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_conversion.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_conversion.feather"
+                ))
+                .to_vec(),
             )?,
             pg_language: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_language.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_language.feather"
+                ))
+                .to_vec(),
             )?,
             pg_opclass: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_opclass.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_opclass.feather"
+                ))
+                .to_vec(),
             )?,
             pg_operator: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_operator.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_operator.feather"
+                ))
+                .to_vec(),
             )?,
             pg_opfamily: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_opfamily.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_opfamily.feather"
+                ))
+                .to_vec(),
             )?,
             pg_proc: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_proc.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_proc.feather"
+                ))
+                .to_vec(),
             )?,
             pg_range: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_range.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_range.feather"
+                ))
+                .to_vec(),
             )?,
             pg_ts_config: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_ts_config.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_ts_config.feather"
+                ))
+                .to_vec(),
             )?,
             pg_ts_dict: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_ts_dict.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_ts_dict.feather"
+                ))
+                .to_vec(),
             )?,
             pg_ts_parser: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_ts_parser.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_ts_parser.feather"
+                ))
+                .to_vec(),
             )?,
             pg_ts_template: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_ts_template.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_ts_template.feather"
+                ))
+                .to_vec(),
             )?,
             pg_type: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_type.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_type.feather"
+                ))
+                .to_vec(),
             )?,
             pg_attrdef: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_attrdef.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_attrdef.feather"
+                ))
+                .to_vec(),
             )?,
             pg_auth_members: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_auth_members.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_auth_members.feather"
+                ))
+                .to_vec(),
             )?,
             pg_authid: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_authid.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_authid.feather"
+                ))
+                .to_vec(),
             )?,
             pg_constraint: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_constraint.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_constraint.feather"
+                ))
+                .to_vec(),
             )?,
             pg_db_role_setting: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_db_role_setting.feather")
-                    .to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_db_role_setting.feather"
+                ))
+                .to_vec(),
             )?,
             pg_default_acl: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_default_acl.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_default_acl.feather"
+                ))
+                .to_vec(),
             )?,
             pg_depend: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_depend.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_depend.feather"
+                ))
+                .to_vec(),
             )?,
             pg_description: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_description.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_description.feather"
+                ))
+                .to_vec(),
             )?,
             pg_enum: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_enum.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_enum.feather"
+                ))
+                .to_vec(),
             )?,
             pg_event_trigger: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_event_trigger.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_event_trigger.feather"
+                ))
+                .to_vec(),
             )?,
             pg_extension: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_extension.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_extension.feather"
+                ))
+                .to_vec(),
             )?,
             pg_foreign_data_wrapper: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_data_wrapper.feather")
-                    .to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_foreign_data_wrapper.feather"
+                ))
+                .to_vec(),
             )?,
             pg_foreign_server: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_server.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_foreign_server.feather"
+                ))
+                .to_vec(),
             )?,
             pg_foreign_table: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_table.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_foreign_table.feather"
+                ))
+                .to_vec(),
             )?,
             pg_index: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_index.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_index.feather"
+                ))
+                .to_vec(),
             )?,
             pg_inherits: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_inherits.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_inherits.feather"
+                ))
+                .to_vec(),
             )?,
             pg_init_privs: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_init_privs.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_init_privs.feather"
+                ))
+                .to_vec(),
             )?,
             pg_largeobject: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_largeobject.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_largeobject.feather"
+                ))
+                .to_vec(),
             )?,
             pg_largeobject_metadata: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_largeobject_metadata.feather")
-                    .to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_largeobject_metadata.feather"
+                ))
+                .to_vec(),
             )?,
 
             pg_partitioned_table: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_partitioned_table.feather")
-                    .to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_partitioned_table.feather"
+                ))
+                .to_vec(),
             )?,
             pg_policy: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_policy.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_policy.feather"
+                ))
+                .to_vec(),
             )?,
             pg_publication: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_publication.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_publication.feather"
+                ))
+                .to_vec(),
             )?,
             pg_publication_namespace: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_publication_namespace.feather")
-                    .to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_publication_namespace.feather"
+                ))
+                .to_vec(),
             )?,
             pg_publication_rel: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_publication_rel.feather")
-                    .to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_publication_rel.feather"
+                ))
+                .to_vec(),
             )?,
             pg_replication_origin: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_replication_origin.feather")
-                    .to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_replication_origin.feather"
+                ))
+                .to_vec(),
             )?,
             pg_rewrite: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_rewrite.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_rewrite.feather"
+                ))
+                .to_vec(),
             )?,
             pg_seclabel: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_seclabel.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_seclabel.feather"
+                ))
+                .to_vec(),
             )?,
             pg_sequence: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_sequence.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_sequence.feather"
+                ))
+                .to_vec(),
             )?,
             pg_shdepend: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_shdepend.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_shdepend.feather"
+                ))
+                .to_vec(),
             )?,
             pg_shdescription: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_shdescription.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_shdescription.feather"
+                ))
+                .to_vec(),
             )?,
             pg_shseclabel: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_shseclabel.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_shseclabel.feather"
+                ))
+                .to_vec(),
             )?,
             pg_statistic: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_statistic.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_statistic.feather"
+                ))
+                .to_vec(),
             )?,
             pg_statistic_ext: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_statistic_ext.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_statistic_ext.feather"
+                ))
+                .to_vec(),
             )?,
             pg_statistic_ext_data: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_statistic_ext_data.feather")
-                    .to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_statistic_ext_data.feather"
+                ))
+                .to_vec(),
             )?,
             pg_subscription: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_subscription.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_subscription.feather"
+                ))
+                .to_vec(),
             )?,
             pg_subscription_rel: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_subscription_rel.feather")
-                    .to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_subscription_rel.feather"
+                ))
+                .to_vec(),
             )?,
             pg_tablespace: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_tablespace.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_tablespace.feather"
+                ))
+                .to_vec(),
             )?,
             pg_trigger: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_trigger.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_trigger.feather"
+                ))
+                .to_vec(),
             )?,
             pg_user_mapping: Self::create_arrow_table(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_user_mapping.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_user_mapping.feather"
+                ))
+                .to_vec(),
             )?,
 
             pg_get_keywords: Self::create_arrow_table_function(
-                include_bytes!("../../pg_catalog_arrow_exports/pg_get_keywords.feather").to_vec(),
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/pg_catalog_arrow_exports/pg_get_keywords.feather"
+                ))
+                .to_vec(),
             )?,
         })
     }
@@ -957,7 +1180,11 @@ mod test {
     #[test]
     fn test_load_arrow_data() {
         let table = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_aggregate.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_aggregate.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
 
@@ -965,242 +1192,471 @@ mod test {
         assert_eq!(table.data.len(), 1);
 
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_aggregate.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_aggregate.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_am.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_am.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_amop.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_amop.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_amproc.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_amproc.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_cast.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_cast.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_collation.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_collation.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_conversion.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_conversion.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_language.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_language.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_opclass.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_opclass.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_operator.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_operator.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_opfamily.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_opfamily.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_proc.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_proc.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_range.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_range.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_ts_config.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_ts_config.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_ts_dict.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_ts_dict.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_ts_parser.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_ts_parser.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_ts_template.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_ts_template.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_type.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_attrdef.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_auth_members.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_authid.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_constraint.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_db_role_setting.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_default_acl.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_depend.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_description.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_enum.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_event_trigger.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_extension.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_data_wrapper.feather")
-                .to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_server.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_foreign_table.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_index.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_inherits.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_init_privs.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_largeobject.feather").to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_largeobject_metadata.feather")
-                .to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_type.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
 
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_partitioned_table.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_attrdef.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_policy.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_auth_members.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_publication.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_authid.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_constraint.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_db_role_setting.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_publication_namespace.feather")
-                .to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_default_acl.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_publication_rel.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_depend.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_replication_origin.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_description.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_rewrite.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_enum.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_seclabel.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_event_trigger.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_sequence.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_extension.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_shdepend.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_foreign_data_wrapper.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_shdescription.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_foreign_server.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_shseclabel.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_foreign_table.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_statistic.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_index.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_statistic_ext.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_inherits.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_statistic_ext_data.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_init_privs.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_subscription.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_largeobject.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_subscription_rel.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_largeobject_metadata.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_partitioned_table.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_tablespace.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_policy.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_trigger.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_publication.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_user_mapping.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_publication_namespace.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
         let _ = ArrowTable::from_ipc_data(
-            include_bytes!("../../pg_catalog_arrow_exports/pg_get_keywords.feather").to_vec(),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_publication_rel.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_replication_origin.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_rewrite.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_seclabel.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_sequence.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_shdepend.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_shdescription.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_shseclabel.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_statistic.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_statistic_ext.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_statistic_ext_data.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_subscription.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_subscription_rel.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_tablespace.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_trigger.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_user_mapping.feather"
+            ))
+            .to_vec(),
+        )
+        .expect("Failed to load ipc data");
+        let _ = ArrowTable::from_ipc_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/pg_catalog_arrow_exports/pg_get_keywords.feather"
+            ))
+            .to_vec(),
         )
         .expect("Failed to load ipc data");
     }
