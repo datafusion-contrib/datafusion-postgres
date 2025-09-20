@@ -2,8 +2,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::array::{
+    ArrayRef, BooleanArray, Int32Array, ListArray, RecordBatch, StringArray,
+};
+use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use datafusion::error::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -36,8 +38,9 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
             Field::new("datname", DataType::Utf8, false), // Database name
             Field::new("datdba", DataType::Int32, false), // Database owner's user ID
             Field::new("encoding", DataType::Int32, false), // Character encoding
+            Field::new("datlocprovider", DataType::Utf8, false),
             Field::new("datcollate", DataType::Utf8, false), // LC_COLLATE for this database
-            Field::new("datctype", DataType::Utf8, false), // LC_CTYPE for this database
+            Field::new("datctype", DataType::Utf8, false),   // LC_CTYPE for this database
             Field::new("datistemplate", DataType::Boolean, false), // If true, database can be used as a template
             Field::new("datallowconn", DataType::Boolean, false), // If false, no one can connect to this database
             Field::new("datconnlimit", DataType::Int32, false), // Max number of concurrent connections (-1=no limit)
@@ -45,7 +48,13 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
             Field::new("datfrozenxid", DataType::Int32, false), // Frozen XID for this database
             Field::new("datminmxid", DataType::Int32, false),   // Minimum multixact ID
             Field::new("dattablespace", DataType::Int32, false), // Default tablespace for this database
-            Field::new("datacl", DataType::Utf8, true),          // Access privileges
+            Field::new("daticulocale", DataType::Utf8, true),
+            Field::new("daticurules", DataType::Utf8, true),
+            Field::new(
+                "datacl",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                true,
+            ), // Access privileges
         ]));
 
         Self {
@@ -63,6 +72,7 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
         let mut datnames = Vec::new();
         let mut datdbas = Vec::new();
         let mut encodings = Vec::new();
+        let mut datlocproviders = Vec::new();
         let mut datcollates = Vec::new();
         let mut datctypes = Vec::new();
         let mut datistemplates = Vec::new();
@@ -72,7 +82,9 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
         let mut datfrozenxids = Vec::new();
         let mut datminmxids = Vec::new();
         let mut dattablespaces = Vec::new();
-        let mut datacles: Vec<Option<String>> = Vec::new();
+        let mut daticulocales: Vec<Option<String>> = Vec::new();
+        let mut daticurules: Vec<Option<String>> = Vec::new();
+        let mut datacls: Vec<Option<Vec<Option<i32>>>> = Vec::new();
 
         // to store all schema-oid mapping temporarily before adding to global oid cache
         let mut catalog_oid_cache = HashMap::new();
@@ -93,6 +105,7 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
             datnames.push(catalog_name.clone());
             datdbas.push(10); // Default owner (assuming 10 = postgres user)
             encodings.push(6); // 6 = UTF8 in PostgreSQL
+            datlocproviders.push("".to_string());
             datcollates.push("en_US.UTF-8".to_string()); // Default collation
             datctypes.push("en_US.UTF-8".to_string()); // Default ctype
             datistemplates.push(false);
@@ -102,7 +115,9 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
             datfrozenxids.push(1); // Simplified transaction ID
             datminmxids.push(1); // Simplified multixact ID
             dattablespaces.push(1663); // Default tablespace (1663 = pg_default in PostgreSQL)
-            datacles.push(None); // No specific ACLs
+            daticulocales.push(None);
+            daticurules.push(None);
+            datacls.push(None); // No specific ACLs
         }
 
         // Always include a "postgres" database entry if not already present
@@ -121,6 +136,7 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
             datnames.push(default_datname);
             datdbas.push(10);
             encodings.push(6);
+            datlocproviders.push("".to_string());
             datcollates.push("en_US.UTF-8".to_string());
             datctypes.push("en_US.UTF-8".to_string());
             datistemplates.push(false);
@@ -130,7 +146,9 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
             datfrozenxids.push(1);
             datminmxids.push(1);
             dattablespaces.push(1663);
-            datacles.push(None);
+            daticulocales.push(None);
+            daticurules.push(None);
+            datacls.push(None);
         }
 
         // Create Arrow arrays from the collected data
@@ -139,6 +157,7 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
             Arc::new(StringArray::from(datnames)),
             Arc::new(Int32Array::from(datdbas)),
             Arc::new(Int32Array::from(encodings)),
+            Arc::new(StringArray::from(datlocproviders)),
             Arc::new(StringArray::from(datcollates)),
             Arc::new(StringArray::from(datctypes)),
             Arc::new(BooleanArray::from(datistemplates)),
@@ -148,7 +167,11 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
             Arc::new(Int32Array::from(datfrozenxids)),
             Arc::new(Int32Array::from(datminmxids)),
             Arc::new(Int32Array::from(dattablespaces)),
-            Arc::new(StringArray::from_iter(datacles.into_iter())),
+            Arc::new(StringArray::from(daticulocales)),
+            Arc::new(StringArray::from(daticurules)),
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+                datacls.into_iter(),
+            )),
         ];
 
         // Create a full record batch

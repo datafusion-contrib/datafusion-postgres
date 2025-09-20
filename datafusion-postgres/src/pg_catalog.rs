@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{
-    as_boolean_array, ArrayRef, BooleanBuilder, RecordBatch, StringArray, StringBuilder,
+    as_boolean_array, ArrayRef, AsArray, BooleanBuilder, RecordBatch, StringArray, StringBuilder,
 };
-use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
 use datafusion::arrow::ipc::reader::FileReader;
 use datafusion::catalog::streaming::StreamingTable;
 use datafusion::catalog::{MemTable, SchemaProvider, TableFunctionImpl};
@@ -1109,7 +1109,7 @@ pub fn create_pg_get_statisticsobjdef_columns_udf() -> ScalarUDF {
         let args = ColumnarValue::values_to_arrays(args)?;
         let oid = &args[0];
 
-        let mut builder = BooleanBuilder::new();
+        let mut builder = StringBuilder::new();
         for _ in 0..oid.len() {
             builder.append_null();
         }
@@ -1122,6 +1122,34 @@ pub fn create_pg_get_statisticsobjdef_columns_udf() -> ScalarUDF {
     create_udf(
         "pg_get_statisticsobjdef_columns",
         vec![DataType::UInt32],
+        DataType::Utf8,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_pg_encoding_to_char_udf() -> ScalarUDF {
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let encoding = &args[0].as_primitive::<Int32Type>();
+
+        let mut builder = StringBuilder::new();
+        for i in 0..encoding.len() {
+            if encoding.value(i) == 6 {
+                builder.append_value("UTF-8");
+            } else {
+                builder.append_null();
+            }
+        }
+
+        let array: ArrayRef = Arc::new(builder.finish());
+
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "pg_encoding_to_char",
+        vec![DataType::Int32],
         DataType::Utf8,
         Volatility::Stable,
         Arc::new(func),
@@ -1169,6 +1197,7 @@ pub fn setup_pg_catalog(
     session_context.register_udf(create_pg_get_partkeydef_udf());
     session_context.register_udf(create_pg_relation_is_publishable_udf());
     session_context.register_udf(create_pg_get_statisticsobjdef_columns_udf());
+    session_context.register_udf(create_pg_encoding_to_char_udf());
 
     Ok(())
 }
