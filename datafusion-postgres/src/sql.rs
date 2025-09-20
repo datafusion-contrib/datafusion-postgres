@@ -1,6 +1,6 @@
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::ops::ControlFlow;
-use std::sync::Arc;
 
 use datafusion::sql::sqlparser::ast::Array;
 use datafusion::sql::sqlparser::ast::ArrayElemTypeDef;
@@ -30,28 +30,11 @@ use datafusion::sql::sqlparser::ast::Value;
 use datafusion::sql::sqlparser::ast::ValueWithSpan;
 use datafusion::sql::sqlparser::ast::VisitMut;
 use datafusion::sql::sqlparser::ast::VisitorMut;
-use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
-use datafusion::sql::sqlparser::parser::Parser;
-use datafusion::sql::sqlparser::parser::ParserError;
 
 mod blacklist;
-pub use blacklist::BlacklistSqlRewriter;
+pub use blacklist::PostgresCompatibilityParser;
 
-pub fn parse(sql: &str) -> Result<Vec<Statement>, ParserError> {
-    let dialect = PostgreSqlDialect {};
-
-    Parser::parse_sql(&dialect, sql)
-}
-
-pub fn rewrite(mut s: Statement, rules: &[Arc<dyn SqlStatementRewriteRule>]) -> Statement {
-    for rule in rules {
-        s = rule.rewrite(s);
-    }
-
-    s
-}
-
-pub trait SqlStatementRewriteRule: Send + Sync {
+pub trait SqlStatementRewriteRule: Send + Sync + Debug {
     fn rewrite(&self, s: Statement) -> Statement;
 }
 
@@ -794,6 +777,24 @@ impl SqlStatementRewriteRule for RemoveSubqueryFromProjection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
+    use datafusion::sql::sqlparser::parser::Parser;
+    use datafusion::sql::sqlparser::parser::ParserError;
+    use std::sync::Arc;
+
+    fn parse(sql: &str) -> Result<Vec<Statement>, ParserError> {
+        let dialect = PostgreSqlDialect {};
+
+        Parser::parse_sql(&dialect, sql)
+    }
+
+    fn rewrite(mut s: Statement, rules: &[Arc<dyn SqlStatementRewriteRule>]) -> Statement {
+        for rule in rules {
+            s = rule.rewrite(s);
+        }
+
+        s
+    }
 
     macro_rules! assert_rewrite {
         ($rules:expr, $orig:expr, $rewt:expr) => {

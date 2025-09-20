@@ -816,7 +816,7 @@ pub fn create_pg_table_is_visible() -> ScalarUDF {
 pub fn create_format_type_udf() -> ScalarUDF {
     create_udf(
         "format_type",
-        vec![DataType::Int64, DataType::Int32],
+        vec![DataType::Int32, DataType::Int32],
         DataType::Utf8,
         Volatility::Stable,
         Arc::new(format_type::format_type_impl),
