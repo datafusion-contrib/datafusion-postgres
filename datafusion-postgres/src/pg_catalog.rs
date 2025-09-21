@@ -30,6 +30,7 @@ pub mod pg_class;
 pub mod pg_database;
 pub mod pg_get_expr_udf;
 pub mod pg_namespace;
+pub mod pg_replication_slot;
 pub mod pg_settings;
 pub mod pg_tables;
 pub mod pg_views;
@@ -100,6 +101,7 @@ const PG_CATALOG_VIEW_PG_VIEWS: &str = "pg_views";
 const PG_CATALOG_VIEW_PG_MATVIEWS: &str = "pg_matviews";
 const PG_CATALOG_VIEW_PG_TABLES: &str = "pg_tables";
 const PG_CATALOG_VIEW_PG_STAT_USER_TABELS: &str = "pg_stat_user_tables";
+const PG_CATALOG_VIEW_PG_REPLICATION_SLOTS: &str = "pg_replication_slots";
 
 pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_TABLE_PG_AGGREGATE,
@@ -167,6 +169,7 @@ pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_VIEW_PG_VIEWS,
     PG_CATALOG_VIEW_PG_MATVIEWS,
     PG_CATALOG_VIEW_PG_STAT_USER_TABELS,
+    PG_CATALOG_VIEW_PG_REPLICATION_SLOTS,
 ];
 
 #[derive(Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
@@ -352,7 +355,10 @@ impl<C: CatalogInfo> SchemaProvider for PgCatalogSchemaProvider<C> {
             PG_CATALOG_VIEW_PG_STAT_USER_TABELS => {
                 Ok(Some(Arc::new(pg_views::pg_stat_user_tables()?)))
             }
-
+            PG_CATALOG_VIEW_PG_REPLICATION_SLOTS => {
+                let table = pg_replication_slot::pg_replication_slots()?;
+                Ok(Some(table))
+            }
             _ => Ok(None),
         }
     }
