@@ -2,10 +2,13 @@ use std::sync::Arc;
 
 use datafusion::{
     arrow::{
-        array::{Array, StringBuilder},
-        datatypes::DataType,
+        array::{Array, PrimitiveArray, StringBuilder},
+        datatypes::{DataType, Int32Type},
     },
-    common::{cast::as_int32_array, DataFusionError},
+    common::{
+        cast::{as_int32_array, as_int64_array},
+        DataFusionError,
+    },
     logical_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
         Volatility,
@@ -14,12 +17,32 @@ use datafusion::{
 
 pub(crate) fn format_type_impl(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
     let args = ColumnarValue::values_to_arrays(args)?;
-    let type_oids = as_int32_array(&args[0])?;
+    let type_oids = match &args[0].data_type() {
+        DataType::Int32 => as_int32_array(&args[0])?,
+        DataType::Int64 => {
+            let oid_i64 = as_int64_array(&args[0])?;
+            &PrimitiveArray::<Int32Type>::from_iter(oid_i64.iter().map(|v| v.map(|x| x as i32)))
+        }
+        _ => {
+            return Err(DataFusionError::Internal(format!(
+                "Unexpected oid type in format_type: {}",
+                args[0].data_type()
+            )))
+        }
+    };
 
-    let typemods = if args.len() > 1 {
-        Some(as_int32_array(&args[1])?)
-    } else {
-        None
+    let typemods = match &args[1].data_type() {
+        DataType::Int32 => as_int32_array(&args[1])?,
+        DataType::Int64 => {
+            let oid_i64 = as_int64_array(&args[1])?;
+            &PrimitiveArray::<Int32Type>::from_iter(oid_i64.iter().map(|v| v.map(|x| x as i32)))
+        }
+        _ => {
+            return Err(DataFusionError::Internal(format!(
+                "Unexpected oid type in format_type: {}",
+                args[1].data_type()
+            )))
+        }
     };
 
     let mut result = StringBuilder::new();
@@ -31,9 +54,11 @@ pub(crate) fn format_type_impl(args: &[ColumnarValue]) -> Result<ColumnarValue, 
         }
 
         let type_oid = type_oids.value(i);
-        let typemod = typemods
-            .map(|tm| if tm.is_null(i) { -1 } else { tm.value(i) })
-            .unwrap_or(-1);
+        let typemod = if typemods.is_null(i) {
+            -1
+        } else {
+            typemods.value(i)
+        };
 
         let formatted_type = format_postgres_type(type_oid, typemod);
         result.append_value(formatted_type);
@@ -211,8 +236,10 @@ impl FormatTypeUDF {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Exact(vec![DataType::Int64, DataType::Int32]),
                     TypeSignature::Exact(vec![DataType::Int32, DataType::Int32]),
+                    TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]),
+                    TypeSignature::Exact(vec![DataType::Int64, DataType::Int32]),
+                    TypeSignature::Exact(vec![DataType::Int64, DataType::Int64]),
                 ],
                 Volatility::Stable,
             ),
