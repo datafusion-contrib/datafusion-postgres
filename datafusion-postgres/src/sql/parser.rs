@@ -7,6 +7,8 @@ use datafusion::sql::sqlparser::parser::ParserError;
 use datafusion::sql::sqlparser::tokenizer::Token;
 use datafusion::sql::sqlparser::tokenizer::TokenWithSpan;
 
+use crate::sql::rules::FixVersionColumnName;
+
 use super::rules::AliasDuplicatedProjectionRewrite;
 use super::rules::CurrentUserVariableToSessionUserFunctionCall;
 use super::rules::FixArrayLiteral;
@@ -212,6 +214,7 @@ impl PostgresCompatibilityParser {
                 Arc::new(CurrentUserVariableToSessionUserFunctionCall),
                 Arc::new(FixCollate),
                 Arc::new(RemoveSubqueryFromProjection),
+                Arc::new(FixVersionColumnName),
             ],
         }
     }
