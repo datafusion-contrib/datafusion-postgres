@@ -173,7 +173,7 @@ def pg_type_to_arrow_type(pg_type, is_nullable=True):
         'character varying': pa.string(),
         'character': pa.string(),
         'name': pa.string(),
-        'oid': pa.int32(),  # OIDs are unsigned
+        'oid': pa.int32(),  # OIDs are signed
         'regproc': pa.string(),
         'regtype': pa.string(),
         'regclass': pa.string(),
