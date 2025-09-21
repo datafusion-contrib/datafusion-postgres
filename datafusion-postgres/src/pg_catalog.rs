@@ -100,7 +100,7 @@ const PG_CATALOG_VIEW_PG_SETTINGS: &str = "pg_settings";
 const PG_CATALOG_VIEW_PG_VIEWS: &str = "pg_views";
 const PG_CATALOG_VIEW_PG_MATVIEWS: &str = "pg_matviews";
 const PG_CATALOG_VIEW_PG_TABLES: &str = "pg_tables";
-const PG_CATALOG_VIEW_PG_STAT_USER_TABELS: &str = "pg_stat_user_tables";
+const PG_CATALOG_VIEW_PG_STAT_USER_TABLES: &str = "pg_stat_user_tables";
 const PG_CATALOG_VIEW_PG_REPLICATION_SLOTS: &str = "pg_replication_slots";
 
 pub const PG_CATALOG_TABLES: &[&str] = &[
@@ -168,7 +168,7 @@ pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_VIEW_PG_SETTINGS,
     PG_CATALOG_VIEW_PG_VIEWS,
     PG_CATALOG_VIEW_PG_MATVIEWS,
-    PG_CATALOG_VIEW_PG_STAT_USER_TABELS,
+    PG_CATALOG_VIEW_PG_STAT_USER_TABLES,
     PG_CATALOG_VIEW_PG_REPLICATION_SLOTS,
 ];
 
@@ -352,7 +352,7 @@ impl<C: CatalogInfo> SchemaProvider for PgCatalogSchemaProvider<C> {
             }
             PG_CATALOG_VIEW_PG_VIEWS => Ok(Some(Arc::new(pg_views::pg_views()?))),
             PG_CATALOG_VIEW_PG_MATVIEWS => Ok(Some(Arc::new(pg_views::pg_matviews()?))),
-            PG_CATALOG_VIEW_PG_STAT_USER_TABELS => {
+            PG_CATALOG_VIEW_PG_STAT_USER_TABLES => {
                 Ok(Some(Arc::new(pg_views::pg_stat_user_tables()?)))
             }
             PG_CATALOG_VIEW_PG_REPLICATION_SLOTS => {
