@@ -787,7 +787,7 @@ impl VisitorMut for FixVersionColumnNameVisitor {
                         if let ObjectNamePart::Identifier(part) = &f.name.0[0] {
                             if part.value == "version" {
                                 if let FunctionArguments::List(args) = &f.args {
-                                    if args.args.len() == 0 {
+                                    if args.args.is_empty() {
                                         *projection = SelectItem::ExprWithAlias {
                                             expr: Expr::Function(f.clone()),
                                             alias: Ident::new("version"),
