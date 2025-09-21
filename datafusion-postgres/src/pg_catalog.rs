@@ -1186,7 +1186,7 @@ pub fn setup_pg_catalog(
     session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
         "has_schema_privilege",
     ));
-        session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
+    session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
         "has_database_privilege",
     ));
     session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
