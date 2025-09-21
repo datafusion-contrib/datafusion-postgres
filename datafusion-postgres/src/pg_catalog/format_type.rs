@@ -5,7 +5,10 @@ use datafusion::{
         array::{Array, StringBuilder},
         datatypes::DataType,
     },
-    common::{cast::as_int32_array, DataFusionError},
+    common::{
+        cast::{as_int32_array, as_int64_array},
+        DataFusionError,
+    },
     logical_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
         Volatility,
@@ -14,7 +17,7 @@ use datafusion::{
 
 pub(crate) fn format_type_impl(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
     let args = ColumnarValue::values_to_arrays(args)?;
-    let type_oids = as_int32_array(&args[0])?;
+    let type_oids = as_int64_array(&args[0])?;
 
     let typemods = if args.len() > 1 {
         Some(as_int32_array(&args[1])?)
@@ -35,7 +38,7 @@ pub(crate) fn format_type_impl(args: &[ColumnarValue]) -> Result<ColumnarValue, 
             .map(|tm| if tm.is_null(i) { -1 } else { tm.value(i) })
             .unwrap_or(-1);
 
-        let formatted_type = format_postgres_type(type_oid, typemod);
+        let formatted_type = format_postgres_type(type_oid as i32, typemod);
         result.append_value(formatted_type);
     }
 
