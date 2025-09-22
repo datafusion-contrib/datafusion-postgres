@@ -69,7 +69,7 @@ impl PgRolesTable {
         let mut oid: Vec<i32> = Vec::new();
 
         for role_name in &this.auth_manager.list_roles().await {
-            let role = &this.auth_manager.get_role(&role_name).await.unwrap();
+            let role = &this.auth_manager.get_role(role_name).await.unwrap();
             rolname.push(role.name.clone());
             rolsuper.push(role.is_superuser);
             rolinherit.push(true);
