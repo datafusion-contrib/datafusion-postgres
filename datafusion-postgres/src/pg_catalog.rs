@@ -20,6 +20,7 @@ use datafusion::prelude::{create_udf, Expr, SessionContext};
 use postgres_types::Oid;
 use tokio::sync::RwLock;
 
+use crate::auth::AuthManager;
 use crate::pg_catalog::catalog_info::CatalogInfo;
 
 pub mod catalog_info;
@@ -32,6 +33,7 @@ pub mod pg_database;
 pub mod pg_get_expr_udf;
 pub mod pg_namespace;
 pub mod pg_replication_slot;
+pub mod pg_roles;
 pub mod pg_settings;
 pub mod pg_stat_gssapi;
 pub mod pg_tables;
@@ -101,6 +103,7 @@ const PG_CATALOG_TABLE_PG_USER_MAPPING: &str = "pg_user_mapping";
 const PG_CATALOG_VIEW_PG_SETTINGS: &str = "pg_settings";
 const PG_CATALOG_VIEW_PG_VIEWS: &str = "pg_views";
 const PG_CATALOG_VIEW_PG_MATVIEWS: &str = "pg_matviews";
+const PG_CATALOG_VIEW_PG_ROLES: &str = "pg_roles";
 const PG_CATALOG_VIEW_PG_TABLES: &str = "pg_tables";
 const PG_CATALOG_VIEW_PG_STAT_GSSAPI: &str = "pg_stat_gssapi";
 const PG_CATALOG_VIEW_PG_STAT_USER_TABLES: &str = "pg_stat_user_tables";
@@ -190,6 +193,7 @@ pub struct PgCatalogSchemaProvider<C> {
     oid_counter: Arc<AtomicU32>,
     oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
     static_tables: Arc<PgCatalogStaticTables>,
+    auth_manager: Arc<AuthManager>,
 }
 
 #[async_trait]
@@ -349,6 +353,13 @@ impl<C: CatalogInfo> SchemaProvider for PgCatalogSchemaProvider<C> {
                     vec![table],
                 )?)))
             }
+            PG_CATALOG_VIEW_PG_ROLES => {
+                let table = Arc::new(pg_roles::PgRolesTable::new(Arc::clone(&self.auth_manager)));
+                Ok(Some(Arc::new(StreamingTable::try_new(
+                    Arc::clone(table.schema()),
+                    vec![table],
+                )?)))
+            }
             PG_CATALOG_VIEW_PG_TABLES => {
                 let table = Arc::new(pg_tables::PgTablesTable::new(self.catalog_list.clone()));
                 Ok(Some(Arc::new(StreamingTable::try_new(
@@ -382,12 +393,14 @@ impl<C: CatalogInfo> PgCatalogSchemaProvider<C> {
     pub fn try_new(
         catalog_list: C,
         static_tables: Arc<PgCatalogStaticTables>,
+        auth_manager: Arc<AuthManager>,
     ) -> Result<PgCatalogSchemaProvider<C>> {
         Ok(Self {
             catalog_list,
             oid_counter: Arc::new(AtomicU32::new(16384)),
             oid_cache: Arc::new(RwLock::new(HashMap::new())),
             static_tables,
+            auth_manager,
         })
     }
 }
@@ -1195,11 +1208,13 @@ const BACKEND_PID: i32 = 1;
 pub fn setup_pg_catalog(
     session_context: &SessionContext,
     catalog_name: &str,
+    auth_manager: Arc<AuthManager>,
 ) -> Result<(), Box<DataFusionError>> {
     let static_tables = Arc::new(PgCatalogStaticTables::try_new()?);
     let pg_catalog = PgCatalogSchemaProvider::try_new(
         session_context.state().catalog_list().clone(),
         static_tables.clone(),
+        auth_manager,
     )?;
     session_context
         .catalog(catalog_name)

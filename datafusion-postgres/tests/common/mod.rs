@@ -12,7 +12,12 @@ use pgwire::{
 
 pub fn setup_handlers() -> DfSessionService {
     let session_context = SessionContext::new();
-    setup_pg_catalog(&session_context, "datafusion").expect("Failed to setup sesession context");
+    setup_pg_catalog(
+        &session_context,
+        "datafusion",
+        Arc::new(AuthManager::default()),
+    )
+    .expect("Failed to setup sesession context");
 
     DfSessionService::new(Arc::new(session_context), Arc::new(AuthManager::new()))
 }
