@@ -198,99 +198,175 @@ impl<C: CatalogInfo> SchemaProvider for PgCatalogSchemaProvider<C> {
 
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         match name.to_ascii_lowercase().as_str() {
-            PG_CATALOG_TABLE_PG_AGGREGATE => Ok(Some(self.static_tables.pg_aggregate.clone())),
-            PG_CATALOG_TABLE_PG_AM => Ok(Some(self.static_tables.pg_am.clone())),
-            PG_CATALOG_TABLE_PG_AMOP => Ok(Some(self.static_tables.pg_amop.clone())),
-            PG_CATALOG_TABLE_PG_AMPROC => Ok(Some(self.static_tables.pg_amproc.clone())),
-            PG_CATALOG_TABLE_PG_CAST => Ok(Some(self.static_tables.pg_cast.clone())),
-            PG_CATALOG_TABLE_PG_COLLATION => Ok(Some(self.static_tables.pg_collation.clone())),
-            PG_CATALOG_TABLE_PG_CONVERSION => Ok(Some(self.static_tables.pg_conversion.clone())),
-            PG_CATALOG_TABLE_PG_LANGUAGE => Ok(Some(self.static_tables.pg_language.clone())),
-            PG_CATALOG_TABLE_PG_OPCLASS => Ok(Some(self.static_tables.pg_opclass.clone())),
-            PG_CATALOG_TABLE_PG_OPERATOR => Ok(Some(self.static_tables.pg_operator.clone())),
-            PG_CATALOG_TABLE_PG_OPFAMILY => Ok(Some(self.static_tables.pg_opfamily.clone())),
-            PG_CATALOG_TABLE_PG_PROC => Ok(Some(self.static_tables.pg_proc.clone())),
-            PG_CATALOG_TABLE_PG_RANGE => Ok(Some(self.static_tables.pg_range.clone())),
-            PG_CATALOG_TABLE_PG_TS_CONFIG => Ok(Some(self.static_tables.pg_ts_config.clone())),
-            PG_CATALOG_TABLE_PG_TS_DICT => Ok(Some(self.static_tables.pg_ts_dict.clone())),
-            PG_CATALOG_TABLE_PG_TS_PARSER => Ok(Some(self.static_tables.pg_ts_parser.clone())),
-            PG_CATALOG_TABLE_PG_TS_TEMPLATE => Ok(Some(self.static_tables.pg_ts_template.clone())),
-            PG_CATALOG_TABLE_PG_TYPE => Ok(Some(self.static_tables.pg_type.clone())),
-            PG_CATALOG_TABLE_PG_ATTRDEF => Ok(Some(self.static_tables.pg_attrdef.clone())),
-            PG_CATALOG_TABLE_PG_AUTH_MEMBERS => {
-                Ok(Some(self.static_tables.pg_auth_members.clone()))
+            PG_CATALOG_TABLE_PG_AGGREGATE => {
+                Ok(Some(self.static_tables.pg_aggregate.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_AUTHID => Ok(Some(self.static_tables.pg_authid.clone())),
+            PG_CATALOG_TABLE_PG_AM => Ok(Some(self.static_tables.pg_am.try_into_memtable()?)),
+            PG_CATALOG_TABLE_PG_AMOP => Ok(Some(self.static_tables.pg_amop.try_into_memtable()?)),
+            PG_CATALOG_TABLE_PG_AMPROC => {
+                Ok(Some(self.static_tables.pg_amproc.try_into_memtable()?))
+            }
+            PG_CATALOG_TABLE_PG_CAST => Ok(Some(self.static_tables.pg_cast.try_into_memtable()?)),
+            PG_CATALOG_TABLE_PG_COLLATION => {
+                Ok(Some(self.static_tables.pg_collation.try_into_memtable()?))
+            }
+            PG_CATALOG_TABLE_PG_CONVERSION => {
+                Ok(Some(self.static_tables.pg_conversion.try_into_memtable()?))
+            }
+            PG_CATALOG_TABLE_PG_LANGUAGE => {
+                Ok(Some(self.static_tables.pg_language.try_into_memtable()?))
+            }
+            PG_CATALOG_TABLE_PG_OPCLASS => {
+                Ok(Some(self.static_tables.pg_opclass.try_into_memtable()?))
+            }
+            PG_CATALOG_TABLE_PG_OPERATOR => {
+                Ok(Some(self.static_tables.pg_operator.try_into_memtable()?))
+            }
+            PG_CATALOG_TABLE_PG_OPFAMILY => {
+                Ok(Some(self.static_tables.pg_opfamily.try_into_memtable()?))
+            }
+            PG_CATALOG_TABLE_PG_PROC => Ok(Some(self.static_tables.pg_proc.try_into_memtable()?)),
+            PG_CATALOG_TABLE_PG_RANGE => Ok(Some(self.static_tables.pg_range.try_into_memtable()?)),
+            PG_CATALOG_TABLE_PG_TS_CONFIG => {
+                Ok(Some(self.static_tables.pg_ts_config.try_into_memtable()?))
+            }
+            PG_CATALOG_TABLE_PG_TS_DICT => {
+                Ok(Some(self.static_tables.pg_ts_dict.try_into_memtable()?))
+            }
+            PG_CATALOG_TABLE_PG_TS_PARSER => {
+                Ok(Some(self.static_tables.pg_ts_parser.try_into_memtable()?))
+            }
+            PG_CATALOG_TABLE_PG_TS_TEMPLATE => {
+                Ok(Some(self.static_tables.pg_ts_template.try_into_memtable()?))
+            }
+            PG_CATALOG_TABLE_PG_TYPE => Ok(Some(self.static_tables.pg_type.try_into_memtable()?)),
+            PG_CATALOG_TABLE_PG_ATTRDEF => {
+                Ok(Some(self.static_tables.pg_attrdef.try_into_memtable()?))
+            }
+            PG_CATALOG_TABLE_PG_AUTH_MEMBERS => Ok(Some(
+                self.static_tables.pg_auth_members.try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_AUTHID => {
+                Ok(Some(self.static_tables.pg_authid.try_into_memtable()?))
+            }
 
-            PG_CATALOG_TABLE_PG_CONSTRAINT => Ok(Some(self.static_tables.pg_constraint.clone())),
+            PG_CATALOG_TABLE_PG_CONSTRAINT => {
+                Ok(Some(self.static_tables.pg_constraint.try_into_memtable()?))
+            }
 
-            PG_CATALOG_TABLE_PG_DB_ROLE_SETTING => {
-                Ok(Some(self.static_tables.pg_db_role_setting.clone()))
+            PG_CATALOG_TABLE_PG_DB_ROLE_SETTING => Ok(Some(
+                self.static_tables.pg_db_role_setting.try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_DEFAULT_ACL => {
+                Ok(Some(self.static_tables.pg_default_acl.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_DEFAULT_ACL => Ok(Some(self.static_tables.pg_default_acl.clone())),
-            PG_CATALOG_TABLE_PG_DEPEND => Ok(Some(self.static_tables.pg_depend.clone())),
-            PG_CATALOG_TABLE_PG_DESCRIPTION => Ok(Some(self.static_tables.pg_description.clone())),
-            PG_CATALOG_TABLE_PG_ENUM => Ok(Some(self.static_tables.pg_enum.clone())),
-            PG_CATALOG_TABLE_PG_EVENT_TRIGGER => {
-                Ok(Some(self.static_tables.pg_event_trigger.clone()))
+            PG_CATALOG_TABLE_PG_DEPEND => {
+                Ok(Some(self.static_tables.pg_depend.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_EXTENSION => Ok(Some(self.static_tables.pg_extension.clone())),
-            PG_CATALOG_TABLE_PG_FOREIGN_DATA_WRAPPER => {
-                Ok(Some(self.static_tables.pg_foreign_data_wrapper.clone()))
+            PG_CATALOG_TABLE_PG_DESCRIPTION => {
+                Ok(Some(self.static_tables.pg_description.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_FOREIGN_SERVER => {
-                Ok(Some(self.static_tables.pg_foreign_server.clone()))
+            PG_CATALOG_TABLE_PG_ENUM => Ok(Some(self.static_tables.pg_enum.try_into_memtable()?)),
+            PG_CATALOG_TABLE_PG_EVENT_TRIGGER => Ok(Some(
+                self.static_tables.pg_event_trigger.try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_EXTENSION => {
+                Ok(Some(self.static_tables.pg_extension.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_FOREIGN_TABLE => {
-                Ok(Some(self.static_tables.pg_foreign_table.clone()))
+            PG_CATALOG_TABLE_PG_FOREIGN_DATA_WRAPPER => Ok(Some(
+                self.static_tables
+                    .pg_foreign_data_wrapper
+                    .try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_FOREIGN_SERVER => Ok(Some(
+                self.static_tables.pg_foreign_server.try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_FOREIGN_TABLE => Ok(Some(
+                self.static_tables.pg_foreign_table.try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_INDEX => Ok(Some(self.static_tables.pg_index.try_into_memtable()?)),
+            PG_CATALOG_TABLE_PG_INHERITS => {
+                Ok(Some(self.static_tables.pg_inherits.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_INDEX => Ok(Some(self.static_tables.pg_index.clone())),
-            PG_CATALOG_TABLE_PG_INHERITS => Ok(Some(self.static_tables.pg_inherits.clone())),
-            PG_CATALOG_TABLE_PG_INIT_PRIVS => Ok(Some(self.static_tables.pg_init_privs.clone())),
-            PG_CATALOG_TABLE_PG_LARGEOBJECT => Ok(Some(self.static_tables.pg_largeobject.clone())),
-            PG_CATALOG_TABLE_PG_LARGEOBJECT_METADATA => {
-                Ok(Some(self.static_tables.pg_largeobject_metadata.clone()))
+            PG_CATALOG_TABLE_PG_INIT_PRIVS => {
+                Ok(Some(self.static_tables.pg_init_privs.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_PARTITIONED_TABLE => {
-                Ok(Some(self.static_tables.pg_partitioned_table.clone()))
+            PG_CATALOG_TABLE_PG_LARGEOBJECT => {
+                Ok(Some(self.static_tables.pg_largeobject.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_POLICY => Ok(Some(self.static_tables.pg_policy.clone())),
-            PG_CATALOG_TABLE_PG_PUBLICATION => Ok(Some(self.static_tables.pg_publication.clone())),
-            PG_CATALOG_TABLE_PG_PUBLICATION_NAMESPACE => {
-                Ok(Some(self.static_tables.pg_publication_namespace.clone()))
+            PG_CATALOG_TABLE_PG_LARGEOBJECT_METADATA => Ok(Some(
+                self.static_tables
+                    .pg_largeobject_metadata
+                    .try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_PARTITIONED_TABLE => Ok(Some(
+                self.static_tables
+                    .pg_partitioned_table
+                    .try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_POLICY => {
+                Ok(Some(self.static_tables.pg_policy.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_PUBLICATION_REL => {
-                Ok(Some(self.static_tables.pg_publication_rel.clone()))
+            PG_CATALOG_TABLE_PG_PUBLICATION => {
+                Ok(Some(self.static_tables.pg_publication.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_REPLICATION_ORIGIN => {
-                Ok(Some(self.static_tables.pg_replication_origin.clone()))
+            PG_CATALOG_TABLE_PG_PUBLICATION_NAMESPACE => Ok(Some(
+                self.static_tables
+                    .pg_publication_namespace
+                    .try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_PUBLICATION_REL => Ok(Some(
+                self.static_tables.pg_publication_rel.try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_REPLICATION_ORIGIN => Ok(Some(
+                self.static_tables
+                    .pg_replication_origin
+                    .try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_REWRITE => {
+                Ok(Some(self.static_tables.pg_rewrite.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_REWRITE => Ok(Some(self.static_tables.pg_rewrite.clone())),
-            PG_CATALOG_TABLE_PG_SECLABEL => Ok(Some(self.static_tables.pg_seclabel.clone())),
-            PG_CATALOG_TABLE_PG_SEQUENCE => Ok(Some(self.static_tables.pg_sequence.clone())),
-            PG_CATALOG_TABLE_PG_SHDEPEND => Ok(Some(self.static_tables.pg_shdepend.clone())),
-            PG_CATALOG_TABLE_PG_SHDESCRIPTION => {
-                Ok(Some(self.static_tables.pg_shdescription.clone()))
+            PG_CATALOG_TABLE_PG_SECLABEL => {
+                Ok(Some(self.static_tables.pg_seclabel.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_SHSECLABEL => Ok(Some(self.static_tables.pg_shseclabel.clone())),
-            PG_CATALOG_TABLE_PG_STATISTIC => Ok(Some(self.static_tables.pg_statistic.clone())),
-            PG_CATALOG_TABLE_PG_STATISTIC_EXT => {
-                Ok(Some(self.static_tables.pg_statistic_ext.clone()))
+            PG_CATALOG_TABLE_PG_SEQUENCE => {
+                Ok(Some(self.static_tables.pg_sequence.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_STATISTIC_EXT_DATA => {
-                Ok(Some(self.static_tables.pg_statistic_ext_data.clone()))
+            PG_CATALOG_TABLE_PG_SHDEPEND => {
+                Ok(Some(self.static_tables.pg_shdepend.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_SUBSCRIPTION => {
-                Ok(Some(self.static_tables.pg_subscription.clone()))
+            PG_CATALOG_TABLE_PG_SHDESCRIPTION => Ok(Some(
+                self.static_tables.pg_shdescription.try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_SHSECLABEL => {
+                Ok(Some(self.static_tables.pg_shseclabel.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_SUBSCRIPTION_REL => {
-                Ok(Some(self.static_tables.pg_subscription_rel.clone()))
+            PG_CATALOG_TABLE_PG_STATISTIC => {
+                Ok(Some(self.static_tables.pg_statistic.try_into_memtable()?))
             }
-            PG_CATALOG_TABLE_PG_TABLESPACE => Ok(Some(self.static_tables.pg_tablespace.clone())),
-            PG_CATALOG_TABLE_PG_TRIGGER => Ok(Some(self.static_tables.pg_trigger.clone())),
-            PG_CATALOG_TABLE_PG_USER_MAPPING => {
-                Ok(Some(self.static_tables.pg_user_mapping.clone()))
+            PG_CATALOG_TABLE_PG_STATISTIC_EXT => Ok(Some(
+                self.static_tables.pg_statistic_ext.try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_STATISTIC_EXT_DATA => Ok(Some(
+                self.static_tables
+                    .pg_statistic_ext_data
+                    .try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_SUBSCRIPTION => Ok(Some(
+                self.static_tables.pg_subscription.try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_SUBSCRIPTION_REL => Ok(Some(
+                self.static_tables.pg_subscription_rel.try_into_memtable()?,
+            )),
+            PG_CATALOG_TABLE_PG_TABLESPACE => {
+                Ok(Some(self.static_tables.pg_tablespace.try_into_memtable()?))
             }
+            PG_CATALOG_TABLE_PG_TRIGGER => {
+                Ok(Some(self.static_tables.pg_trigger.try_into_memtable()?))
+            }
+            PG_CATALOG_TABLE_PG_USER_MAPPING => Ok(Some(
+                self.static_tables.pg_user_mapping.try_into_memtable()?,
+            )),
 
             PG_CATALOG_TABLE_PG_ATTRIBUTE => {
                 let table = Arc::new(pg_attribute::PgAttributeTable::new(
@@ -378,7 +454,7 @@ impl<C: CatalogInfo> PgCatalogSchemaProvider<C> {
 
 /// A table that reads data from Avro bytes
 #[derive(Debug, Clone)]
-struct ArrowTable {
+pub struct ArrowTable {
     schema: SchemaRef,
     data: Vec<RecordBatch>,
 }
@@ -404,15 +480,24 @@ impl ArrowTable {
     }
 
     /// Convert the arrow data into datafusion MemTable
-    pub fn try_into_memtable(self) -> Result<MemTable> {
-        MemTable::try_new(self.schema, vec![self.data])
+    pub fn try_into_memtable(&self) -> Result<Arc<MemTable>> {
+        let mem_table = MemTable::try_new(self.schema.clone(), vec![self.data.clone()])?;
+        Ok(Arc::new(mem_table))
+    }
+
+    pub fn data(&self) -> &[RecordBatch] {
+        &self.data
+    }
+
+    pub fn schema(&self) -> SchemaRef {
+        self.schema.clone()
     }
 }
 
 impl TableFunctionImpl for ArrowTable {
     fn call(&self, _args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        let table = self.clone().try_into_memtable()?;
-        Ok(Arc::new(table))
+        let table = self.try_into_memtable()?;
+        Ok(table)
     }
 }
 
@@ -421,63 +506,63 @@ impl TableFunctionImpl for ArrowTable {
 /// This implementation only contains static tables
 #[derive(Debug, Clone)]
 pub struct PgCatalogStaticTables {
-    pub pg_aggregate: Arc<dyn TableProvider>,
-    pub pg_am: Arc<dyn TableProvider>,
-    pub pg_amop: Arc<dyn TableProvider>,
-    pub pg_amproc: Arc<dyn TableProvider>,
-    pub pg_cast: Arc<dyn TableProvider>,
-    pub pg_collation: Arc<dyn TableProvider>,
-    pub pg_conversion: Arc<dyn TableProvider>,
-    pub pg_language: Arc<dyn TableProvider>,
-    pub pg_opclass: Arc<dyn TableProvider>,
-    pub pg_operator: Arc<dyn TableProvider>,
-    pub pg_opfamily: Arc<dyn TableProvider>,
-    pub pg_proc: Arc<dyn TableProvider>,
-    pub pg_range: Arc<dyn TableProvider>,
-    pub pg_ts_config: Arc<dyn TableProvider>,
-    pub pg_ts_dict: Arc<dyn TableProvider>,
-    pub pg_ts_parser: Arc<dyn TableProvider>,
-    pub pg_ts_template: Arc<dyn TableProvider>,
-    pub pg_type: Arc<dyn TableProvider>,
-    pub pg_attrdef: Arc<dyn TableProvider>,
-    pub pg_auth_members: Arc<dyn TableProvider>,
-    pub pg_authid: Arc<dyn TableProvider>,
-    pub pg_constraint: Arc<dyn TableProvider>,
-    pub pg_db_role_setting: Arc<dyn TableProvider>,
-    pub pg_default_acl: Arc<dyn TableProvider>,
-    pub pg_depend: Arc<dyn TableProvider>,
-    pub pg_description: Arc<dyn TableProvider>,
-    pub pg_enum: Arc<dyn TableProvider>,
-    pub pg_event_trigger: Arc<dyn TableProvider>,
-    pub pg_extension: Arc<dyn TableProvider>,
-    pub pg_foreign_data_wrapper: Arc<dyn TableProvider>,
-    pub pg_foreign_server: Arc<dyn TableProvider>,
-    pub pg_foreign_table: Arc<dyn TableProvider>,
-    pub pg_index: Arc<dyn TableProvider>,
-    pub pg_inherits: Arc<dyn TableProvider>,
-    pub pg_init_privs: Arc<dyn TableProvider>,
-    pub pg_largeobject: Arc<dyn TableProvider>,
-    pub pg_largeobject_metadata: Arc<dyn TableProvider>,
-    pub pg_partitioned_table: Arc<dyn TableProvider>,
-    pub pg_policy: Arc<dyn TableProvider>,
-    pub pg_publication: Arc<dyn TableProvider>,
-    pub pg_publication_namespace: Arc<dyn TableProvider>,
-    pub pg_publication_rel: Arc<dyn TableProvider>,
-    pub pg_replication_origin: Arc<dyn TableProvider>,
-    pub pg_rewrite: Arc<dyn TableProvider>,
-    pub pg_seclabel: Arc<dyn TableProvider>,
-    pub pg_sequence: Arc<dyn TableProvider>,
-    pub pg_shdepend: Arc<dyn TableProvider>,
-    pub pg_shdescription: Arc<dyn TableProvider>,
-    pub pg_shseclabel: Arc<dyn TableProvider>,
-    pub pg_statistic: Arc<dyn TableProvider>,
-    pub pg_statistic_ext: Arc<dyn TableProvider>,
-    pub pg_statistic_ext_data: Arc<dyn TableProvider>,
-    pub pg_subscription: Arc<dyn TableProvider>,
-    pub pg_subscription_rel: Arc<dyn TableProvider>,
-    pub pg_tablespace: Arc<dyn TableProvider>,
-    pub pg_trigger: Arc<dyn TableProvider>,
-    pub pg_user_mapping: Arc<dyn TableProvider>,
+    pub pg_aggregate: ArrowTable,
+    pub pg_am: ArrowTable,
+    pub pg_amop: ArrowTable,
+    pub pg_amproc: ArrowTable,
+    pub pg_cast: ArrowTable,
+    pub pg_collation: ArrowTable,
+    pub pg_conversion: ArrowTable,
+    pub pg_language: ArrowTable,
+    pub pg_opclass: ArrowTable,
+    pub pg_operator: ArrowTable,
+    pub pg_opfamily: ArrowTable,
+    pub pg_proc: ArrowTable,
+    pub pg_range: ArrowTable,
+    pub pg_ts_config: ArrowTable,
+    pub pg_ts_dict: ArrowTable,
+    pub pg_ts_parser: ArrowTable,
+    pub pg_ts_template: ArrowTable,
+    pub pg_type: ArrowTable,
+    pub pg_attrdef: ArrowTable,
+    pub pg_auth_members: ArrowTable,
+    pub pg_authid: ArrowTable,
+    pub pg_constraint: ArrowTable,
+    pub pg_db_role_setting: ArrowTable,
+    pub pg_default_acl: ArrowTable,
+    pub pg_depend: ArrowTable,
+    pub pg_description: ArrowTable,
+    pub pg_enum: ArrowTable,
+    pub pg_event_trigger: ArrowTable,
+    pub pg_extension: ArrowTable,
+    pub pg_foreign_data_wrapper: ArrowTable,
+    pub pg_foreign_server: ArrowTable,
+    pub pg_foreign_table: ArrowTable,
+    pub pg_index: ArrowTable,
+    pub pg_inherits: ArrowTable,
+    pub pg_init_privs: ArrowTable,
+    pub pg_largeobject: ArrowTable,
+    pub pg_largeobject_metadata: ArrowTable,
+    pub pg_partitioned_table: ArrowTable,
+    pub pg_policy: ArrowTable,
+    pub pg_publication: ArrowTable,
+    pub pg_publication_namespace: ArrowTable,
+    pub pg_publication_rel: ArrowTable,
+    pub pg_replication_origin: ArrowTable,
+    pub pg_rewrite: ArrowTable,
+    pub pg_seclabel: ArrowTable,
+    pub pg_sequence: ArrowTable,
+    pub pg_shdepend: ArrowTable,
+    pub pg_shdescription: ArrowTable,
+    pub pg_shseclabel: ArrowTable,
+    pub pg_statistic: ArrowTable,
+    pub pg_statistic_ext: ArrowTable,
+    pub pg_statistic_ext_data: ArrowTable,
+    pub pg_subscription: ArrowTable,
+    pub pg_subscription_rel: ArrowTable,
+    pub pg_tablespace: ArrowTable,
+    pub pg_trigger: ArrowTable,
+    pub pg_user_mapping: ArrowTable,
 
     pub pg_get_keywords: Arc<dyn TableFunctionImpl>,
 }
@@ -897,10 +982,8 @@ impl PgCatalogStaticTables {
     }
 
     /// Create table from dumped arrow data
-    fn create_arrow_table(data_bytes: Vec<u8>) -> Result<Arc<dyn TableProvider>> {
-        let table = ArrowTable::from_ipc_data(data_bytes)?;
-        let mem_table = table.try_into_memtable()?;
-        Ok(Arc::new(mem_table))
+    fn create_arrow_table(data_bytes: Vec<u8>) -> Result<ArrowTable> {
+        ArrowTable::from_ipc_data(data_bytes)
     }
 
     fn create_arrow_table_function(data_bytes: Vec<u8>) -> Result<Arc<dyn TableFunctionImpl>> {
