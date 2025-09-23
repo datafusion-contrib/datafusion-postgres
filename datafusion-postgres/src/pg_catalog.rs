@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{
-    as_boolean_array, ArrayRef, AsArray, BooleanBuilder, RecordBatch, StringArray, StringBuilder,
+    as_boolean_array, ArrayRef, AsArray, BooleanBuilder, Int32Builder, RecordBatch, StringArray,
+    StringBuilder,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
 use datafusion::arrow::ipc::reader::FileReader;
@@ -19,6 +20,7 @@ use datafusion::prelude::{create_udf, Expr, SessionContext};
 use postgres_types::Oid;
 use tokio::sync::RwLock;
 
+use crate::auth::AuthManager;
 use crate::pg_catalog::catalog_info::CatalogInfo;
 use crate::pg_catalog::empty_table::EmptyTable;
 
@@ -32,7 +34,9 @@ pub mod pg_database;
 pub mod pg_get_expr_udf;
 pub mod pg_namespace;
 pub mod pg_replication_slot;
+pub mod pg_roles;
 pub mod pg_settings;
+pub mod pg_stat_gssapi;
 pub mod pg_tables;
 pub mod pg_views;
 
@@ -100,7 +104,9 @@ const PG_CATALOG_TABLE_PG_USER_MAPPING: &str = "pg_user_mapping";
 const PG_CATALOG_VIEW_PG_SETTINGS: &str = "pg_settings";
 const PG_CATALOG_VIEW_PG_VIEWS: &str = "pg_views";
 const PG_CATALOG_VIEW_PG_MATVIEWS: &str = "pg_matviews";
+const PG_CATALOG_VIEW_PG_ROLES: &str = "pg_roles";
 const PG_CATALOG_VIEW_PG_TABLES: &str = "pg_tables";
+const PG_CATALOG_VIEW_PG_STAT_GSSAPI: &str = "pg_stat_gssapi";
 const PG_CATALOG_VIEW_PG_STAT_USER_TABLES: &str = "pg_stat_user_tables";
 const PG_CATALOG_VIEW_PG_REPLICATION_SLOTS: &str = "pg_replication_slots";
 
@@ -166,7 +172,10 @@ pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_TABLE_PG_TABLESPACE,
     PG_CATALOG_TABLE_PG_TRIGGER,
     PG_CATALOG_TABLE_PG_USER_MAPPING,
+    PG_CATALOG_VIEW_PG_ROLES,
     PG_CATALOG_VIEW_PG_SETTINGS,
+    PG_CATALOG_VIEW_PG_STAT_GSSAPI,
+    PG_CATALOG_VIEW_PG_TABLES,
     PG_CATALOG_VIEW_PG_VIEWS,
     PG_CATALOG_VIEW_PG_MATVIEWS,
     PG_CATALOG_VIEW_PG_STAT_USER_TABLES,
@@ -188,6 +197,7 @@ pub struct PgCatalogSchemaProvider<C> {
     oid_counter: Arc<AtomicU32>,
     oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
     static_tables: Arc<PgCatalogStaticTables>,
+    auth_manager: Arc<AuthManager>,
 }
 
 #[async_trait]
@@ -218,12 +228,14 @@ impl<C: CatalogInfo> PgCatalogSchemaProvider<C> {
     pub fn try_new(
         catalog_list: C,
         static_tables: Arc<PgCatalogStaticTables>,
+        auth_manager: Arc<AuthManager>,
     ) -> Result<PgCatalogSchemaProvider<C>> {
         Ok(Self {
             catalog_list,
             oid_counter: Arc::new(AtomicU32::new(16384)),
             oid_cache: Arc::new(RwLock::new(HashMap::new())),
             static_tables,
+            auth_manager,
         })
     }
 
@@ -395,6 +407,16 @@ impl<C: CatalogInfo> PgCatalogSchemaProvider<C> {
                 let table = Arc::new(pg_settings::PgSettingsView::new());
                 Ok(Some(PgCatalogTable::Dynamic(table)))
             }
+
+            PG_CATALOG_VIEW_PG_STAT_GSSAPI => {
+                let table = Arc::new(pg_stat_gssapi::PgStatGssApiTable::new());
+                Ok(Some(PgCatalogTable::Dynamic(table)))
+            }
+            PG_CATALOG_VIEW_PG_ROLES => {
+                let table = Arc::new(pg_roles::PgRolesTable::new(Arc::clone(&self.auth_manager)));
+                Ok(Some(PgCatalogTable::Dynamic(table)))
+            }
+
             PG_CATALOG_VIEW_PG_VIEWS => Ok(Some(pg_views::pg_views().into())),
             PG_CATALOG_VIEW_PG_MATVIEWS => Ok(Some(pg_views::pg_matviews().into())),
             PG_CATALOG_VIEW_PG_STAT_USER_TABLES => Ok(Some(pg_views::pg_stat_user_tables().into())),
@@ -1236,15 +1258,36 @@ pub fn create_pg_encoding_to_char_udf() -> ScalarUDF {
     )
 }
 
+pub fn create_pg_backend_pid_udf() -> ScalarUDF {
+    let func = move |_args: &[ColumnarValue]| {
+        let mut builder = Int32Builder::new();
+        builder.append_value(BACKEND_PID);
+        let array: ArrayRef = Arc::new(builder.finish());
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "pg_backend_pid",
+        vec![],
+        DataType::Int32,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+const BACKEND_PID: i32 = 1;
+
 /// Install pg_catalog and postgres UDFs to current `SessionContext`
 pub fn setup_pg_catalog(
     session_context: &SessionContext,
     catalog_name: &str,
+    auth_manager: Arc<AuthManager>,
 ) -> Result<(), Box<DataFusionError>> {
     let static_tables = Arc::new(PgCatalogStaticTables::try_new()?);
     let pg_catalog = PgCatalogSchemaProvider::try_new(
         session_context.state().catalog_list().clone(),
         static_tables.clone(),
+        auth_manager,
     )?;
     session_context
         .catalog(catalog_name)
@@ -1281,6 +1324,7 @@ pub fn setup_pg_catalog(
     session_context.register_udf(create_pg_relation_is_publishable_udf());
     session_context.register_udf(create_pg_get_statisticsobjdef_columns_udf());
     session_context.register_udf(create_pg_encoding_to_char_udf());
+    session_context.register_udf(create_pg_backend_pid_udf());
 
     Ok(())
 }
