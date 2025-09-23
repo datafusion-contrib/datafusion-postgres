@@ -266,6 +266,12 @@ pub struct RemoveUnsupportedTypes {
     unsupported_types: HashSet<String>,
 }
 
+impl Default for RemoveUnsupportedTypes {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RemoveUnsupportedTypes {
     pub fn new() -> Self {
         let mut unsupported_types = HashSet::new();

@@ -177,6 +177,12 @@ pub struct PostgresCompatibilityParser {
     rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>>,
 }
 
+impl Default for PostgresCompatibilityParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PostgresCompatibilityParser {
     pub fn new() -> Self {
         let mut mapping = Vec::with_capacity(BLACKLIST_SQL_MAPPING.len());
