@@ -461,12 +461,13 @@ impl VisitorMut for PrependUnqualifiedPgTableNameVisitor {
         if let TableFactor::Table { name, args, .. } = table_factor {
             // not a table function
             if args.is_none() && name.0.len() == 1 {
-                let ObjectNamePart::Identifier(ident) = &name.0[0];
-                if ident.value.starts_with("pg_") {
-                    *name = ObjectName(vec![
-                        ObjectNamePart::Identifier(Ident::new("pg_catalog")),
-                        name.0[0].clone(),
-                    ]);
+                if let ObjectNamePart::Identifier(ident) = &name.0[0] {
+                    if ident.value.starts_with("pg_") {
+                        *name = ObjectName(vec![
+                            ObjectNamePart::Identifier(Ident::new("pg_catalog")),
+                            name.0[0].clone(),
+                        ]);
+                    }
                 }
             }
         }
@@ -769,6 +770,50 @@ impl SqlStatementRewriteRule for RemoveSubqueryFromProjection {
     }
 }
 
+/// `select version()` should return column named `version` not `version()`
+#[derive(Debug)]
+pub struct FixVersionColumnName;
+
+struct FixVersionColumnNameVisitor;
+
+impl VisitorMut for FixVersionColumnNameVisitor {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, query: &mut Query) -> ControlFlow<Self::Break> {
+        if let SetExpr::Select(select) = query.body.as_mut() {
+            for projection in &mut select.projection {
+                if let SelectItem::UnnamedExpr(Expr::Function(f)) = projection {
+                    if f.name.0.len() == 1 {
+                        if let ObjectNamePart::Identifier(part) = &f.name.0[0] {
+                            if part.value == "version" {
+                                if let FunctionArguments::List(args) = &f.args {
+                                    if args.args.is_empty() {
+                                        *projection = SelectItem::ExprWithAlias {
+                                            expr: Expr::Function(f.clone()),
+                                            alias: Ident::new("version"),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        ControlFlow::Continue(())
+    }
+}
+
+impl SqlStatementRewriteRule for FixVersionColumnName {
+    fn rewrite(&self, mut s: Statement) -> Statement {
+        let mut visitor = FixVersionColumnNameVisitor;
+        let _ = s.visit(&mut visitor);
+
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1019,5 +1064,17 @@ mod tests {
         assert_rewrite!(&rules,
             "SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), (SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true) FROM pg_catalog.pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef), a.attnotnull, (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type t WHERE c.oid = a.attcollation AND t.oid = a.atttypid AND a.attcollation <> t.typcollation LIMIT 1) AS attcollation, a.attidentity, a.attgenerated FROM pg_catalog.pg_attribute a WHERE a.attrelid = '16384' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;",
             "SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), NULL, a.attnotnull, NULL AS attcollation, a.attidentity, a.attgenerated FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = '16384' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum");
+    }
+
+    #[test]
+    fn test_version_rewrite() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![Arc::new(FixVersionColumnName)];
+
+        assert_rewrite!(&rules, "SELECT version()", "SELECT version() AS version");
+
+        // Make sure we don't rewrite things we should leave alone
+        assert_rewrite!(&rules, "SELECT version() as foo", "SELECT version() AS foo");
+        assert_rewrite!(&rules, "SELECT version(foo)", "SELECT version(foo)");
+        assert_rewrite!(&rules, "SELECT foo.version()", "SELECT foo.version()");
     }
 }

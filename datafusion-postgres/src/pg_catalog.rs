@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{
-    as_boolean_array, ArrayRef, BooleanBuilder, RecordBatch, StringArray, StringBuilder,
+    as_boolean_array, ArrayRef, AsArray, BooleanBuilder, RecordBatch, StringArray, StringBuilder,
 };
-use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
 use datafusion::arrow::ipc::reader::FileReader;
 use datafusion::catalog::streaming::StreamingTable;
 use datafusion::catalog::{MemTable, SchemaProvider, TableFunctionImpl};
@@ -31,6 +31,7 @@ pub mod pg_class;
 pub mod pg_database;
 pub mod pg_get_expr_udf;
 pub mod pg_namespace;
+pub mod pg_replication_slot;
 pub mod pg_settings;
 pub mod pg_tables;
 pub mod pg_views;
@@ -100,7 +101,8 @@ const PG_CATALOG_VIEW_PG_SETTINGS: &str = "pg_settings";
 const PG_CATALOG_VIEW_PG_VIEWS: &str = "pg_views";
 const PG_CATALOG_VIEW_PG_MATVIEWS: &str = "pg_matviews";
 const PG_CATALOG_VIEW_PG_TABLES: &str = "pg_tables";
-const PG_CATALOG_VIEW_PG_STAT_USER_TABELS: &str = "pg_stat_user_tables";
+const PG_CATALOG_VIEW_PG_STAT_USER_TABLES: &str = "pg_stat_user_tables";
+const PG_CATALOG_VIEW_PG_REPLICATION_SLOTS: &str = "pg_replication_slots";
 
 pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_TABLE_PG_AGGREGATE,
@@ -167,7 +169,8 @@ pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_VIEW_PG_SETTINGS,
     PG_CATALOG_VIEW_PG_VIEWS,
     PG_CATALOG_VIEW_PG_MATVIEWS,
-    PG_CATALOG_VIEW_PG_STAT_USER_TABELS,
+    PG_CATALOG_VIEW_PG_STAT_USER_TABLES,
+    PG_CATALOG_VIEW_PG_REPLICATION_SLOTS,
 ];
 
 #[derive(Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
@@ -394,7 +397,10 @@ impl<C: CatalogInfo> PgCatalogSchemaProvider<C> {
             }
             PG_CATALOG_VIEW_PG_VIEWS => Ok(Some(pg_views::pg_views().into())),
             PG_CATALOG_VIEW_PG_MATVIEWS => Ok(Some(pg_views::pg_matviews().into())),
-            PG_CATALOG_VIEW_PG_STAT_USER_TABELS => Ok(Some(pg_views::pg_stat_user_tables().into())),
+            PG_CATALOG_VIEW_PG_STAT_USER_TABLES => Ok(Some(pg_views::pg_stat_user_tables().into())),
+            PG_CATALOG_VIEW_PG_REPLICATION_SLOTS => {
+                Ok(Some(pg_replication_slot::pg_replication_slots().into()))
+            }
 
             _ => Ok(None),
         }
@@ -1183,7 +1189,7 @@ pub fn create_pg_get_statisticsobjdef_columns_udf() -> ScalarUDF {
         let args = ColumnarValue::values_to_arrays(args)?;
         let oid = &args[0];
 
-        let mut builder = BooleanBuilder::new();
+        let mut builder = StringBuilder::new();
         for _ in 0..oid.len() {
             builder.append_null();
         }
@@ -1196,6 +1202,34 @@ pub fn create_pg_get_statisticsobjdef_columns_udf() -> ScalarUDF {
     create_udf(
         "pg_get_statisticsobjdef_columns",
         vec![DataType::UInt32],
+        DataType::Utf8,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_pg_encoding_to_char_udf() -> ScalarUDF {
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let encoding = &args[0].as_primitive::<Int32Type>();
+
+        let mut builder = StringBuilder::new();
+        for i in 0..encoding.len() {
+            if encoding.value(i) == 6 {
+                builder.append_value("UTF-8");
+            } else {
+                builder.append_null();
+            }
+        }
+
+        let array: ArrayRef = Arc::new(builder.finish());
+
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "pg_encoding_to_char",
+        vec![DataType::Int32],
         DataType::Utf8,
         Volatility::Stable,
         Arc::new(func),
@@ -1233,6 +1267,9 @@ pub fn setup_pg_catalog(
         "has_schema_privilege",
     ));
     session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
+        "has_database_privilege",
+    ));
+    session_context.register_udf(has_privilege_udf::create_has_privilege_udf(
         "has_any_column_privilege",
     ));
     session_context.register_udf(create_pg_table_is_visible());
@@ -1243,6 +1280,7 @@ pub fn setup_pg_catalog(
     session_context.register_udf(create_pg_get_partkeydef_udf());
     session_context.register_udf(create_pg_relation_is_publishable_udf());
     session_context.register_udf(create_pg_get_statisticsobjdef_columns_udf());
+    session_context.register_udf(create_pg_encoding_to_char_udf());
 
     Ok(())
 }

@@ -213,29 +213,29 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
     /// Map DataFusion data types to PostgreSQL type information
     fn datafusion_to_pg_type(data_type: &DataType) -> (i32, i16, bool, &'static str, &'static str) {
         match data_type {
-            DataType::Boolean => (16, 1, true, "c", "p"),    // bool
-            DataType::Int8 => (18, 1, true, "c", "p"),       // char
-            DataType::Int16 => (21, 2, true, "s", "p"),      // int2
-            DataType::Int32 => (23, 4, true, "i", "p"),      // int4
-            DataType::Int64 => (20, 8, true, "d", "p"),      // int8
-            DataType::UInt8 => (21, 2, true, "s", "p"),      // Treat as int2
-            DataType::UInt16 => (23, 4, true, "i", "p"),     // Treat as int4
-            DataType::UInt32 => (20, 8, true, "d", "p"),     // Treat as int8
-            DataType::UInt64 => (1700, -1, false, "i", "m"), // Treat as numeric
-            DataType::Float32 => (700, 4, true, "i", "p"),   // float4
-            DataType::Float64 => (701, 8, true, "d", "p"),   // float8
-            DataType::Utf8 => (25, -1, false, "i", "x"),     // text
+            DataType::Boolean => (16, 1, true, "c", "p"),  // bool
+            DataType::Int8 => (18, 1, true, "c", "p"),     // char
+            DataType::Int16 => (21, 2, true, "s", "p"),    // int2
+            DataType::Int32 => (23, 4, true, "i", "p"),    // int4
+            DataType::Int64 => (20, 8, true, "d", "p"),    // int8
+            DataType::UInt8 => (18, 2, true, "s", "p"),    // char
+            DataType::UInt16 => (21, 4, true, "i", "p"),   // int2
+            DataType::UInt32 => (23, 8, true, "d", "p"),   // int4
+            DataType::UInt64 => (20, -1, false, "i", "m"), // int8
+            DataType::Float32 => (700, 4, true, "i", "p"), // float4
+            DataType::Float64 => (701, 8, true, "d", "p"), // float8
+            DataType::Utf8 => (25, -1, false, "i", "x"),   // text
             DataType::LargeUtf8 => (25, -1, false, "i", "x"), // text
-            DataType::Binary => (17, -1, false, "i", "x"),   // bytea
+            DataType::Binary => (17, -1, false, "i", "x"), // bytea
             DataType::LargeBinary => (17, -1, false, "i", "x"), // bytea
-            DataType::Date32 => (1082, 4, true, "i", "p"),   // date
-            DataType::Date64 => (1082, 4, true, "i", "p"),   // date
+            DataType::Date32 => (1082, 4, true, "i", "p"), // date
+            DataType::Date64 => (1082, 4, true, "i", "p"), // date
             DataType::Time32(_) => (1083, 8, true, "d", "p"), // time
             DataType::Time64(_) => (1083, 8, true, "d", "p"), // time
             DataType::Timestamp(_, _) => (1114, 8, true, "d", "p"), // timestamp
             DataType::Decimal128(_, _) => (1700, -1, false, "i", "m"), // numeric
             DataType::Decimal256(_, _) => (1700, -1, false, "i", "m"), // numeric
-            _ => (25, -1, false, "i", "x"),                  // Default to text for unknown types
+            _ => (25, -1, false, "i", "x"),                // Default to text for unknown types
         }
     }
 }

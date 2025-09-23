@@ -3,10 +3,10 @@ resolver = "2"
 members = ["datafusion-postgres", "datafusion-postgres-cli", "arrow-pg"]
 
 [workspace.package]
-version = "0.9.0"
+version = "0.10.2"
 edition = "2021"
 license = "Apache-2.0"
-rust-version = "1.85.1"
+rust-version = "1.86.0"
 authors = ["Ning Sun <n@sunng.info>"]
 keywords = ["database", "postgresql", "datafusion"]
 homepage = "https://github.com/datafusion-contrib/datafusion-postgres/"
@@ -14,10 +14,10 @@ repository = "https://github.com/datafusion-contrib/datafusion-postgres/"
 documentation = "https://docs.rs/crate/datafusion-postgres/"
 
 [workspace.dependencies]
-arrow = "55"
+arrow = "56"
 bytes = "1.10.1"
 chrono = { version = "0.4", features = ["std"] }
-datafusion = { version = "49", default-features = false }
+datafusion = { version = "50", default-features = false }
 futures = "0.3"
 pgwire = { version = "0.32", default-features = false }
 postgres-types = "0.2"
