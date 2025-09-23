@@ -2,22 +2,19 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::catalog::MemTable;
 use datafusion::error::Result;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::streaming::PartitionStream;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PgSettingsView {
     schema: SchemaRef,
-    data: Vec<RecordBatch>,
 }
 
 impl PgSettingsView {
-    pub(crate) fn try_new() -> Result<PgSettingsView> {
+    pub fn new() -> PgSettingsView {
         let schema = Arc::new(Schema::new(vec![
-            //        name        | setting | unit |                             category                             |                short_
-            //desc                |                                                   extra_desc
-            //| context | vartype | source  | min_val | max_val | enumvals |
-            //boot_val | reset_val | sourcefile | sourceline | pending_restart
             Field::new("name", DataType::Utf8, true),
             Field::new("setting", DataType::Utf8, true),
             Field::new("unit", DataType::Utf8, true),
@@ -37,12 +34,10 @@ impl PgSettingsView {
             Field::new("pending_restart", DataType::Boolean, true),
         ]));
 
-        let data = Self::create_data(schema.clone())?;
-
-        Ok(Self { schema, data })
+        Self { schema }
     }
 
-    fn create_data(schema: Arc<Schema>) -> Result<Vec<RecordBatch>> {
+    fn create_data(schema: Arc<Schema>) -> Result<RecordBatch> {
         let mut name: Vec<Option<&str>> = Vec::new();
         let mut setting: Vec<Option<&str>> = Vec::new();
         let mut unit: Vec<Option<&str>> = Vec::new();
@@ -104,12 +99,20 @@ impl PgSettingsView {
             Arc::new(BooleanArray::from(pending_restart)),
         ];
 
-        let batch = RecordBatch::try_new(schema.clone(), arrays)?;
+        RecordBatch::try_new(schema.clone(), arrays).map_err(Into::into)
+    }
+}
 
-        Ok(vec![batch])
+impl PartitionStream for PgSettingsView {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
-    pub(crate) fn try_into_memtable(self) -> Result<MemTable> {
-        MemTable::try_new(self.schema, vec![self.data])
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let this = self.clone();
+        Box::pin(RecordBatchStreamAdapter::new(
+            this.schema.clone(),
+            futures::stream::once(async move { Self::create_data(this.schema().clone()) }),
+        ))
     }
 }

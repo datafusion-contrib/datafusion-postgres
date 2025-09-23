@@ -1,22 +1,20 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use datafusion::catalog::MemTable;
-use datafusion::error::Result;
 
 use super::empty_table::EmptyTable;
 
-pub fn pg_views() -> Result<MemTable> {
+pub fn pg_views() -> EmptyTable {
     let schema = Arc::new(Schema::new(vec![
         Field::new("schemaname", DataType::Utf8, true),
         Field::new("viewname", DataType::Utf8, true),
         Field::new("viewowner", DataType::Utf8, true),
         Field::new("definition", DataType::Utf8, true),
     ]));
-    EmptyTable::new(schema).try_into_memtable()
+    EmptyTable::new(schema)
 }
 
-pub fn pg_matviews() -> Result<MemTable> {
+pub fn pg_matviews() -> EmptyTable {
     let schema = Arc::new(Schema::new(vec![
         Field::new("schemaname", DataType::Utf8, true),
         Field::new("matviewname", DataType::Utf8, true),
@@ -27,10 +25,10 @@ pub fn pg_matviews() -> Result<MemTable> {
         Field::new("definition", DataType::Utf8, true),
     ]));
 
-    EmptyTable::new(schema).try_into_memtable()
+    EmptyTable::new(schema)
 }
 
-pub fn pg_stat_user_tables() -> Result<MemTable> {
+pub fn pg_stat_user_tables() -> EmptyTable {
     let schema = Arc::new(Schema::new(vec![
         Field::new("relid", DataType::Int32, false),
         Field::new("schemaname", DataType::Utf8, false),
@@ -88,5 +86,5 @@ pub fn pg_stat_user_tables() -> Result<MemTable> {
         Field::new("total_autoanalyze_time", DataType::Float64, false),
     ]));
 
-    EmptyTable::new(schema).try_into_memtable()
+    EmptyTable::new(schema)
 }
