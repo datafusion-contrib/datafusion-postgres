@@ -18,10 +18,7 @@ use rust_decimal::Decimal;
 
 use super::{arrow_schema_to_pg_fields, encode_recordbatch, into_pg_type};
 
-pub async fn encode_dataframe<'a>(
-    df: DataFrame,
-    format: &Format,
-) -> PgWireResult<QueryResponse<'a>> {
+pub async fn encode_dataframe(df: DataFrame, format: &Format) -> PgWireResult<QueryResponse> {
     let fields = Arc::new(arrow_schema_to_pg_fields(df.schema().as_arrow(), format)?);
 
     let recordbatch_stream = df
