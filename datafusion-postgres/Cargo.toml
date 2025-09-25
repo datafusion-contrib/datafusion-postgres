@@ -11,12 +11,6 @@ repository.workspace = true
 documentation.workspace = true
 readme = "../README.md"
 rust-version.workspace = true
-include = [
-  "src/**/*",
-  "pg_catalog_arrow_exports/**/*",
-  "Cargo.toml"
-]
-
 
 [dependencies]
 arrow-pg = { path = "../arrow-pg", version = "0.6.1", default-features = false, features = ["datafusion"] }
@@ -24,6 +18,7 @@ bytes.workspace = true
 async-trait = "0.1"
 chrono.workspace = true
 datafusion.workspace = true
+datafusion-pg-catalog = { path = "../datafusion-pg-catalog", version = "0.10.2" }
 futures.workspace = true
 getset = "0.1"
 log = "0.4"

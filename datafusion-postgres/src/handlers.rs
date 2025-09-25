@@ -25,10 +25,10 @@ use pgwire::messages::response::TransactionStatus;
 use tokio::sync::Mutex;
 
 use crate::auth::AuthManager;
-use crate::pg_catalog::context::{Permission, ResourceType};
-use crate::sql::PostgresCompatibilityParser;
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
+use datafusion_pg_catalog::pg_catalog::context::{Permission, ResourceType};
+use datafusion_pg_catalog::sql::PostgresCompatibilityParser;
 
 // Metadata keys for session-level settings
 const METADATA_STATEMENT_TIMEOUT: &str = "statement_timeout_ms";

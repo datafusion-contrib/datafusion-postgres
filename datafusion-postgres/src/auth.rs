@@ -6,10 +6,10 @@ use pgwire::api::auth::{AuthSource, LoginInfo, Password};
 use pgwire::error::{PgWireError, PgWireResult};
 use tokio::sync::RwLock;
 
-use crate::pg_catalog::context::*;
+use datafusion_pg_catalog::pg_catalog::context::*;
 
 /// Authentication manager that handles users and roles
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AuthManager {
     users: Arc<RwLock<HashMap<String, User>>>,
     roles: Arc<RwLock<HashMap<String, Role>>>,
@@ -445,6 +445,19 @@ impl AuthManager {
     }
 }
 
+#[async_trait]
+impl PgCatalogContextProvider for AuthManager {
+    // retrieve all database role names
+    async fn roles(&self) -> Vec<String> {
+        self.list_roles().await
+    }
+
+    // retrieve database role information
+    async fn role(&self, name: &str) -> Option<Role> {
+        self.get_role(name).await
+    }
+}
+
 /// AuthSource implementation for integration with pgwire authentication
 /// Provides proper password-based authentication instead of custom startup handler
 #[derive(Clone)]
@@ -544,19 +557,6 @@ pub struct SimpleAuthSource {
 impl SimpleAuthSource {
     pub fn new(auth_manager: Arc<AuthManager>) -> Self {
         SimpleAuthSource { auth_manager }
-    }
-}
-
-#[async_trait]
-impl PgCatalogContextProvider for Arc<AuthManager> {
-    // retrieve all database role names
-    async fn roles(&self) -> Vec<String> {
-        self.list_roles().await
-    }
-
-    // retrieve database role information
-    async fn role(&self, name: &str) -> Option<Role> {
-        self.role(name).await
     }
 }
 

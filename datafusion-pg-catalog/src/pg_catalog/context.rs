@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
 
@@ -19,6 +19,22 @@ pub trait PgCatalogContextProvider: Clone + Debug + Send + Sync + 'static {
 pub struct EmptyContextProvider;
 
 impl PgCatalogContextProvider for EmptyContextProvider {}
+
+#[async_trait]
+impl<T> PgCatalogContextProvider for Arc<T>
+where
+    T: PgCatalogContextProvider,
+{
+    // retrieve all database role names
+    async fn roles(&self) -> Vec<String> {
+        self.roles().await
+    }
+
+    // retrieve database role information
+    async fn role(&self, name: &str) -> Option<Role> {
+        self.role(name).await
+    }
+}
 
 /// User information stored in the authentication system
 #[derive(Debug, Clone)]
