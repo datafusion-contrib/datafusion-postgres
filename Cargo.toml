@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["datafusion-postgres", "datafusion-postgres-cli", "arrow-pg"]
+members = ["datafusion-postgres", "datafusion-postgres-cli", "arrow-pg", "datafusion-pg-catalog"]
 
 [workspace.package]
 version = "0.9.0"

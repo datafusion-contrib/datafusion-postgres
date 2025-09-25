@@ -6,7 +6,7 @@ use datafusion::execution::options::{
     ArrowReadOptions, AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_postgres::pg_catalog::setup_pg_catalog;
+use datafusion_postgres::datafusion_pg_catalog::setup_pg_catalog;
 use datafusion_postgres::{serve, ServerOptions};
 use env_logger::Env;
 use log::info;

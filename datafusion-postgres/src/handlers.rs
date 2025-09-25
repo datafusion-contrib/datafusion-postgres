@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::auth::{AuthManager, Permission, ResourceType};
-use crate::sql::PostgresCompatibilityParser;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::ToDFSchema;
@@ -10,6 +9,7 @@ use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
 use datafusion::sql::parser::Statement;
+use datafusion_pg_catalog::sql::PostgresCompatibilityParser;
 use log::{info, warn};
 use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::auth::StartupHandler;
