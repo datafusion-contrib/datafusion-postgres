@@ -1,7 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use datafusion::prelude::SessionContext;
-use datafusion_postgres::{auth::AuthManager, pg_catalog::setup_pg_catalog, DfSessionService};
+use datafusion_pg_catalog::setup_pg_catalog;
+use datafusion_postgres::{auth::AuthManager, DfSessionService};
 use futures::Sink;
 use pgwire::{
     api::{ClientInfo, ClientPortalStore, PgWireConnectionState, METADATA_USER},
