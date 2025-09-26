@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::auth::{AuthManager, Permission, ResourceType};
-use crate::sql::PostgresCompatibilityParser;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::ToDFSchema;
@@ -26,6 +24,9 @@ use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::response::TransactionStatus;
 use tokio::sync::Mutex;
 
+use crate::auth::AuthManager;
+use crate::pg_catalog::context::{Permission, ResourceType};
+use crate::sql::PostgresCompatibilityParser;
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
 

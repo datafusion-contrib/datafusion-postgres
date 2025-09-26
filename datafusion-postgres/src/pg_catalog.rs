@@ -20,11 +20,12 @@ use datafusion::prelude::{create_udf, Expr, SessionContext};
 use postgres_types::Oid;
 use tokio::sync::RwLock;
 
-use crate::auth::AuthManager;
 use crate::pg_catalog::catalog_info::CatalogInfo;
+use crate::pg_catalog::context::PgCatalogContextProvider;
 use crate::pg_catalog::empty_table::EmptyTable;
 
 pub mod catalog_info;
+pub mod context;
 pub mod empty_table;
 pub mod format_type;
 pub mod has_privilege_udf;
@@ -192,16 +193,16 @@ pub(crate) enum OidCacheKey {
 
 // Create custom schema provider for pg_catalog
 #[derive(Debug)]
-pub struct PgCatalogSchemaProvider<C> {
+pub struct PgCatalogSchemaProvider<C, P> {
     catalog_list: C,
     oid_counter: Arc<AtomicU32>,
     oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
     static_tables: Arc<PgCatalogStaticTables>,
-    auth_manager: Arc<AuthManager>,
+    context_provider: P,
 }
 
 #[async_trait]
-impl<C: CatalogInfo> SchemaProvider for PgCatalogSchemaProvider<C> {
+impl<C: CatalogInfo, P: PgCatalogContextProvider> SchemaProvider for PgCatalogSchemaProvider<C, P> {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -224,18 +225,18 @@ impl<C: CatalogInfo> SchemaProvider for PgCatalogSchemaProvider<C> {
     }
 }
 
-impl<C: CatalogInfo> PgCatalogSchemaProvider<C> {
+impl<C: CatalogInfo, P: PgCatalogContextProvider> PgCatalogSchemaProvider<C, P> {
     pub fn try_new(
         catalog_list: C,
         static_tables: Arc<PgCatalogStaticTables>,
-        auth_manager: Arc<AuthManager>,
-    ) -> Result<PgCatalogSchemaProvider<C>> {
+        context_provider: P,
+    ) -> Result<PgCatalogSchemaProvider<C, P>> {
         Ok(Self {
             catalog_list,
             oid_counter: Arc::new(AtomicU32::new(16384)),
             oid_cache: Arc::new(RwLock::new(HashMap::new())),
             static_tables,
-            auth_manager,
+            context_provider,
         })
     }
 
@@ -413,7 +414,7 @@ impl<C: CatalogInfo> PgCatalogSchemaProvider<C> {
                 Ok(Some(PgCatalogTable::Dynamic(table)))
             }
             PG_CATALOG_VIEW_PG_ROLES => {
-                let table = Arc::new(pg_roles::PgRolesTable::new(Arc::clone(&self.auth_manager)));
+                let table = Arc::new(pg_roles::PgRolesTable::new(self.context_provider.clone()));
                 Ok(Some(PgCatalogTable::Dynamic(table)))
             }
 
@@ -1278,16 +1279,19 @@ pub fn create_pg_backend_pid_udf() -> ScalarUDF {
 const BACKEND_PID: i32 = 1;
 
 /// Install pg_catalog and postgres UDFs to current `SessionContext`
-pub fn setup_pg_catalog(
+pub fn setup_pg_catalog<P>(
     session_context: &SessionContext,
     catalog_name: &str,
-    auth_manager: Arc<AuthManager>,
-) -> Result<(), Box<DataFusionError>> {
+    context_provider: P,
+) -> Result<(), Box<DataFusionError>>
+where
+    P: PgCatalogContextProvider,
+{
     let static_tables = Arc::new(PgCatalogStaticTables::try_new()?);
     let pg_catalog = PgCatalogSchemaProvider::try_new(
         session_context.state().catalog_list().clone(),
         static_tables.clone(),
-        auth_manager,
+        context_provider,
     )?;
     session_context
         .catalog(catalog_name)
