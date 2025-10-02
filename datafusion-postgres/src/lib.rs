@@ -1,6 +1,4 @@
 mod handlers;
-pub mod pg_catalog;
-pub mod sql;
 
 use std::fs::File;
 use std::io::{BufReader, Error as IOError, ErrorKind};
@@ -26,6 +24,7 @@ pub use handlers::{DfSessionService, Parser};
 
 /// re-exports
 pub use arrow_pg;
+pub use datafusion_pg_catalog;
 pub use pgwire;
 
 #[derive(Getters, Setters, WithSetters, Debug)]

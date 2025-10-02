@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["datafusion-postgres", "datafusion-postgres-cli", "arrow-pg"]
+members = ["datafusion-postgres", "datafusion-postgres-cli", "arrow-pg", "datafusion-pg-catalog"]
 
 [workspace.package]
-version = "0.10.2"
+version = "0.11.0"
 edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.86.0"

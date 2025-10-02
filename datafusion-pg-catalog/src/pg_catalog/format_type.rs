@@ -118,9 +118,9 @@ fn format_postgres_type(type_oid: i32, typemod: i32) -> String {
                 let precision = ((typemod - 4) >> 16) & 0xffff;
                 let scale = (typemod - 4) & 0xffff;
                 if scale > 0 {
-                    format!("numeric({},{})", precision, scale)
+                    format!("numeric({precision},{scale})")
                 } else {
-                    format!("numeric({})", precision)
+                    format!("numeric({precision})")
                 }
             } else {
                 "numeric".to_string()
@@ -132,7 +132,7 @@ fn format_postgres_type(type_oid: i32, typemod: i32) -> String {
         1083 => {
             // time without time zone
             if typemod >= 0 {
-                format!("time({}) without time zone", typemod)
+                format!("time({typemod}) without time zone")
             } else {
                 "time without time zone".to_string()
             }
@@ -140,7 +140,7 @@ fn format_postgres_type(type_oid: i32, typemod: i32) -> String {
         1114 => {
             // timestamp without time zone
             if typemod >= 0 {
-                format!("timestamp({}) without time zone", typemod)
+                format!("timestamp({typemod}) without time zone")
             } else {
                 "timestamp without time zone".to_string()
             }
@@ -148,7 +148,7 @@ fn format_postgres_type(type_oid: i32, typemod: i32) -> String {
         1184 => {
             // timestamp with time zone
             if typemod >= 0 {
-                format!("timestamp({}) with time zone", typemod)
+                format!("timestamp({typemod}) with time zone")
             } else {
                 "timestamp with time zone".to_string()
             }
@@ -156,7 +156,7 @@ fn format_postgres_type(type_oid: i32, typemod: i32) -> String {
         1266 => {
             // time with time zone
             if typemod >= 0 {
-                format!("time({}) with time zone", typemod)
+                format!("time({typemod}) with time zone")
             } else {
                 "time with time zone".to_string()
             }
@@ -167,7 +167,7 @@ fn format_postgres_type(type_oid: i32, typemod: i32) -> String {
         1560 => {
             // bit
             if typemod > 0 {
-                format!("bit({})", typemod)
+                format!("bit({typemod})",)
             } else {
                 "bit".to_string()
             }
@@ -175,7 +175,7 @@ fn format_postgres_type(type_oid: i32, typemod: i32) -> String {
         1562 => {
             // bit varying
             if typemod > 0 {
-                format!("bit varying({})", typemod)
+                format!("bit varying({typemod})")
             } else {
                 "bit varying".to_string()
             }
@@ -191,12 +191,12 @@ fn format_postgres_type(type_oid: i32, typemod: i32) -> String {
             if let Some(base_oid) = get_array_base_type(oid) {
                 format!("{}[]", format_postgres_type(base_oid, -1))
             } else {
-                format!("oid({})", oid)
+                format!("oid({oid})")
             }
         }
 
         // Unknown or invalid OID
-        _ => format!("oid({})", type_oid),
+        _ => format!("oid({type_oid})"),
     }
 }
 

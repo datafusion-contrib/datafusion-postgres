@@ -10,16 +10,16 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::PartitionStream;
 
-use crate::auth::AuthManager;
+use crate::pg_catalog::context::PgCatalogContextProvider;
 
 #[derive(Debug, Clone)]
-pub(crate) struct PgRolesTable {
+pub(crate) struct PgRolesTable<P> {
     schema: SchemaRef,
-    auth_manager: Arc<AuthManager>,
+    context_provider: P,
 }
 
-impl PgRolesTable {
-    pub(crate) fn new(auth_manager: Arc<AuthManager>) -> Self {
+impl<P: PgCatalogContextProvider> PgRolesTable<P> {
+    pub(crate) fn new(context_provider: P) -> Self {
         let schema = Arc::new(Schema::new(vec![
             Field::new("rolname", DataType::Utf8, true),
             Field::new("rolsuper", DataType::Boolean, true),
@@ -49,7 +49,7 @@ impl PgRolesTable {
 
         Self {
             schema,
-            auth_manager,
+            context_provider,
         }
     }
 
@@ -68,8 +68,8 @@ impl PgRolesTable {
         let mut rolconfig: Vec<Option<Vec<String>>> = Vec::new();
         let mut oid: Vec<i32> = Vec::new();
 
-        for role_name in &this.auth_manager.list_roles().await {
-            let role = &this.auth_manager.get_role(role_name).await.unwrap();
+        for role_name in &this.context_provider.roles().await {
+            let role = &this.context_provider.role(role_name).await.unwrap();
             rolname.push(role.name.clone());
             rolsuper.push(role.is_superuser);
             rolinherit.push(true);
@@ -128,7 +128,7 @@ impl PgRolesTable {
     }
 }
 
-impl PartitionStream for PgRolesTable {
+impl<P: PgCatalogContextProvider> PartitionStream for PgRolesTable<P> {
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }

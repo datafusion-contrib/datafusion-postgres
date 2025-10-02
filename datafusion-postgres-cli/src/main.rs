@@ -7,7 +7,7 @@ use datafusion::execution::options::{
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_postgres::auth::AuthManager;
-use datafusion_postgres::pg_catalog::setup_pg_catalog;
+use datafusion_postgres::datafusion_pg_catalog::setup_pg_catalog;
 use datafusion_postgres::{serve, ServerOptions};
 use env_logger::Env;
 use log::info;
