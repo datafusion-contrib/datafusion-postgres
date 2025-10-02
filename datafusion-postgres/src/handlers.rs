@@ -686,7 +686,7 @@ impl ExtendedQueryHandler for DfSessionService {
     }
 }
 
-async fn map_rows_affected_for_insert<'a>(df: &DataFrame) -> PgWireResult<Response<'a>> {
+async fn map_rows_affected_for_insert(df: &DataFrame) -> PgWireResult<Response> {
     // For INSERT queries, we need to execute the query to get the row count
     // and return an Execution response with the proper tag
     let result = df
