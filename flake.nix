@@ -15,10 +15,15 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         pythonEnv = pkgs.python3.withPackages (ps: with ps; [
+          psycopg2-binary
           psycopg
+          pyarrow
         ]);
         buildInputs = with pkgs; [
           llvmPackages.libclang
+          libpq
+          duckdb.dev
+          duckdb.lib
         ];
       in
       {
@@ -39,15 +44,16 @@
             cargo-nextest
             cargo-release
             curl
-            gnuplot ## for cargo bench
             pythonEnv
-            postgresql
+            postgresql.out
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
           shellHook = ''
             export CC=clang
             export CXX=clang++
+            export DUCKDB_LIB_DIR="${pkgs.duckdb.lib}/lib"
+            export DUCKDB_INCLUDE_DIR="${pkgs.duckdb.dev}/include"
           '';
         };
       });

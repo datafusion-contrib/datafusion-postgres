@@ -1,6 +1,12 @@
 # datafusion-postgres
 
-![Crates.io Version](https://img.shields.io/crates/v/datafusion-postgres?label=datafusion-postgres)
+[![Crates.io Version][crates-badge]][crates-url]
+[![Docs.rs Version][docs-badge]][docs-url]
+
+[crates-badge]: https://img.shields.io/crates/v/datafusion-postgres?label=datafusion-postgres
+[crates-url]: https://crates.io/crates/datafusion-postgres
+[docs-badge]: https://img.shields.io/docsrs/datafusion-postgres
+[docs-url]: https://docs.rs/datafusion-postgres/latest/datafusion_postgres
 
 A PostgreSQL-compatible server for [Apache DataFusion](https://datafusion.apache.org), supporting authentication, role-based access control, and SSL/TLS encryption. Available as both a library and CLI tool.
 
@@ -23,6 +29,16 @@ project.
 
 See `auth.rs` for complete implementation examples using `DfAuthSource`.
 
+## Supported Database Clients
+
+- Database Clients
+  - [x] psql
+  - [x] DBeaver
+  - [x] pgcli
+  - [x] VSCode SQLTools
+- BI
+  - [x] Metabase
+
 ## Quick Start
 
 ### The Library `datafusion-postgres`
@@ -35,16 +51,21 @@ options.
 use std::sync::Arc;
 use datafusion::prelude::SessionContext;
 use datafusion_postgres::{serve, ServerOptions};
+use datafusion_postgres::pg_catalog::setup_pg_catalog;
 
 // Create datafusion SessionContext
 let session_context = Arc::new(SessionContext::new());
 // Configure your `session_context`
 // ...
 
+// Optional: setup pg_catalog schema
+setup_pg_catalog(session_context, "datafusion")?;
+
 // Start the Postgres compatible server with SSL/TLS
 let server_options = ServerOptions::new()
     .with_host("127.0.0.1".to_string())
     .with_port(5432)
+    // Optional: setup tls
     .with_tls_cert_path(Some("server.crt".to_string()))
     .with_tls_key_path(Some("server.key".to_string()));
 

@@ -3,12 +3,12 @@ use std::{str::FromStr, sync::Arc};
 #[cfg(not(feature = "datafusion"))]
 use arrow::{
     array::{
-        timezone::Tz, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        Decimal256Array, DurationMicrosecondArray, LargeBinaryArray, LargeListArray,
-        LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray, Time32MillisecondArray,
-        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray,
+        timezone::Tz, Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+        Decimal128Array, Decimal256Array, DurationMicrosecondArray, LargeBinaryArray,
+        LargeListArray, LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray,
+        StringViewArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray,
     },
     datatypes::{
         DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,
@@ -20,12 +20,12 @@ use arrow::{
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::{
     array::{
-        timezone::Tz, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        Decimal256Array, DurationMicrosecondArray, LargeBinaryArray, LargeListArray,
-        LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray, Time32MillisecondArray,
-        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray,
+        timezone::Tz, Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+        Decimal128Array, Decimal256Array, DurationMicrosecondArray, LargeBinaryArray,
+        LargeListArray, LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray,
+        StringViewArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray,
     },
     datatypes::{
         DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,
@@ -150,6 +150,15 @@ pub(crate) fn encode_list(
                 .collect();
             encode_field(&value, type_, format)
         }
+        DataType::Utf8View => {
+            let value: Vec<Option<&str>> = arr
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .unwrap()
+                .iter()
+                .collect();
+            encode_field(&value, type_, format)
+        }
         DataType::Binary => {
             let value: Vec<Option<_>> = arr
                 .as_any()
@@ -163,6 +172,15 @@ pub(crate) fn encode_list(
             let value: Vec<Option<_>> = arr
                 .as_any()
                 .downcast_ref::<LargeBinaryArray>()
+                .unwrap()
+                .iter()
+                .collect();
+            encode_field(&value, type_, format)
+        }
+        DataType::BinaryView => {
+            let value: Vec<Option<_>> = arr
+                .as_any()
+                .downcast_ref::<BinaryViewArray>()
                 .unwrap()
                 .iter()
                 .collect();

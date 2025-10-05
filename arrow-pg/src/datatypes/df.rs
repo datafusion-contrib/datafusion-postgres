@@ -11,17 +11,14 @@ use futures::{stream, StreamExt};
 use pgwire::api::portal::{Format, Portal};
 use pgwire::api::results::QueryResponse;
 use pgwire::api::Type;
-use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::data::DataRow;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 
 use super::{arrow_schema_to_pg_fields, encode_recordbatch, into_pg_type};
 
-pub async fn encode_dataframe<'a>(
-    df: DataFrame,
-    format: &Format,
-) -> PgWireResult<QueryResponse<'a>> {
+pub async fn encode_dataframe(df: DataFrame, format: &Format) -> PgWireResult<QueryResponse> {
     let fields = Arc::new(arrow_schema_to_pg_fields(df.schema().as_arrow(), format)?);
 
     let recordbatch_stream = df
@@ -66,11 +63,7 @@ where
         } else if let Some(infer_type) = inferenced_type {
             into_pg_type(infer_type)
         } else {
-            Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                "FATAL".to_string(),
-                "XX000".to_string(),
-                "Unknown parameter type".to_string(),
-            ))))
+            Ok(Type::UNKNOWN)
         }
     }
 
@@ -264,11 +257,28 @@ where
             }
             // TODO: add more advanced types (composite types, ranges, etc.)
             _ => {
-                return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                    "FATAL".to_string(),
-                    "XX000".to_string(),
-                    format!("Unsupported parameter type: {pg_type}"),
-                ))));
+                // the client didn't provide type information and we are also
+                // unable to inference the type, or it's a type that we haven't
+                // supported:
+                //
+                // In this case we retry to resolve it as String or StringArray
+                let value = portal.parameter::<String>(i, &pg_type)?;
+                if let Some(value) = value {
+                    if value.starts_with('{') && value.ends_with('}') {
+                        // Looks like an array
+                        let items = value.trim_matches(|c| c == '{' || c == '}' || c == ' ');
+                        let items = items.split(',').map(|s| s.trim());
+                        let scalar_values: Vec<ScalarValue> = items
+                            .map(|s| ScalarValue::Utf8(Some(s.to_string())))
+                            .collect();
+
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(&scalar_values, &DataType::Utf8),
+                        ));
+                    } else {
+                        deserialized_params.push(ScalarValue::Utf8(Some(value)));
+                    }
+                }
             }
         }
     }

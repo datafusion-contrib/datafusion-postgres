@@ -1,5 +1,4 @@
 mod handlers;
-pub mod pg_catalog;
 
 use std::fs::File;
 use std::io::{BufReader, Error as IOError, ErrorKind};
@@ -15,6 +14,7 @@ use pgwire::tokio::process_socket;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tokio_rustls::rustls::{self, ServerConfig};
 use tokio_rustls::TlsAcceptor;
 
@@ -24,6 +24,7 @@ pub use handlers::{DfSessionService, Parser, QueryHook, Statement};
 
 /// re-exports
 pub use arrow_pg;
+pub use datafusion_pg_catalog;
 pub use pgwire;
 
 #[derive(Getters, Setters, WithSetters, Debug)]
@@ -33,6 +34,7 @@ pub struct ServerOptions {
     port: u16,
     tls_cert_path: Option<String>,
     tls_key_path: Option<String>,
+    max_connections: usize,
 }
 
 impl ServerOptions {
@@ -48,6 +50,7 @@ impl Default for ServerOptions {
             port: 5432,
             tls_cert_path: None,
             tls_key_path: None,
+            max_connections: 0, // 0 = no limit
         }
     }
 }
@@ -79,10 +82,8 @@ fn setup_tls(cert_path: &str, key_path: &str) -> Result<TlsAcceptor, IOError> {
 pub async fn serve(
     session_context: Arc<SessionContext>,
     opts: &ServerOptions,
+    auth_manager: Arc<AuthManager>,
 ) -> Result<(), std::io::Error> {
-    // Create authentication manager
-    let auth_manager = Arc::new(AuthManager::new());
-
     // Create the handler factory with authentication
     let factory = Arc::new(HandlerFactory::new(session_context, auth_manager));
 
@@ -125,22 +126,66 @@ pub async fn serve_with_handlers(
         info!("Listening on {server_addr} (unencrypted)");
     }
 
+    // Connection limiter (if configured)
+    let max_conn_count = opts.max_connections;
+    let connection_limiter = if max_conn_count > 0 {
+        Some(Arc::new(Semaphore::new(max_conn_count)))
+    } else {
+        None
+    };
+
     // Accept incoming connections
     loop {
         match listener.accept().await {
-            Ok((socket, _addr)) => {
+            Ok((socket, addr)) => {
                 let factory_ref = handlers.clone();
                 let tls_acceptor_ref = tls_acceptor.clone();
+                let limiter_ref = connection_limiter.clone();
 
                 tokio::spawn(async move {
+                    // Check connection limit if configured
+                    let _permit = if let Some(ref semaphore) = limiter_ref {
+                        match semaphore.try_acquire() {
+                            Ok(permit) => Some(permit),
+                            Err(_) => {
+                                warn!("Connection rejected from {addr}: max connections ({max_conn_count}) reached");
+                                return;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
                     if let Err(e) = process_socket(socket, tls_acceptor_ref, factory_ref).await {
-                        warn!("Error processing socket: {e}");
+                        warn!("Error processing socket from {addr}: {e}");
                     }
+                    // Permit is automatically released when _permit is dropped
                 });
             }
             Err(e) => {
                 warn!("Error accept socket: {e}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_server_options_default_max_connections() {
+        let opts = ServerOptions::default();
+        assert_eq!(opts.max_connections, 0); // No limit by default
+    }
+
+    #[test]
+    fn test_server_options_max_connections_configuration() {
+        let opts = ServerOptions::new().with_max_connections(500);
+        assert_eq!(opts.max_connections, 500);
+
+        // Test that 0 means no limit
+        let opts_no_limit = ServerOptions::new().with_max_connections(0);
+        assert_eq!(opts_no_limit.max_connections, 0);
     }
 }

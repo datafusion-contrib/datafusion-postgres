@@ -2,113 +2,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use log::warn;
 use pgwire::api::auth::{AuthSource, LoginInfo, Password};
 use pgwire::error::{PgWireError, PgWireResult};
 use tokio::sync::RwLock;
 
-/// User information stored in the authentication system
-#[derive(Debug, Clone)]
-pub struct User {
-    pub username: String,
-    pub password_hash: String,
-    pub roles: Vec<String>,
-    pub is_superuser: bool,
-    pub can_login: bool,
-    pub connection_limit: Option<i32>,
-}
-
-/// Permission types for granular access control
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Permission {
-    Select,
-    Insert,
-    Update,
-    Delete,
-    Create,
-    Drop,
-    Alter,
-    Index,
-    References,
-    Trigger,
-    Execute,
-    Usage,
-    Connect,
-    Temporary,
-    All,
-}
-
-impl Permission {
-    pub fn from_string(s: &str) -> Option<Permission> {
-        match s.to_uppercase().as_str() {
-            "SELECT" => Some(Permission::Select),
-            "INSERT" => Some(Permission::Insert),
-            "UPDATE" => Some(Permission::Update),
-            "DELETE" => Some(Permission::Delete),
-            "CREATE" => Some(Permission::Create),
-            "DROP" => Some(Permission::Drop),
-            "ALTER" => Some(Permission::Alter),
-            "INDEX" => Some(Permission::Index),
-            "REFERENCES" => Some(Permission::References),
-            "TRIGGER" => Some(Permission::Trigger),
-            "EXECUTE" => Some(Permission::Execute),
-            "USAGE" => Some(Permission::Usage),
-            "CONNECT" => Some(Permission::Connect),
-            "TEMPORARY" => Some(Permission::Temporary),
-            "ALL" => Some(Permission::All),
-            _ => None,
-        }
-    }
-}
-
-/// Resource types for access control
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ResourceType {
-    Table(String),
-    Schema(String),
-    Database(String),
-    Function(String),
-    Sequence(String),
-    All,
-}
-
-/// Grant entry for specific permissions on resources
-#[derive(Debug, Clone)]
-pub struct Grant {
-    pub permission: Permission,
-    pub resource: ResourceType,
-    pub granted_by: String,
-    pub with_grant_option: bool,
-}
-
-/// Role information for access control
-#[derive(Debug, Clone)]
-pub struct Role {
-    pub name: String,
-    pub is_superuser: bool,
-    pub can_login: bool,
-    pub can_create_db: bool,
-    pub can_create_role: bool,
-    pub can_create_user: bool,
-    pub can_replication: bool,
-    pub grants: Vec<Grant>,
-    pub inherited_roles: Vec<String>,
-}
-
-/// Role configuration for creation
-#[derive(Debug, Clone)]
-pub struct RoleConfig {
-    pub name: String,
-    pub is_superuser: bool,
-    pub can_login: bool,
-    pub can_create_db: bool,
-    pub can_create_role: bool,
-    pub can_create_user: bool,
-    pub can_replication: bool,
-}
+use datafusion_pg_catalog::pg_catalog::context::*;
 
 /// Authentication manager that handles users and roles
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AuthManager {
     users: Arc<RwLock<HashMap<String, User>>>,
     roles: Arc<RwLock<HashMap<String, Role>>>,
@@ -122,11 +23,7 @@ impl Default for AuthManager {
 
 impl AuthManager {
     pub fn new() -> Self {
-        let auth_manager = AuthManager {
-            users: Arc::new(RwLock::new(HashMap::new())),
-            roles: Arc::new(RwLock::new(HashMap::new())),
-        };
-
+        let mut users = HashMap::new();
         // Initialize with default postgres superuser
         let postgres_user = User {
             username: "postgres".to_string(),
@@ -136,7 +33,9 @@ impl AuthManager {
             can_login: true,
             connection_limit: None,
         };
+        users.insert(postgres_user.username.clone(), postgres_user);
 
+        let mut roles = HashMap::new();
         let postgres_role = Role {
             name: "postgres".to_string(),
             is_superuser: true,
@@ -153,35 +52,12 @@ impl AuthManager {
             }],
             inherited_roles: vec![],
         };
+        roles.insert(postgres_role.name.clone(), postgres_role);
 
-        // Add default users and roles
-        let auth_manager_clone = AuthManager {
-            users: auth_manager.users.clone(),
-            roles: auth_manager.roles.clone(),
-        };
-
-        tokio::spawn({
-            let users = auth_manager.users.clone();
-            let roles = auth_manager.roles.clone();
-            let auth_manager_spawn = auth_manager_clone;
-            async move {
-                users
-                    .write()
-                    .await
-                    .insert("postgres".to_string(), postgres_user);
-                roles
-                    .write()
-                    .await
-                    .insert("postgres".to_string(), postgres_role);
-
-                // Create predefined roles
-                if let Err(e) = auth_manager_spawn.create_predefined_roles().await {
-                    warn!("Failed to create predefined roles: {e:?}");
-                }
-            }
-        });
-
-        auth_manager
+        AuthManager {
+            users: Arc::new(RwLock::new(users)),
+            roles: Arc::new(RwLock::new(roles)),
+        }
     }
 
     /// Add a new user to the system
@@ -569,9 +445,22 @@ impl AuthManager {
     }
 }
 
+#[async_trait]
+impl PgCatalogContextProvider for AuthManager {
+    // retrieve all database role names
+    async fn roles(&self) -> Vec<String> {
+        self.list_roles().await
+    }
+
+    // retrieve database role information
+    async fn role(&self, name: &str) -> Option<Role> {
+        self.get_role(name).await
+    }
+}
+
 /// AuthSource implementation for integration with pgwire authentication
 /// Provides proper password-based authentication instead of custom startup handler
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DfAuthSource {
     pub auth_manager: Arc<AuthManager>,
 }
@@ -661,6 +550,7 @@ impl AuthSource for DfAuthSource {
 // ```
 
 /// Simple AuthSource implementation that accepts any user with empty password
+#[derive(Debug)]
 pub struct SimpleAuthSource {
     auth_manager: Arc<AuthManager>,
 }
