@@ -23,6 +23,16 @@ use tokio::sync::Mutex;
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
 
+#[async_trait]
+pub trait QueryHook: Send + Sync {
+    async fn handle_query(
+        &self,
+        query: &str,
+        session_context: &SessionContext,
+        client: &dyn ClientInfo,
+    ) -> Option<PgWireResult<Vec<Response<'static>>>>;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TransactionState {
     None,
@@ -44,7 +54,7 @@ pub struct HandlerFactory {
 impl HandlerFactory {
     pub fn new(session_context: Arc<SessionContext>, auth_manager: Arc<AuthManager>) -> Self {
         let session_service =
-            Arc::new(DfSessionService::new(session_context, auth_manager.clone()));
+            Arc::new(DfSessionService::new(session_context, auth_manager.clone(), None));
         HandlerFactory { session_service }
     }
 }
@@ -70,12 +80,14 @@ pub struct DfSessionService {
     timezone: Arc<Mutex<String>>,
     transaction_state: Arc<Mutex<TransactionState>>,
     auth_manager: Arc<AuthManager>,
+    query_hook: Option<Arc<dyn QueryHook>>,
 }
 
 impl DfSessionService {
     pub fn new(
         session_context: Arc<SessionContext>,
         auth_manager: Arc<AuthManager>,
+        query_hook: Option<Arc<dyn QueryHook>>,
     ) -> DfSessionService {
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
@@ -86,6 +98,7 @@ impl DfSessionService {
             timezone: Arc::new(Mutex::new("UTC".to_string())),
             transaction_state: Arc::new(Mutex::new(TransactionState::None)),
             auth_manager,
+            query_hook,
         }
     }
 
@@ -371,6 +384,13 @@ impl SimpleQueryHandler for DfSessionService {
                         "current transaction is aborted, commands ignored until end of transaction block".to_string(),
                     ),
                 )));
+            }
+        }
+
+        // Check query hook first
+        if let Some(hook) = &self.query_hook {
+            if let Some(result) = hook.handle_query(query, &self.session_context, client).await {
+                return result;
             }
         }
 

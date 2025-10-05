@@ -20,7 +20,7 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::auth::AuthManager;
 use handlers::HandlerFactory;
-pub use handlers::{DfSessionService, Parser};
+pub use handlers::{DfSessionService, Parser, QueryHook};
 
 /// re-exports
 pub use arrow_pg;
