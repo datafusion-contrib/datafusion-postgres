@@ -30,9 +30,6 @@ use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
 use datafusion_pg_catalog::pg_catalog::context::{Permission, ResourceType};
 use datafusion_pg_catalog::sql::PostgresCompatibilityParser;
 
-/// Statement type represents a parsed SQL query with its logical plan
-pub type Statement = (String, Option<LogicalPlan>);
-
 #[async_trait]
 pub trait QueryHook: Send + Sync {
     async fn handle_query(
@@ -40,7 +37,7 @@ pub trait QueryHook: Send + Sync {
         statement: &Statement,
         session_context: &SessionContext,
         client: &dyn ClientInfo,
-    ) -> Option<PgWireResult<Vec<Response<'static>>>>;
+    ) -> Option<PgWireResult<Vec<Response>>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -66,8 +63,11 @@ pub struct HandlerFactory {
 
 impl HandlerFactory {
     pub fn new(session_context: Arc<SessionContext>, auth_manager: Arc<AuthManager>) -> Self {
-        let session_service =
-            Arc::new(DfSessionService::new(session_context, auth_manager.clone(), None));
+        let session_service = Arc::new(DfSessionService::new(
+            session_context,
+            auth_manager.clone(),
+            None,
+        ));
         HandlerFactory { session_service }
     }
 }
@@ -491,26 +491,16 @@ impl SimpleQueryHandler for DfSessionService {
                 self.check_query_permission(client, &query).await?;
             }
 
-        // Parse query into logical plan for hook
-        if let Some(hook) = &self.query_hook {
-            // Create logical plan from query
-            let state = self.session_context.state();
-            let logical_plan_result = state.create_logical_plan(query).await;
-            
-            if let Ok(logical_plan) = logical_plan_result {
-                // Optimize the logical plan
-                let optimized_result = state.optimize(&logical_plan);
-                
-                if let Ok(optimized) = optimized_result {
-                    // Create Statement tuple and call hook
-                    let statement = (query.to_string(), optimized);
-                    if let Some(result) = hook.handle_query(&statement, &self.session_context, client).await {
-                        return result;
-                    }
+            // Call query hook with the parsed statement
+            if let Some(hook) = &self.query_hook {
+                let wrapped_statement = Statement::Statement(Box::new(statement.clone()));
+                if let Some(result) = hook
+                    .handle_query(&wrapped_statement, &self.session_context, client)
+                    .await
+                {
+                    return result;
                 }
             }
-            // If parsing or optimization fails, we'll continue with normal processing
-        }
 
             if let Some(resp) = self
                 .try_respond_set_statements(client, &query_lower)
@@ -578,7 +568,7 @@ impl SimpleQueryHandler for DfSessionService {
 
 #[async_trait]
 impl ExtendedQueryHandler for DfSessionService {
-    type Statement = Statement;
+    type Statement = (String, Option<LogicalPlan>);
     type QueryParser = Parser;
 
     fn query_parser(&self) -> Arc<Self::QueryParser> {
@@ -656,11 +646,25 @@ impl ExtendedQueryHandler for DfSessionService {
 
         // Check query hook first
         if let Some(hook) = &self.query_hook {
-            if let Some(result) = hook.handle_query(&portal.statement.statement, &self.session_context, client).await {
-                // Convert Vec<Response> to single Response
-                // For extended query, we expect a single response
-                if let Some(response) = result?.into_iter().next() {
-                    return Ok(response);
+            // Parse the SQL to get the Statement for the hook
+            let sql = &portal.statement.statement.0;
+            let statements = self
+                .parser
+                .sql_parser
+                .parse(sql)
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            
+            if let Some(statement) = statements.into_iter().next() {
+                let wrapped_statement = Statement::Statement(Box::new(statement));
+                if let Some(result) = hook
+                    .handle_query(&wrapped_statement, &self.session_context, client)
+                    .await
+                {
+                    // Convert Vec<Response> to single Response
+                    // For extended query, we expect a single response
+                    if let Some(response) = result?.into_iter().next() {
+                        return Ok(response);
+                    }
                 }
             }
         }
@@ -837,7 +841,7 @@ impl Parser {
 
 #[async_trait]
 impl QueryParser for Parser {
-    type Statement = Statement;
+    type Statement = (String, Option<LogicalPlan>);
 
     async fn parse_sql<C>(
         &self,
