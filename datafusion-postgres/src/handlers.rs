@@ -40,13 +40,6 @@ pub trait QueryHook: Send + Sync {
     ) -> Option<PgWireResult<Vec<Response>>>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TransactionState {
-    None,
-    Active,
-    Failed,
-}
-
 // Metadata keys for session-level settings
 const METADATA_STATEMENT_TIMEOUT: &str = "statement_timeout_ms";
 
@@ -653,7 +646,7 @@ impl ExtendedQueryHandler for DfSessionService {
                 .sql_parser
                 .parse(sql)
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-            
+
             if let Some(statement) = statements.into_iter().next() {
                 let wrapped_statement = Statement::Statement(Box::new(statement));
                 if let Some(result) = hook
