@@ -55,11 +55,15 @@ pub struct HandlerFactory {
 }
 
 impl HandlerFactory {
-    pub fn new(session_context: Arc<SessionContext>, auth_manager: Arc<AuthManager>) -> Self {
+    pub fn new(
+        session_context: Arc<SessionContext>,
+        auth_manager: Arc<AuthManager>,
+        query_hooks: Vec<Arc<dyn QueryHook>>,
+    ) -> Self {
         let session_service = Arc::new(DfSessionService::new(
             session_context,
             auth_manager.clone(),
-            None,
+            query_hooks,
         ));
         HandlerFactory { session_service }
     }
@@ -100,14 +104,14 @@ pub struct DfSessionService {
     parser: Arc<Parser>,
     timezone: Arc<Mutex<String>>,
     auth_manager: Arc<AuthManager>,
-    query_hook: Option<Arc<dyn QueryHook>>,
+    query_hooks: Vec<Arc<dyn QueryHook>>,
 }
 
 impl DfSessionService {
     pub fn new(
         session_context: Arc<SessionContext>,
         auth_manager: Arc<AuthManager>,
-        query_hook: Option<Arc<dyn QueryHook>>,
+        query_hooks: Vec<Arc<dyn QueryHook>>,
     ) -> DfSessionService {
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
@@ -118,7 +122,7 @@ impl DfSessionService {
             parser,
             timezone: Arc::new(Mutex::new("UTC".to_string())),
             auth_manager,
-            query_hook,
+            query_hooks,
         }
     }
 
@@ -484,8 +488,8 @@ impl SimpleQueryHandler for DfSessionService {
                 self.check_query_permission(client, &query).await?;
             }
 
-            // Call query hook with the parsed statement
-            if let Some(hook) = &self.query_hook {
+            // Call query hooks with the parsed statement
+            for hook in &self.query_hooks {
                 let wrapped_statement = Statement::Statement(Box::new(statement.clone()));
                 if let Some(result) = hook
                     .handle_query(&wrapped_statement, &self.session_context, client)
@@ -637,8 +641,8 @@ impl ExtendedQueryHandler for DfSessionService {
             .to_string();
         log::debug!("Received execute extended query: {query}"); // Log for debugging
 
-        // Check query hook first
-        if let Some(hook) = &self.query_hook {
+        // Check query hooks first
+        for hook in &self.query_hooks {
             // Parse the SQL to get the Statement for the hook
             let sql = &portal.statement.statement.0;
             let statements = self
@@ -961,7 +965,7 @@ mod tests {
     async fn test_statement_timeout_set_and_show() {
         let session_context = Arc::new(SessionContext::new());
         let auth_manager = Arc::new(AuthManager::new());
-        let service = DfSessionService::new(session_context, auth_manager);
+        let service = DfSessionService::new(session_context, auth_manager, vec![]);
         let mut client = MockClient::new();
 
         // Test setting timeout to 5000ms
@@ -987,7 +991,7 @@ mod tests {
     async fn test_statement_timeout_disable() {
         let session_context = Arc::new(SessionContext::new());
         let auth_manager = Arc::new(AuthManager::new());
-        let service = DfSessionService::new(session_context, auth_manager);
+        let service = DfSessionService::new(session_context, auth_manager, vec![]);
         let mut client = MockClient::new();
 
         // Set timeout first

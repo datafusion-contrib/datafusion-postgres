@@ -85,7 +85,7 @@ pub async fn serve(
     auth_manager: Arc<AuthManager>,
 ) -> Result<(), std::io::Error> {
     // Create the handler factory with authentication
-    let factory = Arc::new(HandlerFactory::new(session_context, auth_manager));
+    let factory = Arc::new(HandlerFactory::new(session_context, auth_manager, vec![]));
 
     serve_with_handlers(factory, opts).await
 }
