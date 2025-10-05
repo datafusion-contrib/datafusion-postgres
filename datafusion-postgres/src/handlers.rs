@@ -23,11 +23,14 @@ use tokio::sync::Mutex;
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
 
+/// Statement type represents a parsed SQL query with its logical plan
+pub type Statement = (String, LogicalPlan);
+
 #[async_trait]
 pub trait QueryHook: Send + Sync {
     async fn handle_query(
         &self,
-        query: &str,
+        statement: &Statement,
         session_context: &SessionContext,
         client: &dyn ClientInfo,
     ) -> Option<PgWireResult<Vec<Response<'static>>>>;
@@ -387,11 +390,25 @@ impl SimpleQueryHandler for DfSessionService {
             }
         }
 
-        // Check query hook first
+        // Parse query into logical plan for hook
         if let Some(hook) = &self.query_hook {
-            if let Some(result) = hook.handle_query(query, &self.session_context, client).await {
-                return result;
+            // Create logical plan from query
+            let state = self.session_context.state();
+            let logical_plan_result = state.create_logical_plan(query).await;
+            
+            if let Ok(logical_plan) = logical_plan_result {
+                // Optimize the logical plan
+                let optimized_result = state.optimize(&logical_plan);
+                
+                if let Ok(optimized) = optimized_result {
+                    // Create Statement tuple and call hook
+                    let statement = (query.to_string(), optimized);
+                    if let Some(result) = hook.handle_query(&statement, &self.session_context, client).await {
+                        return result;
+                    }
+                }
             }
+            // If parsing or optimization fails, we'll continue with normal processing
         }
 
         let df_result = self.session_context.sql(query).await;
@@ -443,7 +460,7 @@ impl SimpleQueryHandler for DfSessionService {
 
 #[async_trait]
 impl ExtendedQueryHandler for DfSessionService {
-    type Statement = (String, LogicalPlan);
+    type Statement = Statement;
     type QueryParser = Parser;
 
     fn query_parser(&self) -> Arc<Self::QueryParser> {
@@ -513,6 +530,17 @@ impl ExtendedQueryHandler for DfSessionService {
             .to_string();
         log::debug!("Received execute extended query: {}", query); // Log for debugging
 
+        // Check query hook first
+        if let Some(hook) = &self.query_hook {
+            if let Some(result) = hook.handle_query(&portal.statement.statement, &self.session_context, client).await {
+                // Convert Vec<Response> to single Response
+                // For extended query, we expect a single response
+                if let Some(response) = result?.into_iter().next() {
+                    return Ok(response);
+                }
+            }
+        }
+
         // Check permissions for the query (skip for SET and SHOW statements)
         if !query.starts_with("set") && !query.starts_with("show") {
             self.check_query_permission(client, &portal.statement.statement.0)
@@ -553,7 +581,7 @@ pub struct Parser {
 
 #[async_trait]
 impl QueryParser for Parser {
-    type Statement = (String, LogicalPlan);
+    type Statement = Statement;
 
     async fn parse_sql<C>(
         &self,
