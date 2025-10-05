@@ -1033,20 +1033,20 @@ mod tests {
         let hook = TestHook;
         let ctx = SessionContext::new();
         let client = MockClient::new();
-        
+
         // Parse a statement that contains "magic"
         let parser = PostgresCompatibilityParser::new();
         let statements = parser.parse("SELECT magic").unwrap();
         let stmt = Statement::Statement(Box::new(statements[0].clone()));
-        
+
         // Hook should intercept
         let result = hook.handle_query(&stmt, &ctx, &client).await;
         assert!(result.is_some());
-        
+
         // Parse a normal statement
         let statements = parser.parse("SELECT 1").unwrap();
         let stmt = Statement::Statement(Box::new(statements[0].clone()));
-        
+
         // Hook should not intercept
         let result = hook.handle_query(&stmt, &ctx, &client).await;
         assert!(result.is_none());
