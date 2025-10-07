@@ -471,7 +471,7 @@ impl SimpleQueryHandler for DfSessionService {
         }
 
         let mut results = vec![];
-        for statement in statements {
+        'stmt: for statement in statements {
             // TODO: improve statement check by using statement directly
             let query = statement.to_string();
             let query_lower = query.to_lowercase().trim().to_string();
@@ -495,7 +495,8 @@ impl SimpleQueryHandler for DfSessionService {
                     .handle_query(&statement, &self.session_context, client)
                     .await
                 {
-                    return result.map(|response| vec![response]);
+                    results.push(result?);
+                    break 'stmt;
                 }
             }
 
