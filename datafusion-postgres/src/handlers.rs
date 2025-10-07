@@ -38,7 +38,7 @@ pub trait QueryHook: Send + Sync {
         statement: &sqlparser::ast::Statement,
         session_context: &SessionContext,
         client: &dyn ClientInfo,
-    ) -> Option<PgWireResult<Vec<Response>>>;
+    ) -> Option<PgWireResult<Response>>;
 }
 
 // Metadata keys for session-level settings
@@ -495,7 +495,7 @@ impl SimpleQueryHandler for DfSessionService {
                     .handle_query(&statement, &self.session_context, client)
                     .await
                 {
-                    return result;
+                    return result.map(|response| vec![response]);
                 }
             }
 
@@ -656,11 +656,7 @@ impl ExtendedQueryHandler for DfSessionService {
                     .handle_query(&statement, &self.session_context, client)
                     .await
                 {
-                    // Convert Vec<Response> to single Response
-                    // For extended query, we expect a single response
-                    if let Some(response) = result?.into_iter().next() {
-                        return Ok(response);
-                    }
+                    return result;
                 }
             }
         }
@@ -1015,12 +1011,12 @@ mod tests {
     impl QueryHook for TestHook {
         async fn handle_query(
             &self,
-            statement: &Statement,
+            statement: &sqlparser::ast::Statement,
             _ctx: &SessionContext,
             _client: &dyn ClientInfo,
-        ) -> Option<PgWireResult<Vec<Response>>> {
+        ) -> Option<PgWireResult<Response>> {
             if statement.to_string().contains("magic") {
-                Some(Ok(vec![Response::EmptyQuery]))
+                Some(Ok(Response::EmptyQuery))
             } else {
                 None
             }
@@ -1036,18 +1032,18 @@ mod tests {
         // Parse a statement that contains "magic"
         let parser = PostgresCompatibilityParser::new();
         let statements = parser.parse("SELECT magic").unwrap();
-        let stmt = Statement::Statement(Box::new(statements[0].clone()));
+        let stmt = &statements[0];
 
         // Hook should intercept
-        let result = hook.handle_query(&stmt, &ctx, &client).await;
+        let result = hook.handle_query(stmt, &ctx, &client).await;
         assert!(result.is_some());
 
         // Parse a normal statement
         let statements = parser.parse("SELECT 1").unwrap();
-        let stmt = Statement::Statement(Box::new(statements[0].clone()));
+        let stmt = &statements[0];
 
         // Hook should not intercept
-        let result = hook.handle_query(&stmt, &ctx, &client).await;
+        let result = hook.handle_query(stmt, &ctx, &client).await;
         assert!(result.is_none());
     }
 }
