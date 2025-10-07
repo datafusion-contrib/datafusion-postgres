@@ -27,6 +27,7 @@ use tokio::sync::Mutex;
 use crate::auth::AuthManager;
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
+use datafusion::sql::sqlparser;
 use datafusion_pg_catalog::pg_catalog::context::{Permission, ResourceType};
 use datafusion_pg_catalog::sql::PostgresCompatibilityParser;
 
@@ -34,7 +35,7 @@ use datafusion_pg_catalog::sql::PostgresCompatibilityParser;
 pub trait QueryHook: Send + Sync {
     async fn handle_query(
         &self,
-        statement: &Statement,
+        statement: &sqlparser::ast::Statement,
         session_context: &SessionContext,
         client: &dyn ClientInfo,
     ) -> Option<PgWireResult<Vec<Response>>>;
@@ -490,9 +491,8 @@ impl SimpleQueryHandler for DfSessionService {
 
             // Call query hooks with the parsed statement
             for hook in &self.query_hooks {
-                let wrapped_statement = Statement::Statement(Box::new(statement.clone()));
                 if let Some(result) = hook
-                    .handle_query(&wrapped_statement, &self.session_context, client)
+                    .handle_query(&statement, &self.session_context, client)
                     .await
                 {
                     return result;
@@ -652,9 +652,8 @@ impl ExtendedQueryHandler for DfSessionService {
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
             if let Some(statement) = statements.into_iter().next() {
-                let wrapped_statement = Statement::Statement(Box::new(statement));
                 if let Some(result) = hook
-                    .handle_query(&wrapped_statement, &self.session_context, client)
+                    .handle_query(&statement, &self.session_context, client)
                     .await
                 {
                     // Convert Vec<Response> to single Response
