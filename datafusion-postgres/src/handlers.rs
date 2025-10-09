@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::common::ToDFSchema;
+use datafusion::common::{ParamValues, ToDFSchema};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
@@ -33,11 +33,22 @@ use datafusion_pg_catalog::sql::PostgresCompatibilityParser;
 
 #[async_trait]
 pub trait QueryHook: Send + Sync {
-    async fn handle_query(
+    /// called in simple query handler to return response directly
+    async fn handle_simple_query(
         &self,
         statement: &sqlparser::ast::Statement,
         session_context: &SessionContext,
-        client: &dyn ClientInfo,
+        client: &(dyn ClientInfo + Send + Sync),
+    ) -> Option<PgWireResult<Response>>;
+
+    /// called at extended query execute phase, for query execution
+    async fn handle_extended_query(
+        &self,
+        statement: &sqlparser::ast::Statement,
+        logical_plan: &LogicalPlan,
+        params: &ParamValues,
+        session_context: &SessionContext,
+        client: &(dyn ClientInfo + Send + Sync),
     ) -> Option<PgWireResult<Response>>;
 }
 
@@ -492,7 +503,7 @@ impl SimpleQueryHandler for DfSessionService {
             // Call query hooks with the parsed statement
             for hook in &self.query_hooks {
                 if let Some(result) = hook
-                    .handle_query(&statement, &self.session_context, client)
+                    .handle_simple_query(&statement, &self.session_context, client)
                     .await
                 {
                     results.push(result?);
@@ -643,21 +654,29 @@ impl ExtendedQueryHandler for DfSessionService {
         log::debug!("Received execute extended query: {query}"); // Log for debugging
 
         // Check query hooks first
-        for hook in &self.query_hooks {
-            // Parse the SQL to get the Statement for the hook
-            let sql = &portal.statement.statement.0;
-            let statements = self
-                .parser
-                .sql_parser
-                .parse(sql)
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+        if !self.query_hooks.is_empty() {
+            if let (_, Some((statement, plan))) = &portal.statement.statement {
+                // TODO: in the case where query hooks all return None, we do the param handling again later.
+                let param_types = plan
+                    .get_parameter_types()
+                    .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-            if let Some(statement) = statements.into_iter().next() {
-                if let Some(result) = hook
-                    .handle_query(&statement, &self.session_context, client)
-                    .await
-                {
-                    return result;
+                let param_values: ParamValues =
+                    df::deserialize_parameters(portal, &ordered_param_types(&param_types))?;
+
+                for hook in &self.query_hooks {
+                    if let Some(result) = hook
+                        .handle_extended_query(
+                            statement,
+                            plan,
+                            &param_values,
+                            &self.session_context,
+                            client,
+                        )
+                        .await
+                    {
+                        return result;
+                    }
                 }
             }
         }
@@ -1010,17 +1029,28 @@ mod tests {
 
     #[async_trait]
     impl QueryHook for TestHook {
-        async fn handle_query(
+        async fn handle_simple_query(
             &self,
             statement: &sqlparser::ast::Statement,
             _ctx: &SessionContext,
-            _client: &dyn ClientInfo,
+            _client: &(dyn ClientInfo + Sync + Send),
         ) -> Option<PgWireResult<Response>> {
             if statement.to_string().contains("magic") {
                 Some(Ok(Response::EmptyQuery))
             } else {
                 None
             }
+        }
+
+        async fn handle_extended_query(
+            &self,
+            _statement: &sqlparser::ast::Statement,
+            _logical_plan: &LogicalPlan,
+            _params: &ParamValues,
+            _session_context: &SessionContext,
+            _client: &(dyn ClientInfo + Send + Sync),
+        ) -> Option<PgWireResult<Response>> {
+            todo!();
         }
     }
 
@@ -1036,7 +1066,7 @@ mod tests {
         let stmt = &statements[0];
 
         // Hook should intercept
-        let result = hook.handle_query(stmt, &ctx, &client).await;
+        let result = hook.handle_simple_query(stmt, &ctx, &client).await;
         assert!(result.is_some());
 
         // Parse a normal statement
@@ -1044,7 +1074,7 @@ mod tests {
         let stmt = &statements[0];
 
         // Hook should not intercept
-        let result = hook.handle_query(stmt, &ctx, &client).await;
+        let result = hook.handle_simple_query(stmt, &ctx, &client).await;
         assert!(result.is_none());
     }
 }
