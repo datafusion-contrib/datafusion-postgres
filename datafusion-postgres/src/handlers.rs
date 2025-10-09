@@ -566,7 +566,7 @@ impl SimpleQueryHandler for DfSessionService {
 
 #[async_trait]
 impl ExtendedQueryHandler for DfSessionService {
-    type Statement = (String, Option<LogicalPlan>);
+    type Statement = (String, Option<(sqlparser::ast::Statement, LogicalPlan)>);
     type QueryParser = Parser;
 
     fn query_parser(&self) -> Arc<Self::QueryParser> {
@@ -581,7 +581,7 @@ impl ExtendedQueryHandler for DfSessionService {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        if let (_, Some(plan)) = &target.statement {
+        if let (_, Some((_, plan))) = &target.statement {
             let schema = plan.schema();
             let fields = arrow_schema_to_pg_fields(schema.as_arrow(), &Format::UnifiedBinary)?;
             let params = plan
@@ -613,7 +613,7 @@ impl ExtendedQueryHandler for DfSessionService {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        if let (_, Some(plan)) = &target.statement.statement {
+        if let (_, Some((_, plan))) = &target.statement.statement {
             let format = &target.result_column_format;
             let schema = plan.schema();
             let fields = arrow_schema_to_pg_fields(schema.as_arrow(), format)?;
@@ -695,7 +695,7 @@ impl ExtendedQueryHandler for DfSessionService {
             )));
         }
 
-        if let (_, Some(plan)) = &portal.statement.statement {
+        if let (_, Some((_, plan))) = &portal.statement.statement {
             let param_types = plan
                 .get_parameter_types()
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
@@ -834,7 +834,7 @@ impl Parser {
 
 #[async_trait]
 impl QueryParser for Parser {
-    type Statement = (String, Option<LogicalPlan>);
+    type Statement = (String, Option<(sqlparser::ast::Statement, LogicalPlan)>);
 
     async fn parse_sql<C>(
         &self,
@@ -843,14 +843,6 @@ impl QueryParser for Parser {
         _types: &[Type],
     ) -> PgWireResult<Self::Statement> {
         log::debug!("Received parse extended query: {sql}"); // Log for debugging
-
-        // Check for transaction commands that shouldn't be parsed by DataFusion
-        if let Some(plan) = self
-            .try_shortcut_parse_plan(sql)
-            .map_err(|e| PgWireError::ApiError(Box::new(e)))?
-        {
-            return Ok((sql.to_string(), Some(plan)));
-        }
 
         let mut statements = self
             .sql_parser
@@ -862,15 +854,23 @@ impl QueryParser for Parser {
 
         let statement = statements.remove(0);
 
+        // Check for transaction commands that shouldn't be parsed by DataFusion
+        if let Some(plan) = self
+            .try_shortcut_parse_plan(sql)
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?
+        {
+            return Ok((sql.to_string(), Some((statement, plan))));
+        }
+
         let query = statement.to_string();
 
         let context = &self.session_context;
         let state = context.state();
         let logical_plan = state
-            .statement_to_plan(Statement::Statement(Box::new(statement)))
+            .statement_to_plan(Statement::Statement(Box::new(statement.clone())))
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        Ok((query, Some(logical_plan)))
+        Ok((query, Some((statement, logical_plan))))
     }
 }
 
