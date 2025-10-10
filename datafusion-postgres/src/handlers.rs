@@ -41,6 +41,14 @@ pub trait QueryHook: Send + Sync {
         client: &(dyn ClientInfo + Send + Sync),
     ) -> Option<PgWireResult<Response>>;
 
+    /// called at extended query parse phase, for generating `LogicalPlan`from statement
+    async fn handle_extended_parse_query(
+        &self,
+        statement: &sqlparser::ast::Statement,
+        session_context: &SessionContext,
+        client: &(dyn ClientInfo + Send + Sync),
+    ) -> Option<PgWireResult<LogicalPlan>>;
+
     /// called at extended query execute phase, for query execution
     async fn handle_extended_query(
         &self,
@@ -128,6 +136,7 @@ impl DfSessionService {
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
             sql_parser: PostgresCompatibilityParser::new(),
+            query_hooks: query_hooks.clone(),
         });
         DfSessionService {
             session_context,
@@ -799,6 +808,7 @@ async fn map_rows_affected_for_insert(df: &DataFrame) -> PgWireResult<Response> 
 pub struct Parser {
     session_context: Arc<SessionContext>,
     sql_parser: PostgresCompatibilityParser,
+    query_hooks: Vec<Arc<dyn QueryHook>>,
 }
 
 impl Parser {
@@ -857,10 +867,13 @@ impl QueryParser for Parser {
 
     async fn parse_sql<C>(
         &self,
-        _client: &C,
+        client: &C,
         sql: &str,
         _types: &[Type],
-    ) -> PgWireResult<Self::Statement> {
+    ) -> PgWireResult<Self::Statement>
+    where
+        C: ClientInfo + Unpin + Send + Sync,
+    {
         log::debug!("Received parse extended query: {sql}"); // Log for debugging
 
         let mut statements = self
@@ -885,6 +898,16 @@ impl QueryParser for Parser {
 
         let context = &self.session_context;
         let state = context.state();
+
+        for hook in &self.query_hooks {
+            if let Some(logical_plan) = hook
+                .handle_extended_parse_query(&statement, context, client)
+                .await
+            {
+                return Ok((query, Some((statement, logical_plan?))));
+            }
+        }
+
         let logical_plan = state
             .statement_to_plan(Statement::Statement(Box::new(statement.clone())))
             .await
@@ -1040,6 +1063,15 @@ mod tests {
             } else {
                 None
             }
+        }
+
+        async fn handle_extended_parse_query(
+            &self,
+            _statement: &sqlparser::ast::Statement,
+            _session_context: &SessionContext,
+            _client: &(dyn ClientInfo + Send + Sync),
+        ) -> Option<PgWireResult<LogicalPlan>> {
+            todo!()
         }
 
         async fn handle_extended_query(
