@@ -1071,7 +1071,7 @@ mod tests {
             _session_context: &SessionContext,
             _client: &(dyn ClientInfo + Send + Sync),
         ) -> Option<PgWireResult<LogicalPlan>> {
-            todo!()
+            None
         }
 
         async fn handle_extended_query(
