@@ -89,7 +89,25 @@ pub async fn serve(
     auth_manager: Arc<AuthManager>,
 ) -> Result<(), std::io::Error> {
     // Create the handler factory with authentication
-    let factory = Arc::new(HandlerFactory::new(session_context, auth_manager, vec![]));
+    let factory = Arc::new(HandlerFactory::new(session_context, auth_manager));
+
+    serve_with_handlers(factory, opts).await
+}
+
+/// Serve the Datafusion `SessionContext` with Postgres protocol, using custom
+/// query processing hooks.
+pub async fn serve_with_hooks(
+    session_context: Arc<SessionContext>,
+    opts: &ServerOptions,
+    auth_manager: Arc<AuthManager>,
+    hooks: Vec<Arc<dyn QueryHook>>,
+) -> Result<(), std::io::Error> {
+    // Create the handler factory with authentication
+    let factory = Arc::new(HandlerFactory::new_with_hooks(
+        session_context,
+        auth_manager,
+        hooks,
+    ));
 
     serve_with_handlers(factory, opts).await
 }

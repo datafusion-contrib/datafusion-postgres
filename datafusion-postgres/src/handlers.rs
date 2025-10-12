@@ -25,6 +25,7 @@ use pgwire::messages::response::TransactionStatus;
 
 use crate::auth::AuthManager;
 use crate::client;
+use crate::hooks::set_show::SetShowHook;
 use crate::hooks::QueryHook;
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
@@ -43,12 +44,18 @@ pub struct HandlerFactory {
 }
 
 impl HandlerFactory {
-    pub fn new(
+    pub fn new(session_context: Arc<SessionContext>, auth_manager: Arc<AuthManager>) -> Self {
+        let session_service =
+            Arc::new(DfSessionService::new(session_context, auth_manager.clone()));
+        HandlerFactory { session_service }
+    }
+
+    pub fn new_with_hooks(
         session_context: Arc<SessionContext>,
         auth_manager: Arc<AuthManager>,
         query_hooks: Vec<Arc<dyn QueryHook>>,
     ) -> Self {
-        let session_service = Arc::new(DfSessionService::new(
+        let session_service = Arc::new(DfSessionService::new_with_hooks(
             session_context,
             auth_manager.clone(),
             query_hooks,
@@ -96,6 +103,14 @@ pub struct DfSessionService {
 
 impl DfSessionService {
     pub fn new(
+        session_context: Arc<SessionContext>,
+        auth_manager: Arc<AuthManager>,
+    ) -> DfSessionService {
+        let hooks: Vec<Arc<dyn QueryHook>> = vec![Arc::new(SetShowHook)];
+        Self::new_with_hooks(session_context, auth_manager, hooks)
+    }
+
+    pub fn new_with_hooks(
         session_context: Arc<SessionContext>,
         auth_manager: Arc<AuthManager>,
         query_hooks: Vec<Arc<dyn QueryHook>>,
@@ -601,7 +616,6 @@ impl Parser {
 
         // show statement may not be supported by datafusion
         if sql_trimmed.starts_with("show") {
-            // Return a dummy plan for transaction commands - they'll be handled by transaction handler
             let show_schema =
                 Arc::new(Schema::new(vec![Field::new("show", DataType::Utf8, false)]));
             let df_schema = show_schema.to_dfschema()?;

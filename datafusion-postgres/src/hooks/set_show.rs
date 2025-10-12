@@ -1,15 +1,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::common::ParamValues;
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::common::{ParamValues, ToDFSchema};
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::Statement;
 use log::{info, warn};
-use pgwire::api::results::{
-    DataRowEncoder, DescribePortalResponse, DescribeResponse, DescribeStatementResponse,
-    FieldFormat, FieldInfo, QueryResponse, Response, Tag,
-};
+use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse, Response, Tag};
 use pgwire::api::ClientInfo;
 use pgwire::error::{PgWireError, PgWireResult};
 use postgres_types::Type;
@@ -48,22 +46,66 @@ impl QueryHook for SetShowHook {
 
     async fn handle_extended_parse_query(
         &self,
-        statement: &Statement,
-        session_context: &SessionContext,
-        client: &(dyn ClientInfo + Send + Sync),
+        stmt: &Statement,
+        _session_context: &SessionContext,
+        _client: &(dyn ClientInfo + Send + Sync),
     ) -> Option<PgWireResult<LogicalPlan>> {
-        None
+        let sql_lower = stmt.to_string().to_lowercase();
+        let sql_trimmed = sql_lower.trim();
+
+        if sql_trimmed.starts_with("show") {
+            let show_schema =
+                Arc::new(Schema::new(vec![Field::new("show", DataType::Utf8, false)]));
+            let result = show_schema
+                .to_dfschema()
+                .map(|df_schema| {
+                    LogicalPlan::EmptyRelation(datafusion::logical_expr::EmptyRelation {
+                        produce_one_row: true,
+                        schema: Arc::new(df_schema),
+                    })
+                })
+                .map_err(|e| PgWireError::ApiError(Box::new(e)));
+            Some(result)
+        } else if sql_trimmed.starts_with("set") {
+            let show_schema = Arc::new(Schema::new(Vec::<Field>::new()));
+            let result = show_schema
+                .to_dfschema()
+                .map(|df_schema| {
+                    LogicalPlan::EmptyRelation(datafusion::logical_expr::EmptyRelation {
+                        produce_one_row: true,
+                        schema: Arc::new(df_schema),
+                    })
+                })
+                .map_err(|e| PgWireError::ApiError(Box::new(e)));
+            Some(result)
+        } else {
+            None
+        }
     }
 
     async fn handle_extended_query(
         &self,
         statement: &Statement,
-        logical_plan: &LogicalPlan,
-        params: &ParamValues,
+        _logical_plan: &LogicalPlan,
+        _params: &ParamValues,
         session_context: &SessionContext,
         client: &mut (dyn ClientInfo + Send + Sync),
     ) -> Option<PgWireResult<Response>> {
-        None
+        match statement {
+            Statement::Set { .. } => {
+                let query = statement.to_string();
+                let query_lower = query.to_lowercase();
+
+                try_respond_set_statements(client, &query_lower, session_context).await
+            }
+            Statement::ShowVariable { .. } | Statement::ShowStatus { .. } => {
+                let query = statement.to_string();
+                let query_lower = query.to_lowercase();
+
+                try_respond_show_statements(client, &query_lower, session_context).await
+            }
+            _ => None,
+        }
     }
 }
 

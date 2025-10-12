@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use datafusion::common::ParamValues;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
-use datafusion::sql::sqlparser;
+use datafusion::sql::sqlparser::ast::Statement;
 use pgwire::api::results::Response;
 use pgwire::api::ClientInfo;
 use pgwire::error::PgWireResult;
@@ -15,7 +15,7 @@ pub trait QueryHook: Send + Sync {
     /// called in simple query handler to return response directly
     async fn handle_simple_query(
         &self,
-        statement: &sqlparser::ast::Statement,
+        statement: &Statement,
         session_context: &SessionContext,
         client: &mut (dyn ClientInfo + Send + Sync),
     ) -> Option<PgWireResult<Response>>;
@@ -23,7 +23,7 @@ pub trait QueryHook: Send + Sync {
     /// called at extended query parse phase, for generating `LogicalPlan`from statement
     async fn handle_extended_parse_query(
         &self,
-        statement: &sqlparser::ast::Statement,
+        sql: &Statement,
         session_context: &SessionContext,
         client: &(dyn ClientInfo + Send + Sync),
     ) -> Option<PgWireResult<LogicalPlan>>;
@@ -31,7 +31,7 @@ pub trait QueryHook: Send + Sync {
     /// called at extended query execute phase, for query execution
     async fn handle_extended_query(
         &self,
-        statement: &sqlparser::ast::Statement,
+        statement: &Statement,
         logical_plan: &LogicalPlan,
         params: &ParamValues,
         session_context: &SessionContext,
