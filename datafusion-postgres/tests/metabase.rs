@@ -1,7 +1,6 @@
-mod common;
-
-use common::*;
 use pgwire::api::query::SimpleQueryHandler;
+
+use datafusion_postgres::testing::*;
 
 const METABASE_QUERIES: &[&str] = &[
     "SET extra_float_digits = 2",

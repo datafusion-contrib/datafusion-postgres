@@ -1,7 +1,6 @@
-mod common;
-
-use common::*;
 use pgwire::api::query::SimpleQueryHandler;
+
+use datafusion_postgres::testing::*;
 
 const DBEAVER_QUERIES: &[&str] = &[
     "SET extra_float_digits = 3",

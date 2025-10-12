@@ -1,7 +1,6 @@
-mod common;
-
-use common::*;
 use pgwire::api::query::SimpleQueryHandler;
+
+use datafusion_postgres::testing::*;
 
 const PGCLI_QUERIES: &[&str] = &[
     "SELECT 1",
