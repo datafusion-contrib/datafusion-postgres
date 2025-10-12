@@ -10,7 +10,7 @@ use pgwire::{
     },
 };
 
-use datafusion_postgres::{auth::AuthManager, DfSessionService};
+use crate::{auth::AuthManager, DfSessionService};
 
 pub fn setup_handlers() -> DfSessionService {
     let session_context = SessionContext::new();

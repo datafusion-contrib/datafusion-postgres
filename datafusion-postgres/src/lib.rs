@@ -1,12 +1,15 @@
+pub mod auth;
+pub(crate) mod client;
 mod handlers;
+pub mod hooks;
+#[cfg(test)]
+pub mod testing;
 
 use std::fs::File;
 use std::io::{BufReader, Error as IOError, ErrorKind};
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
-
-pub mod auth;
 use getset::{Getters, Setters, WithSetters};
 use log::{info, warn};
 use pgwire::api::PgWireServerHandlers;
@@ -20,7 +23,8 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::auth::AuthManager;
 use handlers::HandlerFactory;
-pub use handlers::{DfSessionService, Parser, QueryHook};
+pub use handlers::{DfSessionService, Parser};
+pub use hooks::QueryHook;
 
 /// re-exports
 pub use arrow_pg;
