@@ -223,7 +223,7 @@ where
         let result = match query_lower.strip_suffix(";").unwrap_or(query_lower) {
             "show time zone" => {
                 let timezone = client::get_timezone(client).unwrap_or("UTC");
-                mock_show_response("TimeZone", &timezone).map(Response::Query)
+                mock_show_response("TimeZone", timezone).map(Response::Query)
             }
             "show server_version" => {
                 mock_show_response("server_version", "15.0 (DataFusion)").map(Response::Query)
