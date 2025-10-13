@@ -29,7 +29,7 @@ impl QueryHook for SetShowHook {
     ) -> Option<PgWireResult<Response>> {
         match statement {
             Statement::Set { .. } => {
-                try_respond_set_statements(client, &statement, session_context).await
+                try_respond_set_statements(client, statement, session_context).await
             }
             Statement::ShowVariable { .. } | Statement::ShowStatus { .. } => {
                 let query = statement.to_string();
@@ -90,7 +90,7 @@ impl QueryHook for SetShowHook {
     ) -> Option<PgWireResult<Response>> {
         match statement {
             Statement::Set { .. } => {
-                try_respond_set_statements(client, &statement, session_context).await
+                try_respond_set_statements(client, statement, session_context).await
             }
             Statement::ShowVariable { .. } | Statement::ShowStatus { .. } => {
                 let query = statement.to_string();
@@ -180,7 +180,7 @@ where
         } => {
             let tz = value.to_string();
             let tz = tz.trim_matches('"').trim_matches('\'');
-            client::set_timezone(client, Some(&tz));
+            client::set_timezone(client, Some(tz));
             Some(Ok(Response::Execution(Tag::new("SET"))))
         }
         _ => {
