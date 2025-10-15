@@ -34,7 +34,7 @@ rust_decimal.workspace = true
 [dev-dependencies]
 async-trait = "0.1"
 duckdb = { version = "~1.4" }
-tokio = { version = "1.19", features = ["full"]}
+tokio = { version = "1.48", features = ["full"]}
 
 [[example]]
 name = "duckdb"
