@@ -1723,7 +1723,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2728,13 +2728,14 @@ dependencies = [
 
 [[package]]
 name = "pgwire"
-version = "0.34.0"
+version = "0.34.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3fd55552c908bffe3c0c6ef7bf930f0cbd8eb9e1fec2251127b2db345b97811"
+checksum = "c748793f2a9267fa2aa409d9375a5e26e4f1504ea96e34f8cab3e2fc32042d69"
 dependencies = [
  "async-trait",
  "base64",
  "bytes",
+ "chrono",
  "derive-new",
  "futures",
  "hex",
@@ -2743,7 +2744,10 @@ dependencies = [
  "postgres-types",
  "rand 0.9.2",
  "ring",
+ "rust_decimal",
  "rustls-pki-types",
+ "serde",
+ "serde_json",
  "stringprep",
  "thiserror",
  "tokio",
@@ -2829,8 +2833,11 @@ checksum = "ef4605b7c057056dd35baeb6ac0c0338e4975b1f2bef0f65da953285eb007095"
 dependencies = [
  "array-init",
  "bytes",
+ "chrono",
  "fallible-iterator 0.2.0",
  "postgres-protocol",
+ "serde_core",
+ "serde_json",
 ]
 
 [[package]]
@@ -3192,7 +3199,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3610,7 +3617,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4042,7 +4049,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

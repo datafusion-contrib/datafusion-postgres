@@ -27,7 +27,7 @@ bytes.workspace = true
 chrono.workspace = true
 datafusion = { workspace = true, optional = true }
 futures.workspace = true
-pgwire = { workspace = true, default-features = false, features = ["server-api"] }
+pgwire = { workspace = true, default-features = false, features = ["server-api", "pg-ext-types"] }
 postgres-types.workspace = true
 rust_decimal.workspace = true
 

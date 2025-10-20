@@ -86,6 +86,10 @@ impl ClientInfo for MockClient {
     fn client_certificates<'a>(&self) -> Option<&[rustls_pki_types::CertificateDer<'a>]> {
         None
     }
+
+    fn sni_server_name(&self) -> Option<&str> {
+        None
+    }
 }
 
 impl ClientPortalStore for MockClient {
