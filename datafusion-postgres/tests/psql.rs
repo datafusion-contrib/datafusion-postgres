@@ -1,7 +1,6 @@
-mod common;
-
-use common::*;
 use pgwire::api::query::SimpleQueryHandler;
+
+use datafusion_postgres::testing::*;
 
 const PSQL_QUERIES: &[&str] = &[
     "SELECT c.oid,

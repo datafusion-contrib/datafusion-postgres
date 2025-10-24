@@ -1,14 +1,15 @@
+pub mod auth;
+pub(crate) mod client;
 mod handlers;
-pub mod pg_catalog;
-mod sql;
+pub mod hooks;
+#[cfg(any(test, debug_assertions))]
+pub mod testing;
 
 use std::fs::File;
 use std::io::{BufReader, Error as IOError, ErrorKind};
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
-
-pub mod auth;
 use getset::{Getters, Setters, WithSetters};
 use log::{info, warn};
 use pgwire::api::PgWireServerHandlers;
@@ -23,9 +24,11 @@ use tokio_rustls::TlsAcceptor;
 use crate::auth::AuthManager;
 use handlers::HandlerFactory;
 pub use handlers::{DfSessionService, Parser};
+pub use hooks::QueryHook;
 
 /// re-exports
 pub use arrow_pg;
+pub use datafusion_pg_catalog;
 pub use pgwire;
 
 #[derive(Getters, Setters, WithSetters, Debug)]
@@ -83,12 +86,28 @@ fn setup_tls(cert_path: &str, key_path: &str) -> Result<TlsAcceptor, IOError> {
 pub async fn serve(
     session_context: Arc<SessionContext>,
     opts: &ServerOptions,
+    auth_manager: Arc<AuthManager>,
 ) -> Result<(), std::io::Error> {
-    // Create authentication manager
-    let auth_manager = Arc::new(AuthManager::new());
-
     // Create the handler factory with authentication
     let factory = Arc::new(HandlerFactory::new(session_context, auth_manager));
+
+    serve_with_handlers(factory, opts).await
+}
+
+/// Serve the Datafusion `SessionContext` with Postgres protocol, using custom
+/// query processing hooks.
+pub async fn serve_with_hooks(
+    session_context: Arc<SessionContext>,
+    opts: &ServerOptions,
+    auth_manager: Arc<AuthManager>,
+    hooks: Vec<Arc<dyn QueryHook>>,
+) -> Result<(), std::io::Error> {
+    // Create the handler factory with authentication
+    let factory = Arc::new(HandlerFactory::new_with_hooks(
+        session_context,
+        auth_manager,
+        hooks,
+    ));
 
     serve_with_handlers(factory, opts).await
 }

@@ -1,0 +1,29 @@
+[package]
+name = "datafusion-pg-catalog"
+description = "pg_catalog compatibility for datafusion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+keywords.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+readme = "../README.md"
+rust-version.workspace = true
+include = [
+  "src/**/*",
+  "pg_catalog_arrow_exports/**/*",
+  "Cargo.toml"
+]
+
+[dependencies]
+async-trait = "0.1"
+datafusion.workspace = true
+futures.workspace = true
+log = "0.4"
+postgres-types.workspace = true
+tokio = { version = "1.48", features = ["sync"] }
+
+[dev-dependencies]
+env_logger = "0.11"

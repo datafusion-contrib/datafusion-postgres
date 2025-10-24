@@ -2,7 +2,7 @@
   description = "Development environment flake";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     fenix = {
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -22,6 +22,8 @@
         buildInputs = with pkgs; [
           llvmPackages.libclang
           libpq
+          duckdb.dev
+          duckdb.lib
         ];
       in
       {
@@ -50,6 +52,8 @@
           shellHook = ''
             export CC=clang
             export CXX=clang++
+            export DUCKDB_LIB_DIR="${pkgs.duckdb.lib}/lib"
+            export DUCKDB_INCLUDE_DIR="${pkgs.duckdb.dev}/include"
           '';
         };
       });
