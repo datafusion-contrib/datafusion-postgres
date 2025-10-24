@@ -162,16 +162,19 @@ impl ResolveUnqualifiedIdentifer {
 
             let wildcard_alias = qualified_wildcard_alias.unwrap();
 
+            // Step 2.5: Collect all projection aliases to avoid rewriting them
+            let projection_aliases = Self::get_projection_aliases(&select.projection);
+
             // Step 3: Rewrite expressions in the WHERE and ORDER BY clauses.
             if let Some(selection) = &mut select.selection {
-                Self::rewrite_expr(selection, &wildcard_alias, &table_aliases);
+                Self::rewrite_expr(selection, &wildcard_alias, &table_aliases, &projection_aliases);
             }
 
             if let Some(OrderByKind::Expressions(order_by_exprs)) =
                 query.order_by.as_mut().map(|o| &mut o.kind)
             {
                 for order_by_expr in order_by_exprs {
-                    Self::rewrite_expr(&mut order_by_expr.expr, &wildcard_alias, &table_aliases);
+                    Self::rewrite_expr(&mut order_by_expr.expr, &wildcard_alias, &table_aliases, &projection_aliases);
                 }
             }
         }
@@ -228,11 +231,27 @@ impl ResolveUnqualifiedIdentifer {
         }
     }
 
-    fn rewrite_expr(expr: &mut Expr, wildcard_alias: &str, table_aliases: &HashSet<String>) {
+    fn get_projection_aliases(projection: &[SelectItem]) -> HashSet<String> {
+        let mut aliases = HashSet::new();
+        for item in projection {
+            match item {
+                SelectItem::ExprWithAlias { alias, .. } => {
+                    aliases.insert(alias.value.clone());
+                }
+                SelectItem::UnnamedExpr(Expr::Identifier(ident)) => {
+                    aliases.insert(ident.value.clone());
+                }
+                _ => {}
+            }
+        }
+        aliases
+    }
+
+    fn rewrite_expr(expr: &mut Expr, wildcard_alias: &str, table_aliases: &HashSet<String>, projection_aliases: &HashSet<String>) {
         match expr {
             Expr::Identifier(ident) => {
-                // If the identifier is not a table alias itself, rewrite it.
-                if !table_aliases.contains(&ident.value) {
+                // If the identifier is not a table alias itself and not already aliased in projection, rewrite it.
+                if !table_aliases.contains(&ident.value) && !projection_aliases.contains(&ident.value) {
                     *expr = Expr::CompoundIdentifier(vec![
                         Ident::new(wildcard_alias.to_string()),
                         ident.clone(),
@@ -240,8 +259,8 @@ impl ResolveUnqualifiedIdentifer {
                 }
             }
             Expr::BinaryOp { left, right, .. } => {
-                Self::rewrite_expr(left, wildcard_alias, table_aliases);
-                Self::rewrite_expr(right, wildcard_alias, table_aliases);
+                Self::rewrite_expr(left, wildcard_alias, table_aliases, projection_aliases);
+                Self::rewrite_expr(right, wildcard_alias, table_aliases, projection_aliases);
             }
             // Add more cases for other expression types as needed (e.g., `InList`, `Between`, etc.)
             _ => {}
@@ -906,6 +925,11 @@ mod tests {
             &rules,
             "SELECT n.oid,n.*,d.description FROM pg_catalog.pg_namespace n LEFT OUTER JOIN pg_catalog.pg_description d ON d.objoid=n.oid AND d.objsubid=0 AND d.classoid='pg_namespace' ORDER BY nspsname",
             "SELECT n.oid, n.*, d.description FROM pg_catalog.pg_namespace AS n LEFT OUTER JOIN pg_catalog.pg_description AS d ON d.objoid = n.oid AND d.objsubid = 0 AND d.classoid = 'pg_namespace' ORDER BY n.nspsname"
+        );
+
+        assert_rewrite!(&rules,
+            "SELECT i.*,i.indkey as keys,c.relname,c.relnamespace,c.relam,c.reltablespace,tc.relname as tabrelname,dsc.description FROM pg_catalog.pg_index i INNER JOIN pg_catalog.pg_class c ON c.oid=i.indexrelid INNER JOIN pg_catalog.pg_class tc ON tc.oid=i.indrelid LEFT OUTER JOIN pg_catalog.pg_description dsc ON i.indexrelid=dsc.objoid WHERE i.indrelid=1 ORDER BY tabrelname, c.relname",
+            "SELECT i.*, i.indkey AS keys, c.relname, c.relnamespace, c.relam, c.reltablespace, tc.relname AS tabrelname, dsc.description FROM pg_catalog.pg_index AS i INNER JOIN pg_catalog.pg_class AS c ON c.oid = i.indexrelid INNER JOIN pg_catalog.pg_class AS tc ON tc.oid = i.indrelid LEFT OUTER JOIN pg_catalog.pg_description AS dsc ON i.indexrelid = dsc.objoid WHERE i.indrelid = 1 ORDER BY tabrelname, c.relname"
         );
     }
 

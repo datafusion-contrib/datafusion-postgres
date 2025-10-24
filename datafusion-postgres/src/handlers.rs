@@ -287,6 +287,7 @@ impl SimpleQueryHandler for DfSessionService {
         'stmt: for statement in statements {
             // TODO: improve statement check by using statement directly
             let query = statement.to_string();
+            dbg!(&query);
             let query_lower = query.to_lowercase().trim().to_string();
 
             // Check permissions for the query (skip for SET, transaction, and SHOW statements)

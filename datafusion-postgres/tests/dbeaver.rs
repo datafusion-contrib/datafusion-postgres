@@ -21,7 +21,25 @@ const DBEAVER_QUERIES: &[&str] = &[
     "SELECT c.oid,c.*,d.description,pg_catalog.pg_get_expr(c.relpartbound, c.oid) as partition_expr,  pg_catalog.pg_get_partkeydef(c.oid) as partition_key
     FROM pg_catalog.pg_class c
     LEFT OUTER JOIN pg_catalog.pg_description d ON d.objoid=c.oid AND d.objsubid=0 AND d.classoid='pg_class'::regclass
-    WHERE c.relnamespace=11 AND c.relkind not in ('i','I','c')"
+    WHERE c.relnamespace=11 AND c.relkind not in ('i','I','c')",
+    "select c.oid,pg_catalog.pg_total_relation_size(c.oid) as total_rel_size,pg_catalog.pg_relation_size(c.oid) as rel_size
+     FROM pg_class c
+     WHERE c.relnamespace='public'",
+
+    "SELECT i.*,i.indkey as keys,c.relname,c.relnamespace,c.relam,c.reltablespace,tc.relname as tabrelname,dsc.description,pg_catalog.pg_get_expr(i.indpred, i.indrelid) as pred_expr,pg_catalog.pg_get_expr(i.indexprs, i.indrelid, true) as expr,pg_catalog.pg_relation_size(i.indexrelid) as index_rel_size,pg_catalog.pg_stat_get_numscans(i.indexrelid) as index_num_scans FROM pg_catalog.pg_index i
+    INNER JOIN pg_catalog.pg_class c ON c.oid=i.indexrelid
+    INNER JOIN pg_catalog.pg_class tc ON tc.oid=i.indrelid
+    LEFT OUTER JOIN pg_catalog.pg_description dsc ON i.indexrelid=dsc.objoid
+    WHERE  i.indrelid=1 ORDER BY tabrelname, c.relname",
+
+    "SELECT c.oid,c.*,t.relname as tabrelname,rt.relnamespace as refnamespace,d.description, case when c.contype='c' then \"substring\"(pg_get_constraintdef(c.oid), 7) else null end consrc_copy
+    FROM pg_catalog.pg_constraint c
+    INNER JOIN pg_catalog.pg_class t ON t.oid=c.conrelid
+    LEFT OUTER JOIN pg_catalog.pg_class rt ON rt.oid=c.confrelid
+    LEFT OUTER JOIN pg_catalog.pg_description d ON d.objoid=c.oid AND d.objsubid=0 AND d.classoid='pg_constraint'::regclass
+    WHERE c.conrelid=1
+    ORDER BY c.oid",
+
 ];
 
 #[tokio::test]

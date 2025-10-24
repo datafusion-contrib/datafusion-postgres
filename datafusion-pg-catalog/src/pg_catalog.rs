@@ -1224,7 +1224,7 @@ pub fn create_pg_get_statisticsobjdef_columns_udf() -> ScalarUDF {
 
     create_udf(
         "pg_get_statisticsobjdef_columns",
-        vec![DataType::UInt32],
+        vec![DataType::Int32],
         DataType::Utf8,
         Volatility::Stable,
         Arc::new(func),
@@ -1259,6 +1259,8 @@ pub fn create_pg_encoding_to_char_udf() -> ScalarUDF {
     )
 }
 
+const BACKEND_PID: i32 = 1;
+
 pub fn create_pg_backend_pid_udf() -> ScalarUDF {
     let func = move |_args: &[ColumnarValue]| {
         let mut builder = Int32Builder::new();
@@ -1276,7 +1278,97 @@ pub fn create_pg_backend_pid_udf() -> ScalarUDF {
     )
 }
 
-const BACKEND_PID: i32 = 1;
+pub fn create_pg_relation_size_udf() -> ScalarUDF {
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let oids = &args[0].as_primitive::<Int32Type>();
+
+        let mut builder = Int32Builder::new();
+        for _ in 0..oids.len() {
+            builder.append_value(0);
+        }
+
+        let array: ArrayRef = Arc::new(builder.finish());
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "pg_relation_size",
+        vec![DataType::Int32],
+        DataType::Int32,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_pg_total_relation_size_udf() -> ScalarUDF {
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let oids = &args[0].as_primitive::<Int32Type>();
+
+        let mut builder = Int32Builder::new();
+        for _ in 0..oids.len() {
+            builder.append_value(0);
+        }
+
+        let array: ArrayRef = Arc::new(builder.finish());
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "pg_total_relation_size",
+        vec![DataType::Int32],
+        DataType::Int32,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_pg_stat_get_numscans() -> ScalarUDF {
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let index_rel_id = &args[0].as_primitive::<Int32Type>();
+
+        let mut builder = Int32Builder::new();
+        for _ in 0..index_rel_id.len() {
+            builder.append_value(0);
+        }
+
+        let array: ArrayRef = Arc::new(builder.finish());
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "pg_stat_get_numscans",
+        vec![DataType::Int32],
+        DataType::Int32,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_pg_get_constraintdef() -> ScalarUDF {
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let oids = &args[0].as_primitive::<Int32Type>();
+
+        let mut builder = StringBuilder::new();
+        for _ in 0..oids.len() {
+            builder.append_value("");
+        }
+
+        let array: ArrayRef = Arc::new(builder.finish());
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "pg_get_constraintdef",
+        vec![DataType::Int32],
+        DataType::Utf8,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
 
 /// Install pg_catalog and postgres UDFs to current `SessionContext`
 pub fn setup_pg_catalog<P>(
@@ -1329,6 +1421,10 @@ where
     session_context.register_udf(create_pg_get_statisticsobjdef_columns_udf());
     session_context.register_udf(create_pg_encoding_to_char_udf());
     session_context.register_udf(create_pg_backend_pid_udf());
+    session_context.register_udf(create_pg_relation_size_udf());
+    session_context.register_udf(create_pg_total_relation_size_udf());
+    session_context.register_udf(create_pg_stat_get_numscans());
+    session_context.register_udf(create_pg_get_constraintdef());
 
     Ok(())
 }
