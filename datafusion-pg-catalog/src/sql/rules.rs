@@ -167,14 +167,24 @@ impl ResolveUnqualifiedIdentifer {
 
             // Step 3: Rewrite expressions in the WHERE and ORDER BY clauses.
             if let Some(selection) = &mut select.selection {
-                Self::rewrite_expr(selection, &wildcard_alias, &table_aliases, &projection_aliases);
+                Self::rewrite_expr(
+                    selection,
+                    &wildcard_alias,
+                    &table_aliases,
+                    &projection_aliases,
+                );
             }
 
             if let Some(OrderByKind::Expressions(order_by_exprs)) =
                 query.order_by.as_mut().map(|o| &mut o.kind)
             {
                 for order_by_expr in order_by_exprs {
-                    Self::rewrite_expr(&mut order_by_expr.expr, &wildcard_alias, &table_aliases, &projection_aliases);
+                    Self::rewrite_expr(
+                        &mut order_by_expr.expr,
+                        &wildcard_alias,
+                        &table_aliases,
+                        &projection_aliases,
+                    );
                 }
             }
         }
@@ -247,11 +257,18 @@ impl ResolveUnqualifiedIdentifer {
         aliases
     }
 
-    fn rewrite_expr(expr: &mut Expr, wildcard_alias: &str, table_aliases: &HashSet<String>, projection_aliases: &HashSet<String>) {
+    fn rewrite_expr(
+        expr: &mut Expr,
+        wildcard_alias: &str,
+        table_aliases: &HashSet<String>,
+        projection_aliases: &HashSet<String>,
+    ) {
         match expr {
             Expr::Identifier(ident) => {
                 // If the identifier is not a table alias itself and not already aliased in projection, rewrite it.
-                if !table_aliases.contains(&ident.value) && !projection_aliases.contains(&ident.value) {
+                if !table_aliases.contains(&ident.value)
+                    && !projection_aliases.contains(&ident.value)
+                {
                     *expr = Expr::CompoundIdentifier(vec![
                         Ident::new(wildcard_alias.to_string()),
                         ident.clone(),
