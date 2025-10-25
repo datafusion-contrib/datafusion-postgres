@@ -88,6 +88,10 @@ pub async fn serve(
     opts: &ServerOptions,
     auth_manager: Arc<AuthManager>,
 ) -> Result<(), std::io::Error> {
+    #[cfg(feature = "geo")]
+    session_context
+        .register_udf(geodatafusion::udf::native::constructors::MakePoint::default().into());
+
     // Create the handler factory with authentication
     let factory = Arc::new(HandlerFactory::new(session_context, auth_manager));
 
