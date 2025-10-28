@@ -170,16 +170,16 @@ where
 
                 client::set_statement_timeout(client, timeout);
                 return Some(Ok(Response::Execution(Tag::new("SET"))));
-            } else if matches!(var.as_str(), "datestyle" | "bytea_output" | "intervalstyle") {
-                if values.len() > 0 {
-                    // postgres configuration variables
-                    let value = values[0].clone();
-                    if let Expr::Value(value) = value {
-                        client
-                            .metadata_mut()
-                            .insert(var, value.into_string().unwrap_or_else(|| "".to_string()));
-                        return Some(Ok(Response::Execution(Tag::new("SET"))));
-                    }
+            } else if matches!(var.as_str(), "datestyle" | "bytea_output" | "intervalstyle")
+                && !values.is_empty()
+            {
+                // postgres configuration variables
+                let value = values[0].clone();
+                if let Expr::Value(value) = value {
+                    client
+                        .metadata_mut()
+                        .insert(var, value.into_string().unwrap_or_else(|| "".to_string()));
+                    return Some(Ok(Response::Execution(Tag::new("SET"))));
                 }
             }
         }
@@ -199,7 +199,7 @@ where
     if let Err(e) = execute_set_statement(session_context, statement.clone()).await {
         warn!(
             "SET statement {} is not supported by datafusion, error {e}, statement ignored",
-            statement.to_string()
+            statement
         );
     }
 
