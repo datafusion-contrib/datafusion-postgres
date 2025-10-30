@@ -170,8 +170,15 @@ where
 
                 client::set_statement_timeout(client, timeout);
                 return Some(Ok(Response::Execution(Tag::new("SET"))));
-            } else if matches!(var.as_str(), "datestyle" | "bytea_output" | "intervalstyle")
-                && !values.is_empty()
+            } else if matches!(
+                var.as_str(),
+                "datestyle"
+                    | "bytea_output"
+                    | "intervalstyle"
+                    | "application_name"
+                    | "extra_float_digits"
+                    | "search_path"
+            ) && !values.is_empty()
             {
                 // postgres configuration variables
                 let value = values[0].clone();
@@ -190,6 +197,13 @@ where
             let tz = value.to_string();
             let tz = tz.trim_matches('"').trim_matches('\'');
             client::set_timezone(client, Some(tz));
+            // execution options for timezone
+            session_context
+                .state()
+                .config_mut()
+                .options_mut()
+                .execution
+                .time_zone = tz.to_string();
             return Some(Ok(Response::Execution(Tag::new("SET"))));
         }
         _ => {}
@@ -249,7 +263,13 @@ where
             Some(mock_show_response("TimeZone", timezone).map(Response::Query))
         }
         ["server_version"] => {
-            Some(mock_show_response("server_version", "15.0 (DataFusion)").map(Response::Query))
+            let version = format!(
+                "datafusion {} on {} {}",
+                session_context.state().version(),
+                env!("CARGO_PKG_NAME"),
+                env!("CARGO_PKG_VERSION")
+            );
+            Some(mock_show_response("server_version", &version).map(Response::Query))
         }
         ["transaction_isolation"] => Some(
             mock_show_response("transaction_isolation", "read uncommitted").map(Response::Query),
@@ -258,10 +278,6 @@ where
             let catalogs = session_context.catalog_names();
             let value = catalogs.join(", ");
             Some(mock_show_response("Catalogs", &value).map(Response::Query))
-        }
-        ["search_path"] => {
-            let default_schema = "public";
-            Some(mock_show_response("search_path", default_schema).map(Response::Query))
         }
         ["statement_timeout"] => {
             let timeout = client::get_statement_timeout(client);
@@ -274,7 +290,12 @@ where
         ["transaction", "isolation", "level"] => {
             Some(mock_show_response("transaction_isolation", "read_committed").map(Response::Query))
         }
-        ["bytea_output"] | ["datestyle"] | ["intervalstyle"] => {
+        ["bytea_output"]
+        | ["datestyle"]
+        | ["intervalstyle"]
+        | ["application_name"]
+        | ["extra_float_digits"]
+        | ["search_path"] => {
             let val = client
                 .metadata()
                 .get(&variables[0])
