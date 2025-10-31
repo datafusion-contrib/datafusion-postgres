@@ -169,15 +169,12 @@ fn get_large_utf8_value(arr: &Arc<dyn Array>, idx: usize) -> Option<&str> {
     })
 }
 
-fn get_binary_value(arr: &Arc<dyn Array>, idx: usize) -> Option<String> {
+fn get_binary_value(arr: &Arc<dyn Array>, idx: usize) -> Option<&[u8]> {
     (!arr.is_null(idx)).then(|| {
-        String::from_utf8_lossy(
-            arr.as_any()
-                .downcast_ref::<BinaryArray>()
-                .unwrap()
-                .value(idx),
-        )
-        .to_string()
+        arr.as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap()
+            .value(idx)
     })
 }
 
