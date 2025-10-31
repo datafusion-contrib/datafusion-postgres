@@ -8,26 +8,25 @@
 [docs-badge]: https://img.shields.io/docsrs/datafusion-postgres
 [docs-url]: https://docs.rs/datafusion-postgres/latest/datafusion_postgres
 
-A PostgreSQL-compatible server for [Apache DataFusion](https://datafusion.apache.org), supporting authentication, role-based access control, and SSL/TLS encryption. Available as both a library and CLI tool.
+A PostgreSQL-compatible server frontend for [Apache
+DataFusion](https://datafusion.apache.org). Available as both a library and CLI
+tool.
 
-Built on [pgwire](https://github.com/sunng87/pgwire) to provide PostgreSQL wire protocol compatibility for analytical workloads.
-It was originally an example of the [pgwire](https://github.com/sunng87/pgwire)
-project.
+Built on [pgwire](https://github.com/sunng87/pgwire) to provide PostgreSQL wire
+protocol compatibility for analytical workloads. It was originally an example of
+the [pgwire](https://github.com/sunng87/pgwire) project.
 
 ## Scope of the Project
 
 - `datafusion-postgres`: Postgres frontend for datafusion, as a library.
   - Serving Datafusion `SessionContext` with pgwire library
-  - Customizible authentication
-  - Permission control
-  - Built-in `pg_catalog` tables
-  - Built-in postgres functions for common meta queries
-- `datafusion-postgres-cli`: A cli tool starts a postgres compatible server for
-  datafusion supported file formats, just like python's `SimpleHTTPServer`.
+  - Customizible/Optional authentication and Permission control
+- `datafusion-pg-catalog`: A Postgres compatible `pg_catalog` schema and
+  functions for datafusion backend.
 - `arrow-pg`: A data type mapping, encoding/decoding library for arrow and
   postgres(pgwire) data types.
-
-See `auth.rs` for complete implementation examples using `DfAuthSource`.
+- `datafusion-postgres-cli`: A cli tool starts a postgres compatible server for
+  datafusion supported file formats, just like python's `SimpleHTTPServer`.
 
 ## Supported Database Clients
 
@@ -36,8 +35,10 @@ See `auth.rs` for complete implementation examples using `DfAuthSource`.
   - [x] DBeaver
   - [x] pgcli
   - [x] VSCode SQLTools
+  - [ ] Intellij Datagrip
 - BI
   - [x] Metabase
+  - [ ] PowerBI
 
 ## Quick Start
 
@@ -51,7 +52,7 @@ options.
 use std::sync::Arc;
 use datafusion::prelude::SessionContext;
 use datafusion_postgres::{serve, ServerOptions};
-use datafusion_postgres::pg_catalog::setup_pg_catalog;
+use datafusion_pg_catalog::setup_pg_catalog;
 
 // Create datafusion SessionContext
 let session_context = Arc::new(SessionContext::new());

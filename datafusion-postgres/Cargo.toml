@@ -18,8 +18,8 @@ bytes.workspace = true
 async-trait = "0.1"
 chrono.workspace = true
 datafusion.workspace = true
+datafusion-pg-catalog = { path = "../datafusion-pg-catalog", version = "0.12.1" }
 geodatafusion = { version = "0.1.1", optional = true }
-datafusion-pg-catalog = { path = "../datafusion-pg-catalog", version = "0.12.0" }
 futures.workspace = true
 getset = "0.1"
 log = "0.4"
@@ -29,7 +29,7 @@ rust_decimal.workspace = true
 tokio = { version = "1.48", features = ["sync", "net"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 rustls-pemfile = "2.0"
-rustls-pki-types = "1.0"
+rustls-pki-types = "1.13"
 
 [dev-dependencies]
 env_logger = "0.11"
