@@ -88,6 +88,9 @@ pub async fn serve(
     opts: &ServerOptions,
     auth_manager: Arc<AuthManager>,
 ) -> Result<(), std::io::Error> {
+    #[cfg(feature = "postgis")]
+    geodatafusion::register(&session_context);
+
     // Create the handler factory with authentication
     let factory = Arc::new(HandlerFactory::new(session_context, auth_manager));
 
@@ -102,6 +105,9 @@ pub async fn serve_with_hooks(
     auth_manager: Arc<AuthManager>,
     hooks: Vec<Arc<dyn QueryHook>>,
 ) -> Result<(), std::io::Error> {
+    #[cfg(feature = "postgis")]
+    geodatafusion::register(&session_context);
+
     // Create the handler factory with authentication
     let factory = Arc::new(HandlerFactory::new_with_hooks(
         session_context,
