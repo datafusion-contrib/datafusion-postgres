@@ -2051,9 +2051,9 @@ dependencies = [
 
 [[package]]
 name = "geodatafusion"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a948d2db90029afd0b0678823e6c2c18bcc7ecb2f6260210941d6b7d1a1d551e"
+checksum = "83d676b8d8b5f391ab4270ba31e9b599ee2c3d780405a38e272a0a7565ea189c"
 dependencies = [
  "arrow-arith",
  "arrow-array",
