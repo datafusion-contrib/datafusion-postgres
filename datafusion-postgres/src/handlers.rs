@@ -391,7 +391,8 @@ impl ExtendedQueryHandler for DfSessionService {
             for param_type in ordered_param_types(&params).iter() {
                 // Fixed: Use &params
                 if let Some(datatype) = param_type {
-                    let pgtype = into_pg_type(datatype)?;
+                    let pgtype =
+                        into_pg_type(&Arc::new(Field::new("item", (*datatype).clone(), true)))?;
                     param_types.push(pgtype);
                 } else {
                     param_types.push(Type::UNKNOWN);
