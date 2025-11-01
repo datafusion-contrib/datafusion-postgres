@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 #[cfg(not(feature = "datafusion"))]
 use arrow::array::{Array, StructArray};
+use arrow_schema::Fields;
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::array::{Array, StructArray};
 
 use bytes::{BufMut, BytesMut};
-use pgwire::api::results::FieldFormat;
+use pgwire::api::results::{FieldFormat, FieldInfo};
 use pgwire::error::PgWireResult;
 use pgwire::types::{ToSqlText, QUOTE_CHECK, QUOTE_ESCAPE};
 use postgres_types::{Field, IsNull, ToSql, Type};
@@ -16,6 +17,7 @@ use crate::encoder::{encode_value, EncodedValue, Encoder};
 pub(crate) fn encode_struct(
     arr: &Arc<dyn Array>,
     idx: usize,
+    arrow_fields: &Fields,
     fields: &[Field],
     format: FieldFormat,
 ) -> PgWireResult<Option<EncodedValue>> {
@@ -27,7 +29,11 @@ pub(crate) fn encode_struct(
     for (i, arr) in arr.columns().iter().enumerate() {
         let field = &fields[i];
         let type_ = field.type_();
-        encode_value(&mut row_encoder, arr, idx, type_, format).unwrap();
+
+        let arrow_field = &arrow_fields[i];
+        let pgwire_field = FieldInfo::new("fields".to_string(), None, None, type_.clone(), format);
+
+        encode_value(&mut row_encoder, arr, idx, arrow_field, &pgwire_field).unwrap();
     }
     Ok(Some(EncodedValue {
         bytes: row_encoder.row_buffer,
