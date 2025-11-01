@@ -386,7 +386,7 @@ pub(crate) fn encode_list(
                 }
             }
         },
-        DataType::Struct(_) => {
+        DataType::Struct(arrow_fields) => {
             let fields = match type_.kind() {
                 postgres_types::Kind::Array(struct_type_) => Ok(struct_type_),
                 _ => Err(format!(
@@ -406,7 +406,7 @@ pub(crate) fn encode_list(
             .map_err(ToSqlError::from)?;
 
             let values: PgWireResult<Vec<_>> = (0..arr.len())
-                .map(|row| encode_struct(&arr, row, fields, format))
+                .map(|row| encode_struct(&arr, row, arrow_fields, fields, format))
                 .map(|x| {
                     if matches!(format, FieldFormat::Text) {
                         x.map(|opt| {

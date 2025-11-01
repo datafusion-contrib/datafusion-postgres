@@ -12,6 +12,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use datafusion::arrow::{array::*, datatypes::*};
 use pgwire::api::results::DataRowEncoder;
 use pgwire::api::results::FieldFormat;
+use pgwire::api::results::FieldInfo;
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::types::ToSqlText;
 use postgres_types::{ToSql, Type};
@@ -288,9 +289,12 @@ pub fn encode_value<T: Encoder>(
     encoder: &mut T,
     arr: &Arc<dyn Array>,
     idx: usize,
-    type_: &Type,
-    format: FieldFormat,
+    _arrow_filed: &Field,
+    pg_field: &FieldInfo,
 ) -> PgWireResult<()> {
+    let type_ = pg_field.datatype();
+    let format = pg_field.format();
+
     match arr.data_type() {
         DataType::Null => encoder.encode_field_with_type_and_format(&None::<i8>, type_, format)?,
         DataType::Boolean => {
@@ -494,7 +498,7 @@ pub fn encode_value<T: Encoder>(
             let value = encode_list(array, type_, format)?;
             encoder.encode_field_with_type_and_format(&value, type_, format)?
         }
-        DataType::Struct(_) => {
+        DataType::Struct(arrow_fields) => {
             let fields = match type_.kind() {
                 postgres_types::Kind::Composite(fields) => fields,
                 _ => {
@@ -503,7 +507,7 @@ pub fn encode_value<T: Encoder>(
                     ))));
                 }
             };
-            let value = encode_struct(arr, idx, fields, format)?;
+            let value = encode_struct(arr, idx, arrow_fields, fields, format)?;
             encoder.encode_field_with_type_and_format(&value, type_, format)?
         }
         DataType::Dictionary(_, value_type) => {
@@ -534,7 +538,16 @@ pub fn encode_value<T: Encoder>(
                     ))
                 })?;
 
-            encode_value(encoder, values, idx, type_, format)?
+            let inner_pg_field = FieldInfo::new(
+                pg_field.name().to_string(),
+                None,
+                None,
+                type_.clone(),
+                format,
+            );
+            let inner_arrow_field = Field::new(pg_field.name(), *value_type.clone(), true);
+
+            encode_value(encoder, values, idx, &inner_arrow_field, &inner_pg_field)?
         }
         _ => {
             return Err(PgWireError::ApiError(ToSqlError::from(format!(
@@ -585,7 +598,10 @@ mod tests {
 
         let mut encoder = MockEncoder::default();
 
-        let result = encode_value(&mut encoder, &dict_arr, 2, &Type::TEXT, FieldFormat::Text);
+        let arrow_field = Field::new("x", DataType::Utf8, true);
+        let pg_field = FieldInfo::new("x".to_string(), None, None, Type::TEXT, FieldFormat::Text);
+
+        let result = encode_value(&mut encoder, &dict_arr, 2, &arrow_field, &pg_field);
 
         assert!(result.is_ok());
 
