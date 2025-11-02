@@ -38,7 +38,7 @@ impl RowEncoder {
             let array = self.rb.column(col);
             let field = &self.fields[col];
 
-            encode_value(&mut encoder, array, self.curr_idx, &field).unwrap();
+            encode_value(&mut encoder, array, self.curr_idx, field).unwrap();
         }
         self.curr_idx += 1;
         Some(encoder.finish())
