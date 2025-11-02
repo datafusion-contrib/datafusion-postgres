@@ -9,7 +9,7 @@ use bytes::{BufMut, BytesMut};
 use pgwire::api::results::{FieldFormat, FieldInfo};
 use pgwire::error::PgWireResult;
 use pgwire::types::{ToSqlText, QUOTE_CHECK, QUOTE_ESCAPE};
-use postgres_types::{Field, IsNull, ToSql, Type};
+use postgres_types::{Field, IsNull, ToSql};
 
 use crate::encoder::{encode_value, EncodedValue, Encoder};
 
@@ -63,22 +63,20 @@ impl StructEncoder {
 }
 
 impl Encoder for StructEncoder {
-    fn encode_field_with_type_and_format<T>(
-        &mut self,
-        value: &T,
-        data_type: &Type,
-        format: FieldFormat,
-    ) -> PgWireResult<()>
+    fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
     where
         T: ToSql + ToSqlText + Sized,
     {
+        let datatype = pg_field.datatype();
+        let format = pg_field.format();
+
         if format == FieldFormat::Text {
             if self.curr_col == 0 {
                 self.row_buffer.put_slice(b"(");
             }
             // encode value in an intermediate buf
             let mut buf = BytesMut::new();
-            value.to_sql_text(data_type, &mut buf)?;
+            value.to_sql_text(datatype, &mut buf)?;
             let encoded_value_as_str = String::from_utf8_lossy(&buf);
             if QUOTE_CHECK.is_match(&encoded_value_as_str) {
                 self.row_buffer.put_u8(b'"');
@@ -102,12 +100,12 @@ impl Encoder for StructEncoder {
                 self.row_buffer.put_i32(self.num_cols as i32);
             }
 
-            self.row_buffer.put_u32(data_type.oid());
+            self.row_buffer.put_u32(datatype.oid());
             // remember the position of the 4-byte length field
             let prev_index = self.row_buffer.len();
             // write value length as -1 ahead of time
             self.row_buffer.put_i32(-1);
-            let is_null = value.to_sql(data_type, &mut self.row_buffer)?;
+            let is_null = value.to_sql(datatype, &mut self.row_buffer)?;
             if let IsNull::No = is_null {
                 let value_length = self.row_buffer.len() - prev_index - 4;
                 let mut length_bytes = &mut self.row_buffer[prev_index..(prev_index + 4)];
