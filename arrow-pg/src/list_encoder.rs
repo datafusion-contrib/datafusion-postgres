@@ -37,7 +37,7 @@ use datafusion::arrow::{
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, TimeZone, Utc};
-use pgwire::api::results::FieldFormat;
+use pgwire::api::results::{FieldFormat, FieldInfo};
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::types::{ToSqlText, QUOTE_ESCAPE};
 use postgres_types::{ToSql, Type};
@@ -106,11 +106,10 @@ fn encode_field<T: ToSql + ToSqlText>(
     Ok(EncodedValue { bytes })
 }
 
-pub(crate) fn encode_list(
-    arr: Arc<dyn Array>,
-    type_: &Type,
-    format: FieldFormat,
-) -> PgWireResult<EncodedValue> {
+pub(crate) fn encode_list(arr: Arc<dyn Array>, pg_field: &FieldInfo) -> PgWireResult<EncodedValue> {
+    let type_ = pg_field.datatype();
+    let format = pg_field.format();
+
     match arr.data_type() {
         DataType::Null => {
             let mut bytes = BytesMut::new();
@@ -406,7 +405,7 @@ pub(crate) fn encode_list(
             .map_err(ToSqlError::from)?;
 
             let values: PgWireResult<Vec<_>> = (0..arr.len())
-                .map(|row| encode_struct(&arr, row, fields, format))
+                .map(|row| encode_struct(&arr, row, fields, pg_field))
                 .map(|x| {
                     if matches!(format, FieldFormat::Text) {
                         x.map(|opt| {

@@ -6,7 +6,7 @@ use arrow::array::{Array, StructArray};
 use datafusion::arrow::array::{Array, StructArray};
 
 use bytes::{BufMut, BytesMut};
-use pgwire::api::results::FieldFormat;
+use pgwire::api::results::{FieldFormat, FieldInfo};
 use pgwire::error::PgWireResult;
 use pgwire::types::{ToSqlText, QUOTE_CHECK, QUOTE_ESCAPE};
 use postgres_types::{Field, IsNull, ToSql, Type};
@@ -17,7 +17,7 @@ pub(crate) fn encode_struct(
     arr: &Arc<dyn Array>,
     idx: usize,
     fields: &[Field],
-    format: FieldFormat,
+    parent_pg_field_info: &FieldInfo,
 ) -> PgWireResult<Option<EncodedValue>> {
     let arr = arr.as_any().downcast_ref::<StructArray>().unwrap();
     if arr.is_null(idx) {
@@ -27,7 +27,19 @@ pub(crate) fn encode_struct(
     for (i, arr) in arr.columns().iter().enumerate() {
         let field = &fields[i];
         let type_ = field.type_();
-        encode_value(&mut row_encoder, arr, idx, type_, format).unwrap();
+
+        let mut pg_field = FieldInfo::new(
+            field.name().to_string(),
+            None,
+            None,
+            type_.clone(),
+            parent_pg_field_info.format(),
+        );
+        if let Some(format_options) = parent_pg_field_info.format_options() {
+            pg_field = pg_field.with_format_options(format_options);
+        }
+
+        encode_value(&mut row_encoder, arr, idx, &pg_field).unwrap();
     }
     Ok(Some(EncodedValue {
         bytes: row_encoder.row_buffer,

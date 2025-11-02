@@ -12,6 +12,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use datafusion::arrow::{array::*, datatypes::*};
 use pgwire::api::results::DataRowEncoder;
 use pgwire::api::results::FieldFormat;
+use pgwire::api::results::FieldInfo;
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::types::ToSqlText;
 use postgres_types::{ToSql, Type};
@@ -291,9 +292,11 @@ pub fn encode_value<T: Encoder>(
     encoder: &mut T,
     arr: &Arc<dyn Array>,
     idx: usize,
-    type_: &Type,
-    format: FieldFormat,
+    pg_field: &FieldInfo,
 ) -> PgWireResult<()> {
+    let type_ = pg_field.datatype();
+    let format = pg_field.format();
+
     match arr.data_type() {
         DataType::Null => encoder.encode_field_with_type_and_format(&None::<i8>, type_, format)?,
         DataType::Boolean => {
@@ -413,6 +416,7 @@ pub fn encode_value<T: Encoder>(
                     let value = ts_array
                         .value_as_datetime_with_tz(idx, tz)
                         .map(|d| d.fixed_offset());
+
                     encoder.encode_field_with_type_and_format(&value, type_, format)?;
                 } else {
                     let value = ts_array.value_as_datetime(idx);
@@ -494,7 +498,7 @@ pub fn encode_value<T: Encoder>(
                 return encoder.encode_field_with_type_and_format(&None::<&[i8]>, type_, format);
             }
             let array = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-            let value = encode_list(array, type_, format)?;
+            let value = encode_list(array, pg_field)?;
             encoder.encode_field_with_type_and_format(&value, type_, format)?
         }
         DataType::Struct(_) => {
@@ -506,7 +510,7 @@ pub fn encode_value<T: Encoder>(
                     ))));
                 }
             };
-            let value = encode_struct(arr, idx, fields, format)?;
+            let value = encode_struct(arr, idx, fields, pg_field)?;
             encoder.encode_field_with_type_and_format(&value, type_, format)?
         }
         DataType::Dictionary(_, value_type) => {
@@ -537,7 +541,7 @@ pub fn encode_value<T: Encoder>(
                     ))
                 })?;
 
-            encode_value(encoder, values, idx, type_, format)?
+            encode_value(encoder, values, idx, pg_field)?
         }
         _ => {
             return Err(PgWireError::ApiError(ToSqlError::from(format!(
@@ -588,7 +592,8 @@ mod tests {
 
         let mut encoder = MockEncoder::default();
 
-        let result = encode_value(&mut encoder, &dict_arr, 2, &Type::TEXT, FieldFormat::Text);
+        let pg_field = FieldInfo::new("x".to_string(), None, None, Type::TEXT, FieldFormat::Text);
+        let result = encode_value(&mut encoder, &dict_arr, 2, &pg_field);
 
         assert!(result.is_ok());
 

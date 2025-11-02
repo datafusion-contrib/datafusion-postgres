@@ -37,9 +37,8 @@ impl RowEncoder {
         for col in 0..self.rb.num_columns() {
             let array = self.rb.column(col);
             let field = &self.fields[col];
-            let type_ = field.datatype();
-            let format = field.format();
-            encode_value(&mut encoder, array, self.curr_idx, type_, format).unwrap();
+
+            encode_value(&mut encoder, array, self.curr_idx, &field).unwrap();
         }
         self.curr_idx += 1;
         Some(encoder.finish())
