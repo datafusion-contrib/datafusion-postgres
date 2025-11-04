@@ -12,6 +12,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use datafusion::arrow::{array::*, datatypes::*};
 use pgwire::api::results::{DataRowEncoder, FieldInfo};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use pgwire::types::format::FormatOptions;
 use pgwire::types::ToSqlText;
 use postgres_types::{ToSql, Type};
 use rust_decimal::Decimal;
@@ -32,7 +33,12 @@ impl Encoder for DataRowEncoder {
     where
         T: ToSql + ToSqlText + Sized,
     {
-        self.encode_field_with_type_and_format(value, pg_field.datatype(), pg_field.format())
+        self.encode_field_with_type_and_format(
+            value,
+            pg_field.datatype(),
+            pg_field.format(),
+            pg_field.format_options(),
+        )
     }
 }
 
@@ -80,6 +86,7 @@ impl ToSqlText for EncodedValue {
         &self,
         _ty: &Type,
         out: &mut BytesMut,
+        _format_options: &FormatOptions,
     ) -> Result<postgres_types::IsNull, Box<dyn Error + Send + Sync>>
     where
         Self: Sized,
@@ -491,7 +498,8 @@ mod tests {
                 T: ToSql + ToSqlText + Sized,
             {
                 let mut bytes = BytesMut::new();
-                let _sql_text = value.to_sql_text(pg_field.datatype(), &mut bytes);
+                let _sql_text =
+                    value.to_sql_text(pg_field.datatype(), &mut bytes, &FormatOptions::default());
                 let string = String::from_utf8(bytes.to_vec());
                 self.encoded_value = string.unwrap();
                 Ok(())

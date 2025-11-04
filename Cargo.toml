@@ -20,7 +20,7 @@ chrono = { version = "0.4", features = ["std"] }
 datafusion = { version = "50", default-features = false }
 futures = "0.3"
 #pgwire = { version = "0.34", default-features = false }
-pgwire = { git = "https://github.com/sunng87/pgwire", rev = "37a32a05d2aed55bd013f3c6f93d786368350e0b", default-features = false }
+pgwire = { git = "https://github.com/sunng87/pgwire", rev = "ad1e31a4b3fdc325eeb57d0cfe0dc1798b6687a6", default-features = false }
 postgres-types = "0.2"
 rust_decimal = { version = "1.39", features = ["db-postgres"] }
 tokio = { version = "1", default-features = false }

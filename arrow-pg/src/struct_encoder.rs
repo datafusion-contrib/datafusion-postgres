@@ -35,9 +35,8 @@ pub(crate) fn encode_struct(
             type_.clone(),
             parent_pg_field_info.format(),
         );
-        if let Some(format_options) = parent_pg_field_info.format_options() {
-            pg_field = pg_field.with_format_options(format_options);
-        }
+
+        pg_field = pg_field.with_format_options(parent_pg_field_info.format_options().clone());
 
         encode_value(&mut row_encoder, arr, idx, &pg_field).unwrap();
     }
@@ -76,7 +75,7 @@ impl Encoder for StructEncoder {
             }
             // encode value in an intermediate buf
             let mut buf = BytesMut::new();
-            value.to_sql_text(datatype, &mut buf)?;
+            value.to_sql_text(datatype, &mut buf, pg_field.format_options().as_ref())?;
             let encoded_value_as_str = String::from_utf8_lossy(&buf);
             if QUOTE_CHECK.is_match(&encoded_value_as_str) {
                 self.row_buffer.put_u8(b'"');
