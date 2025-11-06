@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use arrow_pg::datatypes::arrow_schema_to_pg_fields;
 use arrow_pg::datatypes::encode_recordbatch;
 use arrow_pg::datatypes::into_pg_type;
+use arrow_schema::Field;
 use async_trait::async_trait;
 use duckdb::{params, Connection, Statement, ToSql};
 use futures::stream;
@@ -137,11 +138,13 @@ fn row_desc_from_stmt(stmt: &Statement, format: &Format) -> PgWireResult<Vec<Fie
             let datatype = stmt.column_type(idx);
             let name = stmt.column_name(idx).unwrap();
 
+            let arrow_field = Arc::new(Field::new(name, datatype, true));
+
             Ok(FieldInfo::new(
                 name.clone(),
                 None,
                 None,
-                into_pg_type(&datatype).unwrap(),
+                into_pg_type(&arrow_field).unwrap(),
                 format.format_for(idx),
             ))
         })
