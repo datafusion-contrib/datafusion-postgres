@@ -19,6 +19,7 @@ use pgwire::api::stmt::{NoopQueryParser, StoredStatement};
 use pgwire::api::{ClientInfo, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::tokio::process_socket;
+use pgwire::types::format::FormatOptions;
 use tokio::net::TcpListener;
 
 pub struct DuckDBBackend {
@@ -45,7 +46,7 @@ impl AuthSource for DummyAuthSource {
 
 #[async_trait]
 impl SimpleQueryHandler for DuckDBBackend {
-    async fn do_query<C>(&self, _client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
+    async fn do_query<C>(&self, client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
@@ -59,9 +60,12 @@ impl SimpleQueryHandler for DuckDBBackend {
                 .query_arrow(params![])
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
             let schema = ret.get_schema();
+            let format_options = FormatOptions::from_client_metadata(client.metadata());
+
             let header = Arc::new(arrow_schema_to_pg_fields(
                 schema.as_ref(),
                 &Format::UnifiedText,
+                Some(Arc::new(format_options)),
             )?);
 
             let header_ref = header.clone();
@@ -155,7 +159,7 @@ impl ExtendedQueryHandler for DuckDBBackend {
 
     async fn do_query<C>(
         &self,
-        _client: &mut C,
+        client: &mut C,
         portal: &Portal<Self::Statement>,
         _max_rows: usize,
     ) -> PgWireResult<Response>
@@ -178,9 +182,11 @@ impl ExtendedQueryHandler for DuckDBBackend {
                 .query_arrow(params![])
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
             let schema = ret.get_schema();
+            let format_options = FormatOptions::from_client_metadata(client.metadata());
             let header = Arc::new(arrow_schema_to_pg_fields(
                 schema.as_ref(),
                 &Format::UnifiedText,
+                Some(Arc::new(format_options)),
             )?);
 
             let header_ref = header.clone();

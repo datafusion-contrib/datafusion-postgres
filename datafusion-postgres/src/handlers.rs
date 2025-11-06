@@ -22,6 +22,7 @@ use pgwire::api::stmt::StoredStatement;
 use pgwire::api::{ClientInfo, ErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::response::TransactionStatus;
+use pgwire::types::format::FormatOptions;
 
 use crate::auth::AuthManager;
 use crate::client;
@@ -355,7 +356,10 @@ impl SimpleQueryHandler for DfSessionService {
                 results.push(resp);
             } else {
                 // For non-INSERT queries, return a regular Query response
-                let resp = df::encode_dataframe(df, &Format::UnifiedText).await?;
+                let format_options =
+                    Arc::new(FormatOptions::from_client_metadata(client.metadata()));
+                let resp =
+                    df::encode_dataframe(df, &Format::UnifiedText, Some(format_options)).await?;
                 results.push(Response::Query(resp));
             }
         }
@@ -382,7 +386,8 @@ impl ExtendedQueryHandler for DfSessionService {
     {
         if let (_, Some((_, plan))) = &target.statement {
             let schema = plan.schema();
-            let fields = arrow_schema_to_pg_fields(schema.as_arrow(), &Format::UnifiedBinary)?;
+            let fields =
+                arrow_schema_to_pg_fields(schema.as_arrow(), &Format::UnifiedBinary, None)?;
             let params = plan
                 .get_parameter_types()
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
@@ -415,7 +420,7 @@ impl ExtendedQueryHandler for DfSessionService {
         if let (_, Some((_, plan))) = &target.statement.statement {
             let format = &target.result_column_format;
             let schema = plan.schema();
-            let fields = arrow_schema_to_pg_fields(schema.as_arrow(), format)?;
+            let fields = arrow_schema_to_pg_fields(schema.as_arrow(), format, None)?;
 
             Ok(DescribePortalResponse::new(fields))
         } else {
@@ -543,7 +548,14 @@ impl ExtendedQueryHandler for DfSessionService {
                 Ok(resp)
             } else {
                 // For non-INSERT queries, return a regular Query response
-                let resp = df::encode_dataframe(dataframe, &portal.result_column_format).await?;
+                let format_options =
+                    Arc::new(FormatOptions::from_client_metadata(client.metadata()));
+                let resp = df::encode_dataframe(
+                    dataframe,
+                    &portal.result_column_format,
+                    Some(format_options),
+                )
+                .await?;
                 Ok(Response::Query(resp))
             }
         } else {

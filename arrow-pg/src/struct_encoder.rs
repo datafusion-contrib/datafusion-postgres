@@ -6,10 +6,10 @@ use arrow::array::{Array, StructArray};
 use datafusion::arrow::array::{Array, StructArray};
 
 use bytes::{BufMut, BytesMut};
-use pgwire::api::results::FieldFormat;
+use pgwire::api::results::{FieldFormat, FieldInfo};
 use pgwire::error::PgWireResult;
 use pgwire::types::{ToSqlText, QUOTE_CHECK, QUOTE_ESCAPE};
-use postgres_types::{Field, IsNull, ToSql, Type};
+use postgres_types::{Field, IsNull, ToSql};
 
 use crate::encoder::{encode_value, EncodedValue, Encoder};
 
@@ -17,7 +17,7 @@ pub(crate) fn encode_struct(
     arr: &Arc<dyn Array>,
     idx: usize,
     fields: &[Field],
-    format: FieldFormat,
+    parent_pg_field_info: &FieldInfo,
 ) -> PgWireResult<Option<EncodedValue>> {
     let arr = arr.as_any().downcast_ref::<StructArray>().unwrap();
     if arr.is_null(idx) {
@@ -27,7 +27,18 @@ pub(crate) fn encode_struct(
     for (i, arr) in arr.columns().iter().enumerate() {
         let field = &fields[i];
         let type_ = field.type_();
-        encode_value(&mut row_encoder, arr, idx, type_, format).unwrap();
+
+        let mut pg_field = FieldInfo::new(
+            field.name().to_string(),
+            None,
+            None,
+            type_.clone(),
+            parent_pg_field_info.format(),
+        );
+
+        pg_field = pg_field.with_format_options(parent_pg_field_info.format_options().clone());
+
+        encode_value(&mut row_encoder, arr, idx, &pg_field).unwrap();
     }
     Ok(Some(EncodedValue {
         bytes: row_encoder.row_buffer,
@@ -51,22 +62,20 @@ impl StructEncoder {
 }
 
 impl Encoder for StructEncoder {
-    fn encode_field_with_type_and_format<T>(
-        &mut self,
-        value: &T,
-        data_type: &Type,
-        format: FieldFormat,
-    ) -> PgWireResult<()>
+    fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
     where
         T: ToSql + ToSqlText + Sized,
     {
+        let datatype = pg_field.datatype();
+        let format = pg_field.format();
+
         if format == FieldFormat::Text {
             if self.curr_col == 0 {
                 self.row_buffer.put_slice(b"(");
             }
             // encode value in an intermediate buf
             let mut buf = BytesMut::new();
-            value.to_sql_text(data_type, &mut buf)?;
+            value.to_sql_text(datatype, &mut buf, pg_field.format_options().as_ref())?;
             let encoded_value_as_str = String::from_utf8_lossy(&buf);
             if QUOTE_CHECK.is_match(&encoded_value_as_str) {
                 self.row_buffer.put_u8(b'"');
@@ -90,12 +99,12 @@ impl Encoder for StructEncoder {
                 self.row_buffer.put_i32(self.num_cols as i32);
             }
 
-            self.row_buffer.put_u32(data_type.oid());
+            self.row_buffer.put_u32(datatype.oid());
             // remember the position of the 4-byte length field
             let prev_index = self.row_buffer.len();
             // write value length as -1 ahead of time
             self.row_buffer.put_i32(-1);
-            let is_null = value.to_sql(data_type, &mut self.row_buffer)?;
+            let is_null = value.to_sql(datatype, &mut self.row_buffer)?;
             if let IsNull::No = is_null {
                 let value_length = self.row_buffer.len() - prev_index - 4;
                 let mut length_bytes = &mut self.row_buffer[prev_index..(prev_index + 4)];

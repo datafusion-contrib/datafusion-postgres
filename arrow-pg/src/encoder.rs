@@ -10,9 +10,9 @@ use bytes::BytesMut;
 use chrono::{NaiveDate, NaiveDateTime};
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::{array::*, datatypes::*};
-use pgwire::api::results::DataRowEncoder;
-use pgwire::api::results::FieldFormat;
+use pgwire::api::results::{DataRowEncoder, FieldInfo};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use pgwire::types::format::FormatOptions;
 use pgwire::types::ToSqlText;
 use postgres_types::{ToSql, Type};
 use rust_decimal::Decimal;
@@ -23,27 +23,22 @@ use crate::list_encoder::encode_list;
 use crate::struct_encoder::encode_struct;
 
 pub trait Encoder {
-    fn encode_field_with_type_and_format<T>(
-        &mut self,
-        value: &T,
-        data_type: &Type,
-        format: FieldFormat,
-    ) -> PgWireResult<()>
+    fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
     where
         T: ToSql + ToSqlText + Sized;
 }
 
 impl Encoder for DataRowEncoder {
-    fn encode_field_with_type_and_format<T>(
-        &mut self,
-        value: &T,
-        data_type: &Type,
-        format: FieldFormat,
-    ) -> PgWireResult<()>
+    fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
     where
         T: ToSql + ToSqlText + Sized,
     {
-        self.encode_field_with_type_and_format(value, data_type, format)
+        self.encode_field_with_type_and_format(
+            value,
+            pg_field.datatype(),
+            pg_field.format(),
+            pg_field.format_options(),
+        )
     }
 }
 
@@ -91,6 +86,7 @@ impl ToSqlText for EncodedValue {
         &self,
         _ty: &Type,
         out: &mut BytesMut,
+        _format_options: &FormatOptions,
     ) -> Result<postgres_types::IsNull, Box<dyn Error + Send + Sync>>
     where
         Self: Sized,
@@ -288,121 +284,64 @@ pub fn encode_value<T: Encoder>(
     encoder: &mut T,
     arr: &Arc<dyn Array>,
     idx: usize,
-    type_: &Type,
-    format: FieldFormat,
+    pg_field: &FieldInfo,
 ) -> PgWireResult<()> {
+    let type_ = pg_field.datatype();
+
     match arr.data_type() {
-        DataType::Null => encoder.encode_field_with_type_and_format(&None::<i8>, type_, format)?,
-        DataType::Boolean => {
-            encoder.encode_field_with_type_and_format(&get_bool_value(arr, idx), type_, format)?
+        DataType::Null => encoder.encode_field(&None::<i8>, pg_field)?,
+        DataType::Boolean => encoder.encode_field(&get_bool_value(arr, idx), pg_field)?,
+        DataType::Int8 => encoder.encode_field(&get_i8_value(arr, idx), pg_field)?,
+        DataType::Int16 => encoder.encode_field(&get_i16_value(arr, idx), pg_field)?,
+        DataType::Int32 => encoder.encode_field(&get_i32_value(arr, idx), pg_field)?,
+        DataType::Int64 => encoder.encode_field(&get_i64_value(arr, idx), pg_field)?,
+        DataType::UInt8 => {
+            encoder.encode_field(&(get_u8_value(arr, idx).map(|x| x as i8)), pg_field)?
         }
-        DataType::Int8 => {
-            encoder.encode_field_with_type_and_format(&get_i8_value(arr, idx), type_, format)?
+        DataType::UInt16 => {
+            encoder.encode_field(&(get_u16_value(arr, idx).map(|x| x as i16)), pg_field)?
         }
-        DataType::Int16 => {
-            encoder.encode_field_with_type_and_format(&get_i16_value(arr, idx), type_, format)?
+        DataType::UInt32 => encoder.encode_field(&get_u32_value(arr, idx), pg_field)?,
+        DataType::UInt64 => {
+            encoder.encode_field(&(get_u64_value(arr, idx).map(|x| x as i64)), pg_field)?
         }
-        DataType::Int32 => {
-            encoder.encode_field_with_type_and_format(&get_i32_value(arr, idx), type_, format)?
+        DataType::Float32 => encoder.encode_field(&get_f32_value(arr, idx), pg_field)?,
+        DataType::Float64 => encoder.encode_field(&get_f64_value(arr, idx), pg_field)?,
+        DataType::Decimal128(_, s) => {
+            encoder.encode_field(&get_numeric_128_value(arr, idx, *s as u32)?, pg_field)?
         }
-        DataType::Int64 => {
-            encoder.encode_field_with_type_and_format(&get_i64_value(arr, idx), type_, format)?
+        DataType::Utf8 => encoder.encode_field(&get_utf8_value(arr, idx), pg_field)?,
+        DataType::Utf8View => encoder.encode_field(&get_utf8_view_value(arr, idx), pg_field)?,
+        DataType::BinaryView => encoder.encode_field(&get_binary_view_value(arr, idx), pg_field)?,
+        DataType::LargeUtf8 => encoder.encode_field(&get_large_utf8_value(arr, idx), pg_field)?,
+        DataType::Binary => encoder.encode_field(&get_binary_value(arr, idx), pg_field)?,
+        DataType::LargeBinary => {
+            encoder.encode_field(&get_large_binary_value(arr, idx), pg_field)?
         }
-        DataType::UInt8 => encoder.encode_field_with_type_and_format(
-            &(get_u8_value(arr, idx).map(|x| x as i8)),
-            type_,
-            format,
-        )?,
-        DataType::UInt16 => encoder.encode_field_with_type_and_format(
-            &(get_u16_value(arr, idx).map(|x| x as i16)),
-            type_,
-            format,
-        )?,
-        DataType::UInt32 => {
-            encoder.encode_field_with_type_and_format(&get_u32_value(arr, idx), type_, format)?
-        }
-        DataType::UInt64 => encoder.encode_field_with_type_and_format(
-            &(get_u64_value(arr, idx).map(|x| x as i64)),
-            type_,
-            format,
-        )?,
-        DataType::Float32 => {
-            encoder.encode_field_with_type_and_format(&get_f32_value(arr, idx), type_, format)?
-        }
-        DataType::Float64 => {
-            encoder.encode_field_with_type_and_format(&get_f64_value(arr, idx), type_, format)?
-        }
-        DataType::Decimal128(_, s) => encoder.encode_field_with_type_and_format(
-            &get_numeric_128_value(arr, idx, *s as u32)?,
-            type_,
-            format,
-        )?,
-        DataType::Utf8 => {
-            encoder.encode_field_with_type_and_format(&get_utf8_value(arr, idx), type_, format)?
-        }
-        DataType::Utf8View => encoder.encode_field_with_type_and_format(
-            &get_utf8_view_value(arr, idx),
-            type_,
-            format,
-        )?,
-        DataType::BinaryView => encoder.encode_field_with_type_and_format(
-            &get_binary_view_value(arr, idx),
-            type_,
-            format,
-        )?,
-        DataType::LargeUtf8 => encoder.encode_field_with_type_and_format(
-            &get_large_utf8_value(arr, idx),
-            type_,
-            format,
-        )?,
-        DataType::Binary => {
-            encoder.encode_field_with_type_and_format(&get_binary_value(arr, idx), type_, format)?
-        }
-        DataType::LargeBinary => encoder.encode_field_with_type_and_format(
-            &get_large_binary_value(arr, idx),
-            type_,
-            format,
-        )?,
-        DataType::Date32 => {
-            encoder.encode_field_with_type_and_format(&get_date32_value(arr, idx), type_, format)?
-        }
-        DataType::Date64 => {
-            encoder.encode_field_with_type_and_format(&get_date64_value(arr, idx), type_, format)?
-        }
+        DataType::Date32 => encoder.encode_field(&get_date32_value(arr, idx), pg_field)?,
+        DataType::Date64 => encoder.encode_field(&get_date64_value(arr, idx), pg_field)?,
         DataType::Time32(unit) => match unit {
-            TimeUnit::Second => encoder.encode_field_with_type_and_format(
-                &get_time32_second_value(arr, idx),
-                type_,
-                format,
-            )?,
-            TimeUnit::Millisecond => encoder.encode_field_with_type_and_format(
-                &get_time32_millisecond_value(arr, idx),
-                type_,
-                format,
-            )?,
+            TimeUnit::Second => {
+                encoder.encode_field(&get_time32_second_value(arr, idx), pg_field)?
+            }
+            TimeUnit::Millisecond => {
+                encoder.encode_field(&get_time32_millisecond_value(arr, idx), pg_field)?
+            }
             _ => {}
         },
         DataType::Time64(unit) => match unit {
-            TimeUnit::Microsecond => encoder.encode_field_with_type_and_format(
-                &get_time64_microsecond_value(arr, idx),
-                type_,
-                format,
-            )?,
-            TimeUnit::Nanosecond => encoder.encode_field_with_type_and_format(
-                &get_time64_nanosecond_value(arr, idx),
-                type_,
-                format,
-            )?,
+            TimeUnit::Microsecond => {
+                encoder.encode_field(&get_time64_microsecond_value(arr, idx), pg_field)?
+            }
+            TimeUnit::Nanosecond => {
+                encoder.encode_field(&get_time64_nanosecond_value(arr, idx), pg_field)?
+            }
             _ => {}
         },
         DataType::Timestamp(unit, timezone) => match unit {
             TimeUnit::Second => {
                 if arr.is_null(idx) {
-                    return encoder.encode_field_with_type_and_format(
-                        &None::<NaiveDateTime>,
-                        type_,
-                        format,
-                    );
+                    return encoder.encode_field(&None::<NaiveDateTime>, pg_field);
                 }
                 let ts_array = arr.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
                 if let Some(tz) = timezone {
@@ -410,19 +349,16 @@ pub fn encode_value<T: Encoder>(
                     let value = ts_array
                         .value_as_datetime_with_tz(idx, tz)
                         .map(|d| d.fixed_offset());
-                    encoder.encode_field_with_type_and_format(&value, type_, format)?;
+
+                    encoder.encode_field(&value, pg_field)?;
                 } else {
                     let value = ts_array.value_as_datetime(idx);
-                    encoder.encode_field_with_type_and_format(&value, type_, format)?;
+                    encoder.encode_field(&value, pg_field)?;
                 }
             }
             TimeUnit::Millisecond => {
                 if arr.is_null(idx) {
-                    return encoder.encode_field_with_type_and_format(
-                        &None::<NaiveDateTime>,
-                        type_,
-                        format,
-                    );
+                    return encoder.encode_field(&None::<NaiveDateTime>, pg_field);
                 }
                 let ts_array = arr
                     .as_any()
@@ -433,19 +369,15 @@ pub fn encode_value<T: Encoder>(
                     let value = ts_array
                         .value_as_datetime_with_tz(idx, tz)
                         .map(|d| d.fixed_offset());
-                    encoder.encode_field_with_type_and_format(&value, type_, format)?;
+                    encoder.encode_field(&value, pg_field)?;
                 } else {
                     let value = ts_array.value_as_datetime(idx);
-                    encoder.encode_field_with_type_and_format(&value, type_, format)?;
+                    encoder.encode_field(&value, pg_field)?;
                 }
             }
             TimeUnit::Microsecond => {
                 if arr.is_null(idx) {
-                    return encoder.encode_field_with_type_and_format(
-                        &None::<NaiveDateTime>,
-                        type_,
-                        format,
-                    );
+                    return encoder.encode_field(&None::<NaiveDateTime>, pg_field);
                 }
                 let ts_array = arr
                     .as_any()
@@ -456,19 +388,15 @@ pub fn encode_value<T: Encoder>(
                     let value = ts_array
                         .value_as_datetime_with_tz(idx, tz)
                         .map(|d| d.fixed_offset());
-                    encoder.encode_field_with_type_and_format(&value, type_, format)?;
+                    encoder.encode_field(&value, pg_field)?;
                 } else {
                     let value = ts_array.value_as_datetime(idx);
-                    encoder.encode_field_with_type_and_format(&value, type_, format)?;
+                    encoder.encode_field(&value, pg_field)?;
                 }
             }
             TimeUnit::Nanosecond => {
                 if arr.is_null(idx) {
-                    return encoder.encode_field_with_type_and_format(
-                        &None::<NaiveDateTime>,
-                        type_,
-                        format,
-                    );
+                    return encoder.encode_field(&None::<NaiveDateTime>, pg_field);
                 }
                 let ts_array = arr
                     .as_any()
@@ -479,20 +407,20 @@ pub fn encode_value<T: Encoder>(
                     let value = ts_array
                         .value_as_datetime_with_tz(idx, tz)
                         .map(|d| d.fixed_offset());
-                    encoder.encode_field_with_type_and_format(&value, type_, format)?;
+                    encoder.encode_field(&value, pg_field)?;
                 } else {
                     let value = ts_array.value_as_datetime(idx);
-                    encoder.encode_field_with_type_and_format(&value, type_, format)?;
+                    encoder.encode_field(&value, pg_field)?;
                 }
             }
         },
         DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
             if arr.is_null(idx) {
-                return encoder.encode_field_with_type_and_format(&None::<&[i8]>, type_, format);
+                return encoder.encode_field(&None::<&[i8]>, pg_field);
             }
             let array = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-            let value = encode_list(array, type_, format)?;
-            encoder.encode_field_with_type_and_format(&value, type_, format)?
+            let value = encode_list(array, pg_field)?;
+            encoder.encode_field(&value, pg_field)?
         }
         DataType::Struct(_) => {
             let fields = match type_.kind() {
@@ -503,12 +431,12 @@ pub fn encode_value<T: Encoder>(
                     ))));
                 }
             };
-            let value = encode_struct(arr, idx, fields, format)?;
-            encoder.encode_field_with_type_and_format(&value, type_, format)?
+            let value = encode_struct(arr, idx, fields, pg_field)?;
+            encoder.encode_field(&value, pg_field)?
         }
         DataType::Dictionary(_, value_type) => {
             if arr.is_null(idx) {
-                return encoder.encode_field_with_type_and_format(&None::<i8>, type_, format);
+                return encoder.encode_field(&None::<i8>, pg_field);
             }
             // Get the dictionary values and the mapped row index
             macro_rules! get_dict_values_and_index {
@@ -534,7 +462,7 @@ pub fn encode_value<T: Encoder>(
                     ))
                 })?;
 
-            encode_value(encoder, values, idx, type_, format)?
+            encode_value(encoder, values, idx, pg_field)?
         }
         _ => {
             return Err(PgWireError::ApiError(ToSqlError::from(format!(
@@ -550,6 +478,8 @@ pub fn encode_value<T: Encoder>(
 
 #[cfg(test)]
 mod tests {
+    use pgwire::api::results::FieldFormat;
+
     use super::*;
 
     #[test]
@@ -560,17 +490,13 @@ mod tests {
         }
 
         impl Encoder for MockEncoder {
-            fn encode_field_with_type_and_format<T>(
-                &mut self,
-                value: &T,
-                data_type: &Type,
-                _format: FieldFormat,
-            ) -> PgWireResult<()>
+            fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
             where
                 T: ToSql + ToSqlText + Sized,
             {
                 let mut bytes = BytesMut::new();
-                let _sql_text = value.to_sql_text(data_type, &mut bytes);
+                let _sql_text =
+                    value.to_sql_text(pg_field.datatype(), &mut bytes, &FormatOptions::default());
                 let string = String::from_utf8(bytes.to_vec());
                 self.encoded_value = string.unwrap();
                 Ok(())
@@ -585,7 +511,8 @@ mod tests {
 
         let mut encoder = MockEncoder::default();
 
-        let result = encode_value(&mut encoder, &dict_arr, 2, &Type::TEXT, FieldFormat::Text);
+        let pg_field = FieldInfo::new("x".to_string(), None, None, Type::TEXT, FieldFormat::Text);
+        let result = encode_value(&mut encoder, &dict_arr, 2, &pg_field);
 
         assert!(result.is_ok());
 
