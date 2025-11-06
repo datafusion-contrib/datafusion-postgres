@@ -10,7 +10,7 @@ use bytes::BytesMut;
 use chrono::{NaiveDate, NaiveDateTime};
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::{array::*, datatypes::*};
-use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo};
+use pgwire::api::results::{DataRowEncoder, FieldInfo};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::types::format::FormatOptions;
 use pgwire::types::ToSqlText;
@@ -287,8 +287,6 @@ pub fn encode_value<T: Encoder>(
     _arrow_filed: &Field,
     pg_field: &FieldInfo,
 ) -> PgWireResult<()> {
-    let type_ = pg_field.datatype();
-
     match arr.data_type() {
         DataType::Null => encoder.encode_field(&None::<i8>, pg_field)?,
         DataType::Boolean => encoder.encode_field(&get_bool_value(arr, idx), pg_field)?,
@@ -424,14 +422,6 @@ pub fn encode_value<T: Encoder>(
             encoder.encode_field(&value, pg_field)?
         }
         DataType::Struct(arrow_fields) => {
-            let fields = match type_.kind() {
-                postgres_types::Kind::Composite(fields) => fields,
-                _ => {
-                    return Err(PgWireError::ApiError(ToSqlError::from(format!(
-                        "Failed to unwrap a composite type from type {type_}"
-                    ))));
-                }
-            };
             let value = encode_struct(arr, idx, arrow_fields, pg_field)?;
             encoder.encode_field(&value, pg_field)?
         }

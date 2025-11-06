@@ -8,29 +8,41 @@ use datafusion::arrow::array::{Array, StructArray};
 
 use bytes::{BufMut, BytesMut};
 use pgwire::api::results::{FieldFormat, FieldInfo};
-use pgwire::error::PgWireResult;
+use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::types::{ToSqlText, QUOTE_CHECK, QUOTE_ESCAPE};
-use postgres_types::{Field, IsNull, ToSql};
+use postgres_types::{IsNull, ToSql};
 
 use crate::encoder::{encode_value, EncodedValue, Encoder};
+use crate::error::ToSqlError;
 
 pub(crate) fn encode_struct(
     arr: &Arc<dyn Array>,
     idx: usize,
     arrow_fields: &Fields,
-    fields: &[Field],
     parent_pg_field_info: &FieldInfo,
 ) -> PgWireResult<Option<EncodedValue>> {
     let arr = arr.as_any().downcast_ref::<StructArray>().unwrap();
     if arr.is_null(idx) {
         return Ok(None);
     }
-    let mut row_encoder = StructEncoder::new(fields.len());
+
+    let fields = match parent_pg_field_info.datatype().kind() {
+        postgres_types::Kind::Composite(fields) => fields,
+        _ => {
+            return Err(PgWireError::ApiError(ToSqlError::from(format!(
+                "Failed to unwrap a composite type of {}",
+                parent_pg_field_info.datatype()
+            ))));
+        }
+    };
+
+    let mut row_encoder = StructEncoder::new(arrow_fields.len());
     for (i, arr) in arr.columns().iter().enumerate() {
         let field = &fields[i];
         let type_ = field.type_();
 
         let arrow_field = &arrow_fields[i];
+
         let mut pg_field = FieldInfo::new(
             field.name().to_string(),
             None,
@@ -38,7 +50,6 @@ pub(crate) fn encode_struct(
             type_.clone(),
             parent_pg_field_info.format(),
         );
-
         pg_field = pg_field.with_format_options(parent_pg_field_info.format_options().clone());
 
         encode_value(&mut row_encoder, arr, idx, arrow_field, &pg_field).unwrap();
