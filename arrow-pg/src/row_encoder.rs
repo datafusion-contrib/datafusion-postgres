@@ -40,7 +40,10 @@ impl RowEncoder {
             let arrow_field = arrow_schema.field(col);
             let pg_field = &self.fields[col];
 
-            encode_value(&mut encoder, array, self.curr_idx, arrow_field, pg_field).unwrap();
+            if let Err(e) = encode_value(&mut encoder, array, self.curr_idx, arrow_field, pg_field)
+            {
+                return Some(Err(e));
+            };
         }
         self.curr_idx += 1;
         Some(encoder.finish())
