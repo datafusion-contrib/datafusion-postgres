@@ -11,6 +11,7 @@ use pgwire::api::results::FieldInfo;
 use pgwire::api::Type;
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::messages::data::DataRow;
+use pgwire::types::format::FormatOptions;
 use postgres_types::Kind;
 
 use crate::row_encoder::RowEncoder;
@@ -127,20 +128,25 @@ pub fn into_pg_type(field: &Arc<Field>) -> PgWireResult<Type> {
     }
 }
 
-pub fn arrow_schema_to_pg_fields(schema: &Schema, format: &Format) -> PgWireResult<Vec<FieldInfo>> {
+pub fn arrow_schema_to_pg_fields(
+    schema: &Schema,
+    format: &Format,
+    data_format_options: Option<Arc<FormatOptions>>,
+) -> PgWireResult<Vec<FieldInfo>> {
+    let _ = data_format_options;
     schema
         .fields()
         .iter()
         .enumerate()
         .map(|(idx, f)| {
             let pg_type = into_pg_type(f)?;
-            Ok(FieldInfo::new(
-                f.name().into(),
-                None,
-                None,
-                pg_type,
-                format.format_for(idx),
-            ))
+            let mut field_info =
+                FieldInfo::new(f.name().into(), None, None, pg_type, format.format_for(idx));
+            if let Some(data_format_options) = &data_format_options {
+                field_info = field_info.with_format_options(data_format_options.clone());
+            }
+
+            Ok(field_info)
         })
         .collect::<PgWireResult<Vec<FieldInfo>>>()
 }

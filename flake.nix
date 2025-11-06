@@ -45,7 +45,7 @@
             cargo-release
             curl
             pythonEnv
-            postgresql.out
+            postgresql_18.out
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
