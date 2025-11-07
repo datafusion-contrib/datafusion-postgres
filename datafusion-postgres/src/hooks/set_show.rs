@@ -8,9 +8,11 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::{Expr, Set, Statement};
 use log::{info, warn};
+use pgwire::api::auth::DefaultServerParameterProvider;
 use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse, Response, Tag};
 use pgwire::api::ClientInfo;
 use pgwire::error::{PgWireError, PgWireResult};
+use pgwire::types::format::FormatOptions;
 use postgres_types::Type;
 
 use crate::client;
@@ -212,8 +214,7 @@ where
     // fallback to datafusion and ignore all errors
     if let Err(e) = execute_set_statement(session_context, statement.clone()).await {
         warn!(
-            "SET statement {} is not supported by datafusion, error {e}, statement ignored",
-            statement
+            "SET statement {statement} is not supported by datafusion, error {e}, statement ignored",
         );
     }
 
@@ -290,22 +291,32 @@ where
         ["transaction", "isolation", "level"] => {
             Some(mock_show_response("transaction_isolation", "read_committed").map(Response::Query))
         }
-        ["bytea_output"]
-        | ["datestyle"]
-        | ["intervalstyle"]
-        | ["application_name"]
-        | ["extra_float_digits"]
-        | ["search_path"] => {
+        _ => {
             let val = client
                 .metadata()
                 .get(&variables[0])
-                .map(|v| v.as_str())
-                .unwrap_or("");
-            Some(mock_show_response(&variables[0], val).map(Response::Query))
-        }
-        _ => {
-            info!("Unsupported show statement: {}", statement);
-            Some(mock_show_response("unsupported_show_statement", "").map(Response::Query))
+                .map(|v| v.to_string())
+                .or_else(|| match variables[0].as_str() {
+                    "bytea_output" => Some(FormatOptions::default().bytea_output),
+                    "datestyle" => Some(FormatOptions::default().date_style),
+                    "intervalstyle" => Some(FormatOptions::default().interval_style),
+                    "extra_float_digits" => {
+                        Some(FormatOptions::default().extra_float_digits.to_string())
+                    }
+                    "application_name" => Some(
+                        DefaultServerParameterProvider::default()
+                            .application_name
+                            .unwrap_or("".to_owned()),
+                    ),
+                    "search_path" => Some(DefaultServerParameterProvider::default().search_path),
+                    _ => None,
+                });
+            if let Some(val) = val {
+                Some(mock_show_response(&variables[0], &val).map(Response::Query))
+            } else {
+                info!("Unsupported show statement: {statement}");
+                Some(mock_show_response("unsupported_show_statement", "").map(Response::Query))
+            }
         }
     }
 }
