@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 #[cfg(not(feature = "datafusion"))]
 use arrow::{array::*, datatypes::*};
+#[cfg(feature = "geo")]
+use arrow_schema::extension::ExtensionType;
 use bytes::BufMut;
 use bytes::BytesMut;
 use chrono::{NaiveDate, NaiveDateTime};
@@ -284,10 +286,30 @@ pub fn encode_value<T: Encoder>(
     encoder: &mut T,
     arr: &Arc<dyn Array>,
     idx: usize,
-    _arrow_filed: &Field,
+    arrow_field: &Field,
     pg_field: &FieldInfo,
 ) -> PgWireResult<()> {
-    match arr.data_type() {
+    let arrow_type = arrow_field.data_type();
+
+    match arrow_field.extension_type_name() {
+        #[cfg(feature = "geo")]
+        Some(geoarrow::datatype::PointType::NAME) => {
+            // downcast array as geoarrow
+            // convert to point
+            // encode as point
+            let geoarrow_array: Arc<dyn geoarrow::array::GeoArrowArray> =
+                geoarrow::array::from_arrow_array(array, field).unwrap();
+            match geoarrow_array.data_type() {
+                GeoArrowType::Point(_) => {
+                    let array: &PointArray = geoarrow_array.as_point();
+                }
+                _ => todo!("handle other geometry types"),
+            }
+        }
+        _ => {}
+    }
+
+    match arrow_type {
         DataType::Null => encoder.encode_field(&None::<i8>, pg_field)?,
         DataType::Boolean => encoder.encode_field(&get_bool_value(arr, idx), pg_field)?,
         DataType::Int8 => encoder.encode_field(&get_i8_value(arr, idx), pg_field)?,

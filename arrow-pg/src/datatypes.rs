@@ -23,8 +23,11 @@ pub fn into_pg_type(field: &Arc<Field>) -> PgWireResult<Type> {
     let arrow_type = field.data_type();
 
     match field.extension_type_name() {
+        // As of arrow 56, there are additional extension logical type that is
+        // defined using field metadata, for instance, json or geo.
         #[cfg(feature = "geo")]
-        Some(geoarrow_schema::PointType::NAME) => Ok(Type::POINT),
+        Some(geoarrow::datatype::PointType::NAME) => Ok(Type::POINT),
+
         _ => Ok(match arrow_type {
             DataType::Null => Type::UNKNOWN,
             DataType::Boolean => Type::BOOL,
