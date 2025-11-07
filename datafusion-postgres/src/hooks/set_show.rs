@@ -8,9 +8,11 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::{Expr, Set, Statement};
 use log::{info, warn};
+use pgwire::api::auth::DefaultServerParameterProvider;
 use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse, Response, Tag};
 use pgwire::api::ClientInfo;
 use pgwire::error::{PgWireError, PgWireResult};
+use pgwire::types::format::FormatOptions;
 use postgres_types::Type;
 
 use crate::client;
@@ -212,8 +214,7 @@ where
     // fallback to datafusion and ignore all errors
     if let Err(e) = execute_set_statement(session_context, statement.clone()).await {
         warn!(
-            "SET statement {} is not supported by datafusion, error {e}, statement ignored",
-            statement
+            "SET statement {statement} is not supported by datafusion, error {e}, statement ignored",
         );
     }
 
@@ -299,12 +300,22 @@ where
             let val = client
                 .metadata()
                 .get(&variables[0])
-                .map(|v| v.as_str())
-                .unwrap_or("");
-            Some(mock_show_response(&variables[0], val).map(Response::Query))
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| match variables[0].as_str() {
+                    "bytea_output" => FormatOptions::default().bytea_output,
+                    "datestyle" => FormatOptions::default().date_style,
+                    "intervalstyle" => FormatOptions::default().interval_style,
+                    "extra_float_digits" => FormatOptions::default().extra_float_digits.to_string(),
+                    "application_name" => DefaultServerParameterProvider::default()
+                        .application_name
+                        .unwrap_or("".to_owned()),
+                    "search_path" => DefaultServerParameterProvider::default().search_path,
+                    _ => "".to_owned(),
+                });
+            Some(mock_show_response(&variables[0], &val).map(Response::Query))
         }
         _ => {
-            info!("Unsupported show statement: {}", statement);
+            info!("Unsupported show statement: {statement}");
             Some(mock_show_response("unsupported_show_statement", "").map(Response::Query))
         }
     }
