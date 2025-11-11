@@ -33,12 +33,17 @@ impl RowEncoder {
         if self.curr_idx == self.rb.num_rows() {
             return None;
         }
+        let arrow_schema = self.rb.schema_ref();
         let mut encoder = DataRowEncoder::new(self.fields.clone());
         for col in 0..self.rb.num_columns() {
             let array = self.rb.column(col);
-            let field = &self.fields[col];
+            let arrow_field = arrow_schema.field(col);
+            let pg_field = &self.fields[col];
 
-            encode_value(&mut encoder, array, self.curr_idx, field).unwrap();
+            if let Err(e) = encode_value(&mut encoder, array, self.curr_idx, arrow_field, pg_field)
+            {
+                return Some(Err(e));
+            };
         }
         self.curr_idx += 1;
         Some(encoder.finish())

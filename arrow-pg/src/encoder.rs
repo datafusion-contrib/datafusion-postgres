@@ -284,10 +284,9 @@ pub fn encode_value<T: Encoder>(
     encoder: &mut T,
     arr: &Arc<dyn Array>,
     idx: usize,
+    _arrow_filed: &Field,
     pg_field: &FieldInfo,
 ) -> PgWireResult<()> {
-    let type_ = pg_field.datatype();
-
     match arr.data_type() {
         DataType::Null => encoder.encode_field(&None::<i8>, pg_field)?,
         DataType::Boolean => encoder.encode_field(&get_bool_value(arr, idx), pg_field)?,
@@ -422,16 +421,8 @@ pub fn encode_value<T: Encoder>(
             let value = encode_list(array, pg_field)?;
             encoder.encode_field(&value, pg_field)?
         }
-        DataType::Struct(_) => {
-            let fields = match type_.kind() {
-                postgres_types::Kind::Composite(fields) => fields,
-                _ => {
-                    return Err(PgWireError::ApiError(ToSqlError::from(format!(
-                        "Failed to unwrap a composite type from type {type_}"
-                    ))));
-                }
-            };
-            let value = encode_struct(arr, idx, fields, pg_field)?;
+        DataType::Struct(arrow_fields) => {
+            let value = encode_struct(arr, idx, arrow_fields, pg_field)?;
             encoder.encode_field(&value, pg_field)?
         }
         DataType::Dictionary(_, value_type) => {
@@ -462,7 +453,9 @@ pub fn encode_value<T: Encoder>(
                     ))
                 })?;
 
-            encode_value(encoder, values, idx, pg_field)?
+            let inner_arrow_field = Field::new(pg_field.name(), *value_type.clone(), true);
+
+            encode_value(encoder, values, idx, &inner_arrow_field, pg_field)?
         }
         _ => {
             return Err(PgWireError::ApiError(ToSqlError::from(format!(
@@ -511,8 +504,9 @@ mod tests {
 
         let mut encoder = MockEncoder::default();
 
+        let arrow_field = Field::new("x", DataType::Utf8, true);
         let pg_field = FieldInfo::new("x".to_string(), None, None, Type::TEXT, FieldFormat::Text);
-        let result = encode_value(&mut encoder, &dict_arr, 2, &pg_field);
+        let result = encode_value(&mut encoder, &dict_arr, 2, &arrow_field, &pg_field);
 
         assert!(result.is_ok());
 

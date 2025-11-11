@@ -386,27 +386,9 @@ pub(crate) fn encode_list(arr: Arc<dyn Array>, pg_field: &FieldInfo) -> PgWireRe
                 }
             }
         },
-        DataType::Struct(_) => {
-            let fields = match type_.kind() {
-                postgres_types::Kind::Array(struct_type_) => Ok(struct_type_),
-                _ => Err(format!(
-                    "Expected list type found type {} of kind {:?}",
-                    type_,
-                    type_.kind()
-                )),
-            }
-            .and_then(|struct_type| match struct_type.kind() {
-                postgres_types::Kind::Composite(fields) => Ok(fields),
-                _ => Err(format!(
-                    "Failed to unwrap a composite type inside from type {} kind {:?}",
-                    type_,
-                    type_.kind()
-                )),
-            })
-            .map_err(ToSqlError::from)?;
-
+        DataType::Struct(arrow_fields) => {
             let values: PgWireResult<Vec<_>> = (0..arr.len())
-                .map(|row| encode_struct(&arr, row, fields, pg_field))
+                .map(|row| encode_struct(&arr, row, arrow_fields, pg_field))
                 .map(|x| {
                     if matches!(format, FieldFormat::Text) {
                         x.map(|opt| {
