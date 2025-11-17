@@ -7,6 +7,7 @@ use std::sync::Arc;
 use arrow::{array::*, datatypes::*};
 use bytes::BufMut;
 use bytes::BytesMut;
+use chrono::NaiveTime;
 use chrono::{NaiveDate, NaiveDateTime};
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::{array::*, datatypes::*};
@@ -203,43 +204,43 @@ fn get_date64_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDate> {
         .value_as_date(idx)
 }
 
-fn get_time32_second_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+fn get_time32_second_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveTime> {
     if arr.is_null(idx) {
         return None;
     }
     arr.as_any()
         .downcast_ref::<Time32SecondArray>()
         .unwrap()
-        .value_as_datetime(idx)
+        .value_as_time(idx)
 }
 
-fn get_time32_millisecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+fn get_time32_millisecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveTime> {
     if arr.is_null(idx) {
         return None;
     }
     arr.as_any()
         .downcast_ref::<Time32MillisecondArray>()
         .unwrap()
-        .value_as_datetime(idx)
+        .value_as_time(idx)
 }
 
-fn get_time64_microsecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+fn get_time64_microsecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveTime> {
     if arr.is_null(idx) {
         return None;
     }
     arr.as_any()
         .downcast_ref::<Time64MicrosecondArray>()
         .unwrap()
-        .value_as_datetime(idx)
+        .value_as_time(idx)
 }
-fn get_time64_nanosecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+fn get_time64_nanosecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveTime> {
     if arr.is_null(idx) {
         return None;
     }
     arr.as_any()
         .downcast_ref::<Time64NanosecondArray>()
         .unwrap()
-        .value_as_datetime(idx)
+        .value_as_time(idx)
 }
 
 fn get_numeric_128_value(

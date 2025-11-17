@@ -2,7 +2,7 @@ use std::iter;
 use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
-use datafusion::arrow::datatypes::{DataType, Date32Type};
+use datafusion::arrow::datatypes::{DataType, Date32Type, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::ParamValues;
 use datafusion::prelude::*;
@@ -79,10 +79,8 @@ where
     let param_len = portal.parameter_len();
     let mut deserialized_params = Vec::with_capacity(param_len);
     for i in 0..param_len {
-        let pg_type = get_pg_type(
-            portal.statement.parameter_types.get(i),
-            inferenced_types.get(i).and_then(|v| v.to_owned()),
-        )?;
+        let inferenced_type = inferenced_types.get(i).and_then(|v| v.to_owned());
+        let pg_type = get_pg_type(portal.statement.parameter_types.get(i), inferenced_type)?;
         match pg_type {
             // enumerate all supported parameter types and deserialize the
             // type to ScalarValue
@@ -158,9 +156,36 @@ where
             }
             Type::TIME => {
                 let value = portal.parameter::<NaiveTime>(i, &pg_type)?;
-                deserialized_params.push(ScalarValue::Time64Microsecond(value.map(|t| {
-                    t.num_seconds_from_midnight() as i64 * 1_000_000 + t.nanosecond() as i64 / 1_000
-                })));
+
+                let ns = value.map(|t| {
+                    t.num_seconds_from_midnight() as i64 * 1_000_000_000 + t.nanosecond() as i64
+                });
+
+                let scalar_value = match inferenced_type {
+                    Some(DataType::Time64(TimeUnit::Nanosecond)) => {
+                        ScalarValue::Time64Nanosecond(ns)
+                    }
+                    Some(DataType::Time64(TimeUnit::Microsecond)) => {
+                        ScalarValue::Time64Microsecond(ns.map(|ns| (ns / 1_000) as _))
+                    }
+                    Some(DataType::Time32(TimeUnit::Millisecond)) => {
+                        ScalarValue::Time32Second(ns.map(|ns| (ns / 1_000_000_000) as _))
+                    }
+                    Some(DataType::Time32(TimeUnit::Second)) => {
+                        ScalarValue::Time32Second(ns.map(|ns| (ns / 1_000_000_000) as _))
+                    }
+                    _ => {
+                        return Err(PgWireError::ApiError(
+                            format!(
+                                "Unable to deserialise time parameter type {:?} to type {:?}",
+                                value, inferenced_type
+                            )
+                            .into(),
+                        ))
+                    }
+                };
+
+                deserialized_params.push(scalar_value);
             }
             Type::UUID => {
                 let value = portal.parameter::<String>(i, &pg_type)?;
