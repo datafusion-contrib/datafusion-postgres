@@ -14,7 +14,7 @@ documentation = "https://docs.rs/crate/datafusion-postgres/"
 
 [workspace.dependencies]
 arrow = "56"
-bytes = "1.10.1"
+bytes = "1.11.0"
 chrono = { version = "0.4", features = ["std"] }
 datafusion = { version = "50", default-features = false }
 futures = "0.3"
