@@ -519,4 +519,45 @@ mod tests {
 
         assert!(encoder.encoded_value == val);
     }
+
+    #[test]
+    fn test_get_time32_second_value() {
+        let array = Time32SecondArray::from_iter_values([3723_i32]);
+        let array: Arc<dyn Array> = Arc::new(array);
+        let value = get_time32_second_value(&array, 0);
+        assert_eq!(value, Some(NaiveTime::from_hms_opt(1, 2, 3)).unwrap());
+    }
+
+    #[test]
+    fn test_get_time32_millisecond_value() {
+        let array = Time32MillisecondArray::from_iter_values([3723001_i32]);
+        let array: Arc<dyn Array> = Arc::new(array);
+        let value = get_time32_millisecond_value(&array, 0);
+        assert_eq!(
+            value,
+            Some(NaiveTime::from_hms_milli_opt(1, 2, 3, 1)).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_get_time64_microsecond_value() {
+        let array = Time64MicrosecondArray::from_iter_values([3723001001_i64]);
+        let array: Arc<dyn Array> = Arc::new(array);
+        let value = get_time64_microsecond_value(&array, 0);
+        assert_eq!(
+            value,
+            Some(NaiveTime::from_hms_micro_opt(1, 2, 3, 1001)).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_get_time64_nanosecond_value() {
+        let array = Time64NanosecondArray::from_iter_values([3723001001001_i64]);
+        let array: Arc<dyn Array> = Arc::new(array);
+        let value = get_time64_nanosecond_value(&array, 0);
+        assert_eq!(
+            value,
+            Some(NaiveTime::from_hms_nano_opt(1, 2, 3, 1001001)).unwrap()
+        );
+    }
 }
