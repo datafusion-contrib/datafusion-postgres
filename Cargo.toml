@@ -5,7 +5,7 @@ members = ["datafusion-postgres", "datafusion-postgres-cli", "arrow-pg", "datafu
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
-rust-version = "1.86.0"
+rust-version = "1.88.0"
 authors = ["Ning Sun <n@sunng.info>"]
 keywords = ["database", "postgresql", "datafusion"]
 homepage = "https://github.com/datafusion-contrib/datafusion-postgres/"
