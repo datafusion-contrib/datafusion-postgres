@@ -317,7 +317,9 @@ where
         }
     }
 
-    Ok(ParamValues::List(deserialized_params))
+    Ok(ParamValues::List(
+        deserialized_params.into_iter().map(|p| p.into()).collect(),
+    ))
 }
 
 #[cfg(test)]
@@ -376,7 +378,7 @@ mod tests {
             };
 
             assert_eq!(list.len(), 1);
-            assert_eq!(list[0], expected)
+            assert_eq!(list[0].value(), &expected)
         }
     }
 }

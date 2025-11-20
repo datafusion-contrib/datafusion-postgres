@@ -205,7 +205,7 @@ where
                 .config_mut()
                 .options_mut()
                 .execution
-                .time_zone = tz.to_string();
+                .time_zone = Some(tz.to_string());
             return Some(Ok(Response::Execution(Tag::new("SET"))));
         }
         _ => {}
