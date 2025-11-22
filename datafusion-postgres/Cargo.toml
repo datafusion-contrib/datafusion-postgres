@@ -19,6 +19,7 @@ async-trait = "0.1"
 chrono.workspace = true
 datafusion.workspace = true
 datafusion-pg-catalog = { path = "../datafusion-pg-catalog", version = "0.12.1" }
+geodatafusion = { version = "0.1.1", optional = true }
 futures.workspace = true
 getset = "0.1"
 log = "0.4"
@@ -32,3 +33,7 @@ rustls-pki-types = "1.13"
 
 [dev-dependencies]
 env_logger = "0.11"
+
+[features]
+default = []
+postgis = ["geodatafusion"]
