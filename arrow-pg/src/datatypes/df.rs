@@ -64,7 +64,7 @@ where
     S: Clone,
 {
     fn get_pg_type(
-        pg_type_hint: Option<&Type>,
+        pg_type_hint: Option<Type>,
         inferenced_type: Option<&DataType>,
     ) -> PgWireResult<Type> {
         if let Some(ty) = pg_type_hint {
@@ -80,7 +80,14 @@ where
     let mut deserialized_params = Vec::with_capacity(param_len);
     for i in 0..param_len {
         let inferenced_type = inferenced_types.get(i).and_then(|v| v.to_owned());
-        let pg_type = get_pg_type(portal.statement.parameter_types.get(i), inferenced_type)?;
+        let pg_type = get_pg_type(
+            portal
+                .statement
+                .parameter_types
+                .get(i)
+                .and_then(|f| f.clone()),
+            inferenced_type,
+        )?;
         match pg_type {
             // enumerate all supported parameter types and deserialize the
             // type to ScalarValue
@@ -337,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_deserialise_time_params() {
-        let postgres_types = vec![Type::TIME];
+        let postgres_types = vec![Some(Type::TIME)];
 
         let us: i64 = 1_000_000; // 1 second
 
