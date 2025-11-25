@@ -53,9 +53,6 @@ jobs:
         override: true
     - name: Build and run tests
       run: cargo test --all-features
-    - name: Test arrow-pg default features
-      working-directory: arrow-pg
-      run: cargo test
 
   integration:
     name: Integration tests
