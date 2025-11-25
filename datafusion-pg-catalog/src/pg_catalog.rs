@@ -1037,7 +1037,7 @@ pub fn create_current_schemas_udf() -> ScalarUDF {
     create_udf(
         "current_schemas",
         vec![DataType::Boolean],
-        DataType::List(Arc::new(Field::new("schema", DataType::Utf8, false))),
+        DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
         Volatility::Immutable,
         Arc::new(func),
     )
