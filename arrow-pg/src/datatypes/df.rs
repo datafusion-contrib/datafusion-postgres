@@ -163,6 +163,7 @@ where
             }
             Type::TIME => {
                 let value = portal.parameter::<NaiveTime>(i, &pg_type)?;
+                dbg!(&value);
 
                 let ns = value.map(|t| {
                     t.num_seconds_from_midnight() as i64 * 1_000_000_000 + t.nanosecond() as i64
@@ -336,7 +337,7 @@ mod tests {
     use datafusion::{common::ParamValues, scalar::ScalarValue};
     use pgwire::{
         api::{portal::Portal, stmt::StoredStatement},
-        messages::extendedquery::Bind,
+        messages::{data::FORMAT_CODE_BINARY, extendedquery::Bind},
     };
     use postgres_types::Type;
 
@@ -351,7 +352,7 @@ mod tests {
         let bind = Bind::new(
             None,
             None,
-            vec![],
+            vec![FORMAT_CODE_BINARY],
             vec![Some(Bytes::from(i64::to_be_bytes(us).to_vec()))],
             vec![],
         );
