@@ -16,10 +16,6 @@ rust-version.workspace = true
 default = ["arrow"]
 arrow = ["dep:arrow"]
 datafusion = ["dep:datafusion"]
-# for testing
-_duckdb = []
-_bundled = ["duckdb/bundled"]
-
 
 [dependencies]
 arrow = { workspace = true, optional = true }
@@ -33,9 +29,4 @@ rust_decimal.workspace = true
 
 [dev-dependencies]
 async-trait = "0.1"
-duckdb = { version = "~1.4" }
 tokio = { version = "1.48", features = ["full"]}
-
-[[example]]
-name = "duckdb"
-required-features = ["_duckdb"]
