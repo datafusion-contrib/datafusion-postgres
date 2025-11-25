@@ -64,7 +64,7 @@ where
     S: Clone,
 {
     fn get_pg_type(
-        pg_type_hint: Option<&Type>,
+        pg_type_hint: Option<Type>,
         inferenced_type: Option<&DataType>,
     ) -> PgWireResult<Type> {
         if let Some(ty) = pg_type_hint {
@@ -80,7 +80,14 @@ where
     let mut deserialized_params = Vec::with_capacity(param_len);
     for i in 0..param_len {
         let inferenced_type = inferenced_types.get(i).and_then(|v| v.to_owned());
-        let pg_type = get_pg_type(portal.statement.parameter_types.get(i), inferenced_type)?;
+        let pg_type = get_pg_type(
+            portal
+                .statement
+                .parameter_types
+                .get(i)
+                .and_then(|f| f.clone()),
+            inferenced_type,
+        )?;
         match pg_type {
             // enumerate all supported parameter types and deserialize the
             // type to ScalarValue
@@ -156,6 +163,7 @@ where
             }
             Type::TIME => {
                 let value = portal.parameter::<NaiveTime>(i, &pg_type)?;
+                dbg!(&value);
 
                 let ns = value.map(|t| {
                     t.num_seconds_from_midnight() as i64 * 1_000_000_000 + t.nanosecond() as i64
@@ -329,7 +337,7 @@ mod tests {
     use datafusion::{common::ParamValues, scalar::ScalarValue};
     use pgwire::{
         api::{portal::Portal, stmt::StoredStatement},
-        messages::extendedquery::Bind,
+        messages::{data::FORMAT_CODE_BINARY, extendedquery::Bind},
     };
     use postgres_types::Type;
 
@@ -337,14 +345,14 @@ mod tests {
 
     #[test]
     fn test_deserialise_time_params() {
-        let postgres_types = vec![Type::TIME];
+        let postgres_types = vec![Some(Type::TIME)];
 
         let us: i64 = 1_000_000; // 1 second
 
         let bind = Bind::new(
             None,
             None,
-            vec![],
+            vec![FORMAT_CODE_BINARY],
             vec![Some(Bytes::from(i64::to_be_bytes(us).to_vec()))],
             vec![],
         );
