@@ -19,7 +19,7 @@ include = [
 
 [dependencies]
 async-trait = "0.1"
-datafusion.workspace = true
+datafusion = { workspace = true, features = ["sql"] }
 futures.workspace = true
 log = "0.4"
 postgres-types.workspace = true
