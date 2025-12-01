@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::common::{ParamValues, ToDFSchema};
-use datafusion::error::DataFusionError;
+use datafusion::arrow::datatypes::DataType;
+use datafusion::common::ParamValues;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
 use datafusion::sql::parser::Statement;
@@ -504,40 +503,6 @@ pub struct Parser {
     query_hooks: Vec<Arc<dyn QueryHook>>,
 }
 
-impl Parser {
-    fn try_shortcut_parse_plan(&self, sql: &str) -> Result<Option<LogicalPlan>, DataFusionError> {
-        // Check for transaction commands that shouldn't be parsed by DataFusion
-        let sql_lower = sql.to_lowercase();
-        let sql_trimmed = sql_lower.trim();
-
-        if sql_trimmed.is_empty() {
-            // Return a dummy plan for transaction commands - they'll be handled by transaction handler
-            let dummy_schema = datafusion::common::DFSchema::empty();
-            return Ok(Some(LogicalPlan::EmptyRelation(
-                datafusion::logical_expr::EmptyRelation {
-                    produce_one_row: false,
-                    schema: Arc::new(dummy_schema),
-                },
-            )));
-        }
-
-        // show statement may not be supported by datafusion
-        if sql_trimmed.starts_with("show") {
-            let show_schema =
-                Arc::new(Schema::new(vec![Field::new("show", DataType::Utf8, false)]));
-            let df_schema = show_schema.to_dfschema()?;
-            return Ok(Some(LogicalPlan::EmptyRelation(
-                datafusion::logical_expr::EmptyRelation {
-                    produce_one_row: true,
-                    schema: Arc::new(df_schema),
-                },
-            )));
-        }
-
-        Ok(None)
-    }
-}
-
 #[async_trait]
 impl QueryParser for Parser {
     type Statement = (String, Option<(sqlparser::ast::Statement, LogicalPlan)>);
@@ -562,15 +527,6 @@ impl QueryParser for Parser {
         }
 
         let statement = statements.remove(0);
-
-        // Check for transaction commands that shouldn't be parsed by DataFusion
-        if let Some(plan) = self
-            .try_shortcut_parse_plan(sql)
-            .map_err(|e| PgWireError::ApiError(Box::new(e)))?
-        {
-            return Ok((sql.to_string(), Some((statement, plan))));
-        }
-
         let query = statement.to_string();
 
         let context = &self.session_context;

@@ -47,36 +47,35 @@ impl QueryHook for SetShowHook {
         _session_context: &SessionContext,
         _client: &(dyn ClientInfo + Send + Sync),
     ) -> Option<PgWireResult<LogicalPlan>> {
-        let sql_lower = stmt.to_string().to_lowercase();
-        let sql_trimmed = sql_lower.trim();
-
-        if sql_trimmed.starts_with("show") {
-            let show_schema =
-                Arc::new(Schema::new(vec![Field::new("show", DataType::Utf8, false)]));
-            let result = show_schema
-                .to_dfschema()
-                .map(|df_schema| {
-                    LogicalPlan::EmptyRelation(datafusion::logical_expr::EmptyRelation {
-                        produce_one_row: true,
-                        schema: Arc::new(df_schema),
+        match stmt {
+            Statement::Set { .. } => {
+                let show_schema = Arc::new(Schema::new(Vec::<Field>::new()));
+                let result = show_schema
+                    .to_dfschema()
+                    .map(|df_schema| {
+                        LogicalPlan::EmptyRelation(datafusion::logical_expr::EmptyRelation {
+                            produce_one_row: true,
+                            schema: Arc::new(df_schema),
+                        })
                     })
-                })
-                .map_err(|e| PgWireError::ApiError(Box::new(e)));
-            Some(result)
-        } else if sql_trimmed.starts_with("set") {
-            let show_schema = Arc::new(Schema::new(Vec::<Field>::new()));
-            let result = show_schema
-                .to_dfschema()
-                .map(|df_schema| {
-                    LogicalPlan::EmptyRelation(datafusion::logical_expr::EmptyRelation {
-                        produce_one_row: true,
-                        schema: Arc::new(df_schema),
+                    .map_err(|e| PgWireError::ApiError(Box::new(e)));
+                Some(result)
+            }
+            Statement::ShowVariable { .. } | Statement::ShowStatus { .. } => {
+                let show_schema =
+                    Arc::new(Schema::new(vec![Field::new("show", DataType::Utf8, false)]));
+                let result = show_schema
+                    .to_dfschema()
+                    .map(|df_schema| {
+                        LogicalPlan::EmptyRelation(datafusion::logical_expr::EmptyRelation {
+                            produce_one_row: true,
+                            schema: Arc::new(df_schema),
+                        })
                     })
-                })
-                .map_err(|e| PgWireError::ApiError(Box::new(e)));
-            Some(result)
-        } else {
-            None
+                    .map_err(|e| PgWireError::ApiError(Box::new(e)));
+                Some(result)
+            }
+            _ => None,
         }
     }
 

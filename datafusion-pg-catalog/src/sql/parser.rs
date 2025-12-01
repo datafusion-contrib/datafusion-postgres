@@ -336,4 +336,17 @@ mod tests {
         let match_result = parser.parse_and_replace(sql).expect("failed to parse sql");
         assert!(matches!(match_result, MatchResult::Matches(_)));
     }
+
+    #[test]
+    fn test_empty_query() {
+        let parser = PostgresCompatibilityParser::new();
+        let result = parser.parse(" ").expect("failed to parse sql");
+        assert!(result.is_empty());
+
+        let result = parser.parse("").expect("failed to parse sql");
+        assert!(result.is_empty());
+
+        let result = parser.parse(";").expect("failed to parse sql");
+        assert!(result.is_empty());
+    }
 }
