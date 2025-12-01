@@ -99,15 +99,10 @@ pub async fn serve(
 pub async fn serve_with_hooks(
     session_context: Arc<SessionContext>,
     opts: &ServerOptions,
-    auth_manager: Arc<AuthManager>,
     hooks: Vec<Arc<dyn QueryHook>>,
 ) -> Result<(), std::io::Error> {
     // Create the handler factory with authentication
-    let factory = Arc::new(HandlerFactory::new_with_hooks(
-        session_context,
-        auth_manager,
-        hooks,
-    ));
+    let factory = Arc::new(HandlerFactory::new_with_hooks(session_context, hooks));
 
     serve_with_handlers(factory, opts).await
 }
