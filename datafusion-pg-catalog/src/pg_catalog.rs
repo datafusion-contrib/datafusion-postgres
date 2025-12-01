@@ -1404,6 +1404,27 @@ pub fn create_pg_get_constraintdef() -> ScalarUDF {
     GetConstraintDefUDF::new().into()
 }
 
+pub fn create_pg_get_partition_ancestors_udf() -> ScalarUDF {
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let string_array = args[0].as_string::<i32>();
+
+        let mut builder = StringBuilder::new();
+        string_array.iter().for_each(|i| builder.append_option(i));
+        let array: ArrayRef = Arc::new(builder.finish());
+
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "pg_partition_ancestors",
+        vec![DataType::Utf8],
+        DataType::Utf8,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
 /// Install pg_catalog and postgres UDFs to current `SessionContext`
 pub fn setup_pg_catalog<P>(
     session_context: &SessionContext,
@@ -1459,6 +1480,7 @@ where
     session_context.register_udf(create_pg_total_relation_size_udf());
     session_context.register_udf(create_pg_stat_get_numscans());
     session_context.register_udf(create_pg_get_constraintdef());
+    session_context.register_udf(create_pg_get_partition_ancestors_udf());
 
     Ok(())
 }
