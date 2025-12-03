@@ -24,12 +24,12 @@ use pgwire::types::format::FormatOptions;
 
 use crate::auth::AuthManager;
 use crate::client;
+use crate::hooks::permissions::PermissionsHook;
 use crate::hooks::set_show::SetShowHook;
 use crate::hooks::transactions::TransactionStatementHook;
 use crate::hooks::QueryHook;
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
-use datafusion_pg_catalog::pg_catalog::context::{Permission, ResourceType};
 use datafusion_pg_catalog::sql::PostgresCompatibilityParser;
 
 /// Simple startup handler that does no authentication
@@ -52,12 +52,10 @@ impl HandlerFactory {
 
     pub fn new_with_hooks(
         session_context: Arc<SessionContext>,
-        auth_manager: Arc<AuthManager>,
         query_hooks: Vec<Arc<dyn QueryHook>>,
     ) -> Self {
         let session_service = Arc::new(DfSessionService::new_with_hooks(
             session_context,
-            auth_manager.clone(),
             query_hooks,
         ));
         HandlerFactory { session_service }
@@ -97,7 +95,6 @@ impl ErrorHandler for LoggingErrorHandler {
 pub struct DfSessionService {
     session_context: Arc<SessionContext>,
     parser: Arc<Parser>,
-    auth_manager: Arc<AuthManager>,
     query_hooks: Vec<Arc<dyn QueryHook>>,
 }
 
@@ -106,14 +103,16 @@ impl DfSessionService {
         session_context: Arc<SessionContext>,
         auth_manager: Arc<AuthManager>,
     ) -> DfSessionService {
-        let hooks: Vec<Arc<dyn QueryHook>> =
-            vec![Arc::new(SetShowHook), Arc::new(TransactionStatementHook)];
-        Self::new_with_hooks(session_context, auth_manager, hooks)
+        let hooks: Vec<Arc<dyn QueryHook>> = vec![
+            Arc::new(PermissionsHook::new(auth_manager)),
+            Arc::new(SetShowHook),
+            Arc::new(TransactionStatementHook),
+        ];
+        Self::new_with_hooks(session_context, hooks)
     }
 
     pub fn new_with_hooks(
         session_context: Arc<SessionContext>,
-        auth_manager: Arc<AuthManager>,
         query_hooks: Vec<Arc<dyn QueryHook>>,
     ) -> DfSessionService {
         let parser = Arc::new(Parser {
@@ -124,84 +123,8 @@ impl DfSessionService {
         DfSessionService {
             session_context,
             parser,
-            auth_manager,
             query_hooks,
         }
-    }
-
-    /// Check if the current user has permission to execute a query
-    async fn check_query_permission<C>(&self, client: &C, query: &str) -> PgWireResult<()>
-    where
-        C: ClientInfo,
-    {
-        // Get the username from client metadata
-        let username = client
-            .metadata()
-            .get("user")
-            .map(|s| s.as_str())
-            .unwrap_or("anonymous");
-
-        // Parse query to determine required permissions
-        let query_lower = query.to_lowercase();
-        let query_trimmed = query_lower.trim();
-
-        let (required_permission, resource) = if query_trimmed.starts_with("select") {
-            (Permission::Select, self.extract_table_from_query(query))
-        } else if query_trimmed.starts_with("insert") {
-            (Permission::Insert, self.extract_table_from_query(query))
-        } else if query_trimmed.starts_with("update") {
-            (Permission::Update, self.extract_table_from_query(query))
-        } else if query_trimmed.starts_with("delete") {
-            (Permission::Delete, self.extract_table_from_query(query))
-        } else if query_trimmed.starts_with("create table")
-            || query_trimmed.starts_with("create view")
-        {
-            (Permission::Create, ResourceType::All)
-        } else if query_trimmed.starts_with("drop") {
-            (Permission::Drop, self.extract_table_from_query(query))
-        } else if query_trimmed.starts_with("alter") {
-            (Permission::Alter, self.extract_table_from_query(query))
-        } else {
-            // For other queries (SHOW, EXPLAIN, etc.), allow all users
-            return Ok(());
-        };
-
-        // Check permission
-        let has_permission = self
-            .auth_manager
-            .check_permission(username, required_permission, resource)
-            .await;
-
-        if !has_permission {
-            return Err(PgWireError::UserError(Box::new(
-                pgwire::error::ErrorInfo::new(
-                    "ERROR".to_string(),
-                    "42501".to_string(), // insufficient_privilege
-                    format!("permission denied for user \"{username}\""),
-                ),
-            )));
-        }
-
-        Ok(())
-    }
-
-    /// Extract table name from query (simplified parsing)
-    fn extract_table_from_query(&self, query: &str) -> ResourceType {
-        let words: Vec<&str> = query.split_whitespace().collect();
-
-        // Simple heuristic to find table names
-        for (i, word) in words.iter().enumerate() {
-            let word_lower = word.to_lowercase();
-            if (word_lower == "from" || word_lower == "into" || word_lower == "table")
-                && i + 1 < words.len()
-            {
-                let table_name = words[i + 1].trim_matches(|c| c == '(' || c == ')' || c == ';');
-                return ResourceType::Table(table_name.to_string());
-            }
-        }
-
-        // If we can't determine the table, default to All
-        ResourceType::All
     }
 }
 
@@ -229,19 +152,6 @@ impl SimpleQueryHandler for DfSessionService {
             // TODO: improve statement check by using statement directly
             let query = statement.to_string();
             let query_lower = query.to_lowercase().trim().to_string();
-
-            // Check permissions for the query (skip for SET, transaction, and SHOW statements)
-            if !query_lower.starts_with("set")
-                && !query_lower.starts_with("begin")
-                && !query_lower.starts_with("commit")
-                && !query_lower.starts_with("rollback")
-                && !query_lower.starts_with("start")
-                && !query_lower.starts_with("end")
-                && !query_lower.starts_with("abort")
-                && !query_lower.starts_with("show")
-            {
-                self.check_query_permission(client, &query).await?;
-            }
 
             // Call query hooks with the parsed statement
             for hook in &self.query_hooks {
@@ -400,12 +310,6 @@ impl ExtendedQueryHandler for DfSessionService {
                     }
                 }
             }
-        }
-
-        // Check permissions for the query (skip for SET and SHOW statements)
-        if !query.starts_with("set") && !query.starts_with("show") {
-            self.check_query_permission(client, &portal.statement.statement.0)
-                .await?;
         }
 
         if let (_, Some((_, plan))) = &portal.statement.statement {
@@ -632,10 +536,9 @@ mod tests {
         // which would exit the entire statement loop, preventing subsequent statements
         // from being processed.
         let session_context = Arc::new(SessionContext::new());
-        let auth_manager = Arc::new(AuthManager::new());
 
         let hooks: Vec<Arc<dyn QueryHook>> = vec![Arc::new(TestHook)];
-        let service = DfSessionService::new_with_hooks(session_context, auth_manager, hooks);
+        let service = DfSessionService::new_with_hooks(session_context, hooks);
 
         let mut client = MockClient::new();
 
