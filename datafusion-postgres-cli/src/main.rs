@@ -199,6 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let session_config = SessionConfig::new().with_information_schema(true);
     let session_context = SessionContext::new_with_config(session_config);
 
+    // TODO: remove or replace AuthManager for pg_catalog
     let auth_manager = Arc::new(AuthManager::new());
     setup_session_context(&session_context, &opts, Arc::clone(&auth_manager)).await?;
 

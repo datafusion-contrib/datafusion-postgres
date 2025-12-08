@@ -31,7 +31,6 @@ use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
 use datafusion_pg_catalog::sql::PostgresCompatibilityParser;
 
 /// Simple startup handler that does no authentication
-/// For production, use DfAuthSource with proper pgwire authentication handlers
 pub struct SimpleStartupHandler;
 
 #[async_trait::async_trait]
