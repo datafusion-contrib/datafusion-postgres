@@ -40,21 +40,21 @@ impl PermissionsHook {
         let query_trimmed = query_lower.trim();
 
         let (required_permission, resource) = if query_trimmed.starts_with("select") {
-            (Permission::Select, self.extract_table_from_query(query))
+            (Permission::Select, ResourceType::All)
         } else if query_trimmed.starts_with("insert") {
-            (Permission::Insert, self.extract_table_from_query(query))
+            (Permission::Insert, ResourceType::All)
         } else if query_trimmed.starts_with("update") {
-            (Permission::Update, self.extract_table_from_query(query))
+            (Permission::Update, ResourceType::All)
         } else if query_trimmed.starts_with("delete") {
-            (Permission::Delete, self.extract_table_from_query(query))
+            (Permission::Delete, ResourceType::All)
         } else if query_trimmed.starts_with("create table")
             || query_trimmed.starts_with("create view")
         {
             (Permission::Create, ResourceType::All)
         } else if query_trimmed.starts_with("drop") {
-            (Permission::Drop, self.extract_table_from_query(query))
+            (Permission::Drop, ResourceType::All)
         } else if query_trimmed.starts_with("alter") {
-            (Permission::Alter, self.extract_table_from_query(query))
+            (Permission::Alter, ResourceType::All)
         } else {
             // For other queries (SHOW, EXPLAIN, etc.), allow all users
             return Ok(());
@@ -77,25 +77,6 @@ impl PermissionsHook {
         }
 
         Ok(())
-    }
-
-    /// Extract table name from query (simplified parsing)
-    fn extract_table_from_query(&self, query: &str) -> ResourceType {
-        let words: Vec<&str> = query.split_whitespace().collect();
-
-        // Simple heuristic to find table names
-        for (i, word) in words.iter().enumerate() {
-            let word_lower = word.to_lowercase();
-            if (word_lower == "from" || word_lower == "into" || word_lower == "table")
-                && i + 1 < words.len()
-            {
-                let table_name = words[i + 1].trim_matches(|c| c == '(' || c == ')' || c == ';');
-                return ResourceType::Table(table_name.to_string());
-            }
-        }
-
-        // If we can't determine the table, default to All
-        ResourceType::All
     }
 }
 
