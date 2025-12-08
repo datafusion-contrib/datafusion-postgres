@@ -21,7 +21,6 @@ use tokio::sync::Semaphore;
 use tokio_rustls::rustls::{self, ServerConfig};
 use tokio_rustls::TlsAcceptor;
 
-use crate::auth::AuthManager;
 use handlers::HandlerFactory;
 pub use handlers::{DfSessionService, Parser};
 pub use hooks::QueryHook;
@@ -86,10 +85,9 @@ fn setup_tls(cert_path: &str, key_path: &str) -> Result<TlsAcceptor, IOError> {
 pub async fn serve(
     session_context: Arc<SessionContext>,
     opts: &ServerOptions,
-    auth_manager: Arc<AuthManager>,
 ) -> Result<(), std::io::Error> {
     // Create the handler factory with authentication
-    let factory = Arc::new(HandlerFactory::new(session_context, auth_manager));
+    let factory = Arc::new(HandlerFactory::new(session_context));
 
     serve_with_handlers(factory, opts).await
 }

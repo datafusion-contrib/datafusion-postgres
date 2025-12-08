@@ -22,9 +22,7 @@ use pgwire::api::{ClientInfo, ErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::types::format::FormatOptions;
 
-use crate::auth::AuthManager;
 use crate::client;
-use crate::hooks::permissions::PermissionsHook;
 use crate::hooks::set_show::SetShowHook;
 use crate::hooks::transactions::TransactionStatementHook;
 use crate::hooks::QueryHook;
@@ -44,9 +42,8 @@ pub struct HandlerFactory {
 }
 
 impl HandlerFactory {
-    pub fn new(session_context: Arc<SessionContext>, auth_manager: Arc<AuthManager>) -> Self {
-        let session_service =
-            Arc::new(DfSessionService::new(session_context, auth_manager.clone()));
+    pub fn new(session_context: Arc<SessionContext>) -> Self {
+        let session_service = Arc::new(DfSessionService::new(session_context));
         HandlerFactory { session_service }
     }
 
@@ -99,15 +96,9 @@ pub struct DfSessionService {
 }
 
 impl DfSessionService {
-    pub fn new(
-        session_context: Arc<SessionContext>,
-        auth_manager: Arc<AuthManager>,
-    ) -> DfSessionService {
-        let hooks: Vec<Arc<dyn QueryHook>> = vec![
-            Arc::new(PermissionsHook::new(auth_manager)),
-            Arc::new(SetShowHook),
-            Arc::new(TransactionStatementHook),
-        ];
+    pub fn new(session_context: Arc<SessionContext>) -> DfSessionService {
+        let hooks: Vec<Arc<dyn QueryHook>> =
+            vec![Arc::new(SetShowHook), Arc::new(TransactionStatementHook)];
         Self::new_with_hooks(session_context, hooks)
     }
 

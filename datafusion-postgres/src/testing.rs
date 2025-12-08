@@ -21,7 +21,7 @@ pub fn setup_handlers() -> DfSessionService {
     )
     .expect("Failed to setup sesession context");
 
-    DfSessionService::new(Arc::new(session_context), Arc::new(AuthManager::new()))
+    DfSessionService::new(Arc::new(session_context))
 }
 
 #[derive(Debug, Default)]
