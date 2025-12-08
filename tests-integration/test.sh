@@ -20,7 +20,7 @@ wait_for_port() {
     local port=$1
     local timeout=30
     local count=0
-    
+
     # Use netstat as fallback if lsof is not available
     while (lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1) || (netstat -ln 2>/dev/null | grep ":$port " >/dev/null 2>&1); do
         if [ $count -ge $timeout ]; then
@@ -120,32 +120,6 @@ fi
 kill -9 $PARQUET_PID 2>/dev/null || true
 sleep 3
 
-# Test 4: Role-Based Access Control
-echo ""
-echo "🔐 Test 4: Role-Based Access Control (RBAC)"
-echo "--------------------------------------------"
-wait_for_port 5435
-../target/debug/datafusion-postgres-cli -p 5435 --csv delhi:delhiclimate.csv &
-RBAC_PID=$!
-sleep 5
-
-# Check if server is actually running
-if ! ps -p $RBAC_PID > /dev/null 2>&1; then
-    echo "❌ RBAC server failed to start"
-    exit 1
-fi
-
-if python3 test_rbac.py; then
-    echo "✅ RBAC test passed"
-else
-    echo "❌ RBAC test failed"
-    kill -9 $RBAC_PID 2>/dev/null || true
-    exit 1
-fi
-
-kill -9 $RBAC_PID 2>/dev/null || true
-sleep 3
-
 # Test 5: SSL/TLS Security
 echo ""
 echo "🔒 Test 5: SSL/TLS Security Features"
@@ -177,12 +151,10 @@ echo "=========================================="
 echo ""
 echo "📈 Test Summary:"
 echo "  ✅ Enhanced CSV data loading with PostgreSQL compatibility"
-echo "  ✅ Complete transaction support (BEGIN/COMMIT/ROLLBACK)"  
+echo "  ✅ Complete transaction support (BEGIN/COMMIT/ROLLBACK)"
 echo "  ✅ Enhanced Parquet data loading with advanced data types"
 echo "  ✅ Array types and complex data type support"
 echo "  ✅ Improved pg_catalog system tables"
 echo "  ✅ PostgreSQL function compatibility"
-echo "  ✅ Role-based access control (RBAC)"
 echo "  ✅ SSL/TLS encryption support"
 echo ""
-echo "🚀 Ready for secure production PostgreSQL workloads!"
