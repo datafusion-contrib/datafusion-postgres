@@ -36,9 +36,10 @@ the [pgwire](https://github.com/sunng87/pgwire) project.
   - [x] pgcli
   - [x] VSCode SQLTools
   - [ ] Intellij Datagrip
-- BI
+- BI & Visualization
   - [x] Metabase
   - [ ] PowerBI
+  - [x] Grafana
 
 ## Quick Start
 
