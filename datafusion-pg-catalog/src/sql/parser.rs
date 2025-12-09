@@ -173,7 +173,7 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
                 array_upper(string_to_array(current_setting('search_path'),','),1)
             ) as i,
             string_to_array(current_setting('search_path'),',') s"#,
-"'public'")
+"''")
 ];
 
 /// A parser with Postgres Compatibility for Datafusion
@@ -239,132 +239,82 @@ impl PostgresCompatibilityParser {
     }
 
     /// return tokens with replacements applied
-    fn maybe_replace_tokens(&self, input: &str) -> Result<Vec<TokenWithSpan>, ParserError> {
+    fn maybe_replace_tokens(&self, input: &str) -> Result<Vec<Token>, ParserError> {
         let parser = Parser::new(&PostgreSqlDialect {});
         let tokens = parser.try_with_sql(input)?.into_tokens();
 
-        // Filter out whitespace and semicolon tokens for comparison
-        let filtered_tokens: Vec<&TokenWithSpan> = tokens
+        // Get token values (without spans) and filter out only whitespace
+        // Keep semicolons as they separate statements
+        let filtered_tokens: Vec<Token> = tokens
             .iter()
-            .filter(|t| !matches!(t.token, Token::Whitespace(_) | Token::SemiColon))
+            .map(|t| t.token.clone())
+            .filter(|t| !matches!(t, Token::Whitespace(_)))
             .collect();
 
         // Handle empty input
         if filtered_tokens.is_empty() {
-            return Ok(tokens);
+            return Ok(Vec::new());
         }
 
-        // Track which filtered tokens should be replaced and with what
-        let mut to_replace = vec![false; filtered_tokens.len()];
-        let mut replacements: Vec<Option<(Vec<Token>, usize)>> = vec![None; filtered_tokens.len()];
-
-        // Find all matches of blacklist patterns in the filtered tokens
-        for (pattern, replacement) in &self.blacklist {
-            if pattern.is_empty() {
-                continue;
-            }
-
-            // Search for pattern in filtered tokens
-            let mut start = 0;
-            while start < filtered_tokens.len() {
-                if start + pattern.len() > filtered_tokens.len() {
-                    break;
-                }
-
-                // Check if pattern matches starting at position 'start'
-                let mut matches_pattern = true;
-                for i in 0..pattern.len() {
-                    match &pattern[i] {
-                        Token::Placeholder(_) => {
-                            // Placeholder matches any token
-                        }
-                        _ => {
-                            if filtered_tokens[start + i].token != pattern[i] {
-                                matches_pattern = false;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if matches_pattern {
-                    // Mark tokens to be replaced
-                    for i in start..start + pattern.len() {
-                        to_replace[i] = true;
-                    }
-                    // Store replacement and pattern length for the first token
-                    replacements[start] = Some((replacement.clone(), pattern.len()));
-                    // Skip ahead by pattern length to avoid overlapping matches
-                    start += pattern.len();
-                } else {
-                    start += 1;
-                }
-            }
-        }
-
-        // Build the result by replacing matched ranges
+        // Build result by processing filtered tokens sequentially
         let mut result = Vec::new();
         let mut i = 0;
 
-        while i < tokens.len() {
-            // Skip whitespace and semicolons in the original tokens
-            if matches!(tokens[i].token, Token::Whitespace(_) | Token::SemiColon) {
-                result.push(tokens[i].clone());
+        while i < filtered_tokens.len() {
+            // Keep semicolons as-is
+            if matches!(&filtered_tokens[i], Token::SemiColon) {
+                result.push(filtered_tokens[i].clone());
                 i += 1;
                 continue;
             }
 
-            // Find the corresponding index in filtered_tokens
-            let filtered_idx = {
-                let mut count = 0;
-                for (j, token) in tokens.iter().enumerate() {
-                    if j == i {
-                        break;
-                    }
-                    if !matches!(token.token, Token::Whitespace(_) | Token::SemiColon) {
-                        count += 1;
-                    }
+            // Try to find a blacklist pattern match starting at this position
+            let mut matched = false;
+            for (pattern, replacement) in &self.blacklist {
+                if pattern.is_empty() {
+                    continue;
                 }
-                count
-            };
 
-            if filtered_idx < to_replace.len() && to_replace[filtered_idx] {
-                // This token should be replaced
-                if let Some((ref replacement, pattern_len)) = replacements[filtered_idx] {
-                    // Add replacement tokens
-                    let first_span = tokens[i].span;
-                    result.push(TokenWithSpan {
-                        token: replacement[0].clone(),
-                        span: first_span,
-                    });
-
-                    for token in &replacement[1..] {
-                        result.push(TokenWithSpan {
-                            token: token.clone(),
-                            span: first_span,
-                        });
-                    }
-                    // Skip all tokens in this matched pattern
-                    // Find how many original tokens correspond to this pattern
-                    let mut pattern_len_in_original = 0;
-                    let mut filtered_count = 0;
-                    let mut j = i;
-                    while j < tokens.len() && filtered_count < pattern_len {
-                        if !matches!(tokens[j].token, Token::Whitespace(_) | Token::SemiColon) {
-                            filtered_count += 1;
-                        }
-                        pattern_len_in_original += 1;
+                // Check if we have enough tokens remaining
+                let mut j = 0;
+                let mut pattern_idx = 0;
+                while i + j < filtered_tokens.len() && pattern_idx < pattern.len() {
+                    // Skip semicolons in the input when matching patterns
+                    if matches!(&filtered_tokens[i + j], Token::SemiColon) {
                         j += 1;
+                        continue;
                     }
-                    i += pattern_len_in_original;
-                } else {
-                    // Should not happen, but keep the token just in case
-                    result.push(tokens[i].clone());
-                    i += 1;
+
+                    match &pattern[pattern_idx] {
+                        Token::Placeholder(_) => {
+                            // Placeholder matches any non-semicolon token
+                            pattern_idx += 1;
+                            j += 1;
+                        }
+                        _ => {
+                            if filtered_tokens[i + j] != pattern[pattern_idx] {
+                                break;
+                            }
+                            pattern_idx += 1;
+                            j += 1;
+                        }
+                    }
                 }
-            } else {
-                // Keep the original token
-                result.push(tokens[i].clone());
+
+                // Check if we matched the entire pattern
+                if pattern_idx == pattern.len() {
+                    // Add replacement tokens
+                    result.extend(replacement.iter().cloned());
+                    // Skip the matched pattern (including any semicolons we skipped)
+                    i += j;
+                    matched = true;
+                    break;
+                }
+            }
+
+            if !matched {
+                // No match, keep the original token
+                result.push(filtered_tokens[i].clone());
                 i += 1;
             }
         }
@@ -372,9 +322,19 @@ impl PostgresCompatibilityParser {
         Ok(result)
     }
 
-    fn parse_tokens(&self, tokens: Vec<TokenWithSpan>) -> Result<Vec<Statement>, ParserError> {
+    fn parse_tokens(&self, tokens: Vec<Token>) -> Result<Vec<Statement>, ParserError> {
         let parser = Parser::new(&PostgreSqlDialect {});
-        parser.with_tokens_with_locations(tokens).parse_statements()
+        // Convert tokens to TokenWithSpan with dummy spans
+        let tokens_with_spans: Vec<TokenWithSpan> = tokens
+            .into_iter()
+            .map(|token| TokenWithSpan {
+                token,
+                span: datafusion::sql::sqlparser::tokenizer::Span::empty(),
+            })
+            .collect();
+        parser
+            .with_tokens_with_locations(tokens_with_spans)
+            .parse_statements()
     }
 
     pub fn parse(&self, input: &str) -> Result<Vec<Statement>, ParserError> {
@@ -382,7 +342,6 @@ impl PostgresCompatibilityParser {
         let statements = self.parse_tokens(tokens)?;
 
         let statements: Vec<_> = statements.into_iter().map(|s| self.rewrite(s)).collect();
-        //dbg!(&statements[0].to_string());
         Ok(statements)
     }
 
@@ -419,7 +378,6 @@ mod tests {
             .maybe_replace_tokens(sql)
             .expect("failed to parse sql")
             .into_iter()
-            .map(|t| t.token)
             .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
             .collect::<Vec<_>>();
 
@@ -470,7 +428,6 @@ mod tests {
             .maybe_replace_tokens(sql)
             .expect("failed to parse sql")
             .into_iter()
-            .map(|t| t.token)
             .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
             .collect::<Vec<_>>();
 
@@ -521,7 +478,6 @@ mod tests {
             .maybe_replace_tokens(sql)
             .expect("failed to parse sql")
             .into_iter()
-            .map(|t| t.token)
             .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
             .collect::<Vec<_>>();
 
@@ -607,7 +563,7 @@ mod tests {
         let expected_sql = r#"SELECT
         CASE WHEN
               quote_ident(table_schema) IN (
-              'public')
+              '')
           THEN quote_ident(table_name)
           ELSE quote_ident(table_schema) || '.' || quote_ident(table_name)
         END AS "table"
@@ -622,7 +578,7 @@ mod tests {
                                  'timescaledb_experimental')
         ORDER BY CASE WHEN
               quote_ident(table_schema) IN (
-              'public'
+              ''
               ) THEN 0 ELSE 1 END, 1"#;
 
         let expected_tokens = Parser::new(&PostgreSqlDialect {})
@@ -633,7 +589,6 @@ mod tests {
         // Compare token values (ignoring spans and whitespace)
         let actual_tokens: Vec<_> = tokens
             .iter()
-            .map(|t| &t.token)
             .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
             .collect();
         let expected_token_values: Vec<_> = expected_tokens
