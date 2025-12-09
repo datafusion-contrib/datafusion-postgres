@@ -74,6 +74,12 @@ impl ParseIdentUDF {
     }
 }
 
+impl Default for ParseIdentUDF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScalarUDFImpl for ParseIdentUDF {
     fn as_any(&self) -> &dyn std::any::Any {
         self

@@ -145,8 +145,8 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
                  (SELECT string_agg(attname, ', ')
                    FROM pg_catalog.generate_series(0, pg_catalog.array_upper(pr.prattrs::pg_catalog.int2[], 1)) s,
                         pg_catalog.pg_attribute
-                   WHERE attrelid = pr.prrelid AND attnum = pr.attrs[s])
-                 ELSE NULL END) FROM pg_catalog.pg_publication p
+                  WHERE attrelid = pr.prrelid AND attnum = prattrs[s])
+                ELSE NULL END) FROM pg_catalog.pg_publication p
              JOIN pg_catalog.pg_publication_rel pr ON p.oid = pr.prpubid
              JOIN pg_catalog.pg_class c ON c.oid = pr.prrelid
         WHERE pr.prrelid = $1
@@ -244,10 +244,9 @@ impl PostgresCompatibilityParser {
         let tokens = parser.try_with_sql(input)?.into_tokens();
 
         // Filter out whitespace and semicolon tokens for comparison
-        let filtered_tokens: Vec<(usize, &TokenWithSpan)> = tokens
+        let filtered_tokens: Vec<&TokenWithSpan> = tokens
             .iter()
-            .enumerate()
-            .filter(|(_, t)| !matches!(t.token, Token::Whitespace(_) | Token::SemiColon))
+            .filter(|t| !matches!(t.token, Token::Whitespace(_) | Token::SemiColon))
             .collect();
 
         // Handle empty input
@@ -255,15 +254,19 @@ impl PostgresCompatibilityParser {
             return Ok(tokens);
         }
 
+        // Track which filtered tokens should be replaced and with what
+        let mut to_replace = vec![false; filtered_tokens.len()];
+        let mut replacements: Vec<Option<(Vec<Token>, usize)>> = vec![None; filtered_tokens.len()];
+
         // Find all matches of blacklist patterns in the filtered tokens
-        let mut matches = Vec::new();
         for (pattern, replacement) in &self.blacklist {
             if pattern.is_empty() {
                 continue;
             }
 
             // Search for pattern in filtered tokens
-            for start in 0..filtered_tokens.len() {
+            let mut start = 0;
+            while start < filtered_tokens.len() {
                 if start + pattern.len() > filtered_tokens.len() {
                     break;
                 }
@@ -271,73 +274,99 @@ impl PostgresCompatibilityParser {
                 // Check if pattern matches starting at position 'start'
                 let mut matches_pattern = true;
                 for i in 0..pattern.len() {
-                    if &filtered_tokens[start + i].1.token != &pattern[i] {
-                        matches_pattern = false;
-                        break;
+                    match &pattern[i] {
+                        Token::Placeholder(_) => {
+                            // Placeholder matches any token
+                        }
+                        _ => {
+                            if filtered_tokens[start + i].token != pattern[i] {
+                                matches_pattern = false;
+                                break;
+                            }
+                        }
                     }
                 }
 
                 if matches_pattern {
-                    // Get the original indices for this match
-                    let start_idx = filtered_tokens[start].0;
-                    let end_idx = filtered_tokens[start + pattern.len() - 1].0;
-                    matches.push((start_idx, end_idx, replacement.clone()));
+                    // Mark tokens to be replaced
+                    for i in start..start + pattern.len() {
+                        to_replace[i] = true;
+                    }
+                    // Store replacement and pattern length for the first token
+                    replacements[start] = Some((replacement.clone(), pattern.len()));
+                    // Skip ahead by pattern length to avoid overlapping matches
+                    start += pattern.len();
+                } else {
+                    start += 1;
                 }
-            }
-        }
-
-        // Sort matches by start index for processing
-        matches.sort_by_key(|&(start, _, _)| start);
-
-        // Process matches, handling overlaps by taking the first match that starts at each position
-        let mut processed_matches = Vec::new();
-        let mut last_end = 0;
-
-        for (start, end, replacement) in matches {
-            if start >= last_end {
-                processed_matches.push((start, end, replacement));
-                last_end = end + 1;
             }
         }
 
         // Build the result by replacing matched ranges
         let mut result = Vec::new();
-        let mut current_idx = 0;
+        let mut i = 0;
 
-        for (start, end, replacement) in processed_matches {
-            // Add tokens before the match
-            while current_idx < start {
-                result.push(tokens[current_idx].clone());
-                current_idx += 1;
+        while i < tokens.len() {
+            // Skip whitespace and semicolons in the original tokens
+            if matches!(tokens[i].token, Token::Whitespace(_) | Token::SemiColon) {
+                result.push(tokens[i].clone());
+                i += 1;
+                continue;
             }
 
-            // Add replacement tokens with appropriate spans
-            // Use the span from the first token being replaced for the first replacement token,
-            // and create new spans for subsequent tokens
-            if !replacement.is_empty() {
-                let first_span = tokens[start].span;
-                result.push(TokenWithSpan {
-                    token: replacement[0].clone(),
-                    span: first_span,
-                });
+            // Find the corresponding index in filtered_tokens
+            let filtered_idx = {
+                let mut count = 0;
+                for (j, token) in tokens.iter().enumerate() {
+                    if j == i {
+                        break;
+                    }
+                    if !matches!(token.token, Token::Whitespace(_) | Token::SemiColon) {
+                        count += 1;
+                    }
+                }
+                count
+            };
 
-                for token in &replacement[1..] {
-                    // Create a synthetic span for subsequent tokens
+            if filtered_idx < to_replace.len() && to_replace[filtered_idx] {
+                // This token should be replaced
+                if let Some((ref replacement, pattern_len)) = replacements[filtered_idx] {
+                    // Add replacement tokens
+                    let first_span = tokens[i].span;
                     result.push(TokenWithSpan {
-                        token: token.clone(),
+                        token: replacement[0].clone(),
                         span: first_span,
                     });
+
+                    for token in &replacement[1..] {
+                        result.push(TokenWithSpan {
+                            token: token.clone(),
+                            span: first_span,
+                        });
+                    }
+                    // Skip all tokens in this matched pattern
+                    // Find how many original tokens correspond to this pattern
+                    let mut pattern_len_in_original = 0;
+                    let mut filtered_count = 0;
+                    let mut j = i;
+                    while j < tokens.len() && filtered_count < pattern_len {
+                        if !matches!(tokens[j].token, Token::Whitespace(_) | Token::SemiColon) {
+                            filtered_count += 1;
+                        }
+                        pattern_len_in_original += 1;
+                        j += 1;
+                    }
+                    i += pattern_len_in_original;
+                } else {
+                    // Should not happen, but keep the token just in case
+                    result.push(tokens[i].clone());
+                    i += 1;
                 }
+            } else {
+                // Keep the original token
+                result.push(tokens[i].clone());
+                i += 1;
             }
-
-            // Skip the matched tokens
-            current_idx = end + 1;
-        }
-
-        // Add remaining tokens
-        while current_idx < tokens.len() {
-            result.push(tokens[current_idx].clone());
-            current_idx += 1;
         }
 
         Ok(result)
@@ -352,8 +381,8 @@ impl PostgresCompatibilityParser {
         let tokens = self.maybe_replace_tokens(input)?;
         let statements = self.parse_tokens(tokens)?;
 
-        let statements = statements.into_iter().map(|s| self.rewrite(s)).collect();
-
+        let statements: Vec<_> = statements.into_iter().map(|s| self.rewrite(s)).collect();
+        //dbg!(&statements[0].to_string());
         Ok(statements)
     }
 
@@ -371,7 +400,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sql_mapping() {
+    fn test_full_match() {
         let sql = "SELECT pol.polname, pol.polpermissive,
               CASE WHEN pol.polroles = '{0}' THEN NULL ELSE pg_catalog.array_to_string(array(select rolname from pg_catalog.pg_roles where oid = any (pol.polroles) order by 1),',') END,
               pg_catalog.pg_get_expr(pol.polqual, pol.polrelid),
@@ -386,11 +415,33 @@ mod tests {
             WHERE pol.polrelid = '16384' ORDER BY 1;";
 
         let parser = PostgresCompatibilityParser::new();
-        let tokens = parser
+        let actual_tokens = parser
             .maybe_replace_tokens(sql)
-            .expect("failed to parse sql");
-        // Should be replaced with simple SELECT NULL WHERE FALSE
-        assert!(tokens.len() > 0);
+            .expect("failed to parse sql")
+            .into_iter()
+            .map(|t| t.token)
+            .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+            .collect::<Vec<_>>();
+
+        let expected_sql = r#"SELECT
+   NULL::TEXT AS polname,
+   NULL::TEXT AS polpermissive,
+   NULL::TEXT AS array_to_string,
+   NULL::TEXT AS pg_get_expr_1,
+   NULL::TEXT AS pg_get_expr_2,
+   NULL::TEXT AS cmd
+ WHERE false"#;
+
+        let expected_tokens = Parser::new(&PostgreSqlDialect {})
+            .try_with_sql(expected_sql)
+            .unwrap()
+            .into_tokens()
+            .into_iter()
+            .map(|t| t.token)
+            .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual_tokens, expected_tokens);
 
         let sql = "SELECT n.nspname schema_name,
                                        t.typname type_name
@@ -414,11 +465,82 @@ mod tests {
                                 ORDER BY 1, 2";
 
         let parser = PostgresCompatibilityParser::new();
-        let tokens = parser
+
+        let actual_tokens = parser
             .maybe_replace_tokens(sql)
-            .expect("failed to parse sql");
-        // Should be replaced with simple SELECT NULL::TEXT AS schema_name, NULL::TEXT AS type_name WHERE false
-        assert!(tokens.len() > 0);
+            .expect("failed to parse sql")
+            .into_iter()
+            .map(|t| t.token)
+            .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+            .collect::<Vec<_>>();
+
+        let expected_sql =
+            r#"SELECT NULL::TEXT AS schema_name, NULL::TEXT AS type_name WHERE false"#;
+
+        let expected_tokens = Parser::new(&PostgreSqlDialect {})
+            .try_with_sql(expected_sql)
+            .unwrap()
+            .into_tokens()
+            .into_iter()
+            .map(|t| t.token)
+            .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual_tokens, expected_tokens);
+
+        let sql = "SELECT pubname
+             , NULL
+             , NULL
+        FROM pg_catalog.pg_publication p
+             JOIN pg_catalog.pg_publication_namespace pn ON p.oid = pn.pnpubid
+             JOIN pg_catalog.pg_class pc ON pc.relnamespace = pn.pnnspid
+        WHERE pc.oid ='16384' and pg_catalog.pg_relation_is_publishable('16384')
+        UNION
+        SELECT pubname
+             , pg_get_expr(pr.prqual, c.oid)
+             , (CASE WHEN pr.prattrs IS NOT NULL THEN
+                 (SELECT string_agg(attname, ', ')
+                   FROM pg_catalog.generate_series(0, pg_catalog.array_upper(pr.prattrs::pg_catalog.int2[], 1)) s,
+                        pg_catalog.pg_attribute
+                  WHERE attrelid = pr.prrelid AND attnum = prattrs[s])
+                ELSE NULL END) FROM pg_catalog.pg_publication p
+             JOIN pg_catalog.pg_publication_rel pr ON p.oid = pr.prpubid
+             JOIN pg_catalog.pg_class c ON c.oid = pr.prrelid
+        WHERE pr.prrelid = '16384'
+        UNION
+        SELECT pubname
+             , NULL
+             , NULL
+        FROM pg_catalog.pg_publication p
+        WHERE p.puballtables AND pg_catalog.pg_relation_is_publishable('16384')
+        ORDER BY 1;";
+
+        let parser = PostgresCompatibilityParser::new();
+
+        let actual_tokens = parser
+            .maybe_replace_tokens(sql)
+            .expect("failed to parse sql")
+            .into_iter()
+            .map(|t| t.token)
+            .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+            .collect::<Vec<_>>();
+
+        let expected_sql = r#"SELECT
+   NULL::TEXT AS pubname,
+   NULL::TEXT AS _1,
+   NULL::TEXT AS _2
+ WHERE false"#;
+
+        let expected_tokens = Parser::new(&PostgreSqlDialect {})
+            .try_with_sql(expected_sql)
+            .unwrap()
+            .into_tokens()
+            .into_iter()
+            .map(|t| t.token)
+            .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual_tokens, expected_tokens);
     }
 
     #[test]

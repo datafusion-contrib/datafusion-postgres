@@ -26,10 +26,8 @@ use crate::pg_catalog::catalog_info::CatalogInfo;
 use crate::pg_catalog::context::PgCatalogContextProvider;
 use crate::pg_catalog::empty_table::EmptyTable;
 
-pub mod array_bounds_udf;
 pub mod catalog_info;
 pub mod context;
-pub mod current_setting_udf;
 pub mod empty_table;
 pub mod format_type;
 pub mod has_privilege_udf;
