@@ -30,8 +30,8 @@
           nativeBuildInputs = with pkgs; [
             pkg-config
             clang
+            llvmPackages.bintools
             git
-            mold
             (fenix.packages.${system}.stable.withComponents [
               "cargo"
               "clippy"
