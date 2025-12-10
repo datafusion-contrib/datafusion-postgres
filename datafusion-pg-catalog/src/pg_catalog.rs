@@ -42,6 +42,7 @@ pub mod pg_settings;
 pub mod pg_stat_gssapi;
 pub mod pg_tables;
 pub mod pg_views;
+pub mod quote_ident_udf;
 
 const PG_CATALOG_TABLE_PG_AGGREGATE: &str = "pg_aggregate";
 const PG_CATALOG_TABLE_PG_AM: &str = "pg_am";
@@ -1481,6 +1482,8 @@ where
     session_context.register_udf(create_pg_stat_get_numscans());
     session_context.register_udf(create_pg_get_constraintdef());
     session_context.register_udf(create_pg_get_partition_ancestors_udf());
+    session_context.register_udf(quote_ident_udf::create_quote_ident_udf());
+    session_context.register_udf(quote_ident_udf::create_parse_ident_udf());
 
     Ok(())
 }
