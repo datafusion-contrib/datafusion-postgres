@@ -591,10 +591,10 @@ impl VisitorMut for FixArrayLiteralVisitor {
                                 }
                             })
                             .collect();
-                        *expr = Box::new(Expr::Array(Array {
+                        **expr = Expr::Array(Array {
                             elem: elems,
                             named: true,
-                        }));
+                        });
                     }
                 }
             }
