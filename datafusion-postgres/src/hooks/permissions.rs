@@ -98,7 +98,6 @@ impl QueryHook for PermissionsHook {
         _session_context: &SessionContext,
         client: &mut (dyn ClientInfo + Send + Sync),
     ) -> Option<PgWireResult<Response>> {
-        // Skip permission checks for SET, SHOW, and transaction statements
         if Self::should_skip_permission_check(statement) {
             return None;
         }
@@ -128,7 +127,6 @@ impl QueryHook for PermissionsHook {
         _session_context: &SessionContext,
         client: &mut (dyn ClientInfo + Send + Sync),
     ) -> Option<PgWireResult<Response>> {
-        // Skip permission checks for SET and SHOW statements
         if Self::should_skip_permission_check(statement) {
             return None;
         }
