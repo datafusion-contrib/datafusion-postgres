@@ -263,7 +263,7 @@ impl ExtendedQueryHandler for DfSessionService {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        let query = portal.statement.statement.0.to_string();
+        let query = &portal.statement.statement.0;
         log::debug!("Received execute extended query: {query}"); // Log for debugging
 
         // Check query hooks first
