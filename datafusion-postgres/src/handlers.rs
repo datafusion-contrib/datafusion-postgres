@@ -139,9 +139,7 @@ impl SimpleQueryHandler for DfSessionService {
 
         let mut results = vec![];
         'stmt: for statement in statements {
-            // TODO: improve statement check by using statement directly
             let query = statement.to_string();
-            let query_lower = query.to_lowercase().trim().to_string();
 
             // Call query hooks with the parsed statement
             for hook in &self.query_hooks {
@@ -179,7 +177,7 @@ impl SimpleQueryHandler for DfSessionService {
                 }
             };
 
-            if query_lower.starts_with("insert into") {
+            if matches!(statement, sqlparser::ast::Statement::Insert(_)) {
                 let resp = map_rows_affected_for_insert(&df).await?;
                 results.push(resp);
             } else {
@@ -265,13 +263,7 @@ impl ExtendedQueryHandler for DfSessionService {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        let query = portal
-            .statement
-            .statement
-            .0
-            .to_lowercase()
-            .trim()
-            .to_string();
+        let query = portal.statement.statement.0.to_string();
         log::debug!("Received execute extended query: {query}"); // Log for debugging
 
         // Check query hooks first
@@ -302,7 +294,7 @@ impl ExtendedQueryHandler for DfSessionService {
             }
         }
 
-        if let (_, Some((_, plan))) = &portal.statement.statement {
+        if let (_, Some((statement, plan))) = &portal.statement.statement {
             let param_types = plan
                 .get_parameter_types()
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
@@ -345,7 +337,7 @@ impl ExtendedQueryHandler for DfSessionService {
                 }
             };
 
-            if query.starts_with("insert into") {
+            if matches!(statement, sqlparser::ast::Statement::Insert(_)) {
                 let resp = map_rows_affected_for_insert(&dataframe).await?;
 
                 Ok(resp)

@@ -23,8 +23,12 @@ impl PermissionsHook {
         PermissionsHook { auth_manager }
     }
 
-    /// Check if the current user has permission to execute a query
-    async fn check_query_permission<C>(&self, client: &C, query: &str) -> PgWireResult<()>
+    /// Check if the current user has permission to execute a statement
+    async fn check_statement_permission<C>(
+        &self,
+        client: &C,
+        statement: &Statement,
+    ) -> PgWireResult<()>
     where
         C: ClientInfo + ?Sized,
     {
@@ -35,29 +39,19 @@ impl PermissionsHook {
             .map(|s| s.as_str())
             .unwrap_or("anonymous");
 
-        // Parse query to determine required permissions
-        let query_lower = query.to_lowercase();
-        let query_trimmed = query_lower.trim();
-
-        let (required_permission, resource) = if query_trimmed.starts_with("select") {
-            (Permission::Select, ResourceType::All)
-        } else if query_trimmed.starts_with("insert") {
-            (Permission::Insert, ResourceType::All)
-        } else if query_trimmed.starts_with("update") {
-            (Permission::Update, ResourceType::All)
-        } else if query_trimmed.starts_with("delete") {
-            (Permission::Delete, ResourceType::All)
-        } else if query_trimmed.starts_with("create table")
-            || query_trimmed.starts_with("create view")
-        {
-            (Permission::Create, ResourceType::All)
-        } else if query_trimmed.starts_with("drop") {
-            (Permission::Drop, ResourceType::All)
-        } else if query_trimmed.starts_with("alter") {
-            (Permission::Alter, ResourceType::All)
-        } else {
-            // For other queries (SHOW, EXPLAIN, etc.), allow all users
-            return Ok(());
+        // Determine required permissions based on Statement type
+        let (required_permission, resource) = match statement {
+            Statement::Query(_) => (Permission::Select, ResourceType::All),
+            Statement::Insert(_) => (Permission::Insert, ResourceType::All),
+            Statement::Update { .. } => (Permission::Update, ResourceType::All),
+            Statement::Delete(_) => (Permission::Delete, ResourceType::All),
+            Statement::CreateTable { .. } | Statement::CreateView { .. } => {
+                (Permission::Create, ResourceType::All)
+            }
+            Statement::Drop { .. } => (Permission::Drop, ResourceType::All),
+            Statement::AlterTable { .. } => (Permission::Alter, ResourceType::All),
+            // For other statements (SET, SHOW, EXPLAIN, transactions, etc.), allow all users
+            _ => return Ok(()),
         };
 
         // Check permission
@@ -78,6 +72,21 @@ impl PermissionsHook {
 
         Ok(())
     }
+
+    /// Check if a statement should skip permission checks
+    fn should_skip_permission_check(statement: &Statement) -> bool {
+        matches!(
+            statement,
+            Statement::Set { .. }
+                | Statement::ShowVariable { .. }
+                | Statement::ShowStatus { .. }
+                | Statement::StartTransaction { .. }
+                | Statement::Commit { .. }
+                | Statement::Rollback { .. }
+                | Statement::Savepoint { .. }
+                | Statement::ReleaseSavepoint { .. }
+        )
+    }
 }
 
 #[async_trait]
@@ -89,22 +98,14 @@ impl QueryHook for PermissionsHook {
         _session_context: &SessionContext,
         client: &mut (dyn ClientInfo + Send + Sync),
     ) -> Option<PgWireResult<Response>> {
-        let query_lower = statement.to_string().to_lowercase();
+        // Skip permission checks for SET, SHOW, and transaction statements
+        if Self::should_skip_permission_check(statement) {
+            return None;
+        }
 
-        // Check permissions for the query (skip for SET, transaction, and SHOW statements)
-        if !query_lower.starts_with("set")
-            && !query_lower.starts_with("begin")
-            && !query_lower.starts_with("commit")
-            && !query_lower.starts_with("rollback")
-            && !query_lower.starts_with("start")
-            && !query_lower.starts_with("end")
-            && !query_lower.starts_with("abort")
-            && !query_lower.starts_with("show")
-        {
-            let res = self.check_query_permission(&*client, &query_lower).await;
-            if let Err(e) = res {
-                return Some(Err(e));
-            }
+        // Check permissions for other statements
+        if let Err(e) = self.check_statement_permission(&*client, statement).await {
+            return Some(Err(e));
         }
 
         None
@@ -127,15 +128,16 @@ impl QueryHook for PermissionsHook {
         _session_context: &SessionContext,
         client: &mut (dyn ClientInfo + Send + Sync),
     ) -> Option<PgWireResult<Response>> {
-        let query = statement.to_string().to_lowercase();
-
-        // Check permissions for the query (skip for SET and SHOW statements)
-        if !query.starts_with("set") && !query.starts_with("show") {
-            let res = self.check_query_permission(&*client, &query).await;
-            if let Err(e) = res {
-                return Some(Err(e));
-            }
+        // Skip permission checks for SET and SHOW statements
+        if Self::should_skip_permission_check(statement) {
+            return None;
         }
+
+        // Check permissions for other statements
+        if let Err(e) = self.check_statement_permission(&*client, statement).await {
+            return Some(Err(e));
+        }
+
         None
     }
 }
