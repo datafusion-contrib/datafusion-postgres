@@ -6,7 +6,7 @@ use datafusion::execution::options::{
     ArrowReadOptions, AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_postgres::auth::AuthManager;
+use datafusion_postgres::auth::{AuthManager, RoleProviderBridge};
 use datafusion_postgres::datafusion_pg_catalog::setup_pg_catalog;
 use datafusion_postgres::{serve, ServerOptions};
 use env_logger::Env;
@@ -180,8 +180,9 @@ async fn setup_session_context(
         info!("Loaded {table_path} as table {table_name}");
     }
 
-    // Register pg_catalog
-    setup_pg_catalog(session_context, "datafusion", auth_manager)?;
+    // Register pg_catalog using RoleProviderBridge for decoupled auth integration
+    let role_bridge = RoleProviderBridge::new(auth_manager);
+    setup_pg_catalog(session_context, "datafusion", role_bridge)?;
 
     Ok(())
 }
@@ -199,7 +200,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let session_config = SessionConfig::new().with_information_schema(true);
     let session_context = SessionContext::new_with_config(session_config);
 
-    // TODO: remove or replace AuthManager for pg_catalog
+    // Create AuthManager for pg_catalog role information
     let auth_manager = Arc::new(AuthManager::new());
     setup_session_context(&session_context, &opts, Arc::clone(&auth_manager)).await?;
 

@@ -10,18 +10,19 @@ use pgwire::{
     },
 };
 
-use crate::{auth::AuthManager, DfSessionService};
+use crate::auth::{AuthManager, RoleProviderBridge};
+use crate::DfSessionService;
 
 pub fn setup_handlers() -> DfSessionService {
     let session_config = SessionConfig::new().with_information_schema(true);
     let session_context = SessionContext::new_with_config(session_config);
 
-    setup_pg_catalog(
-        &session_context,
-        "datafusion",
-        Arc::new(AuthManager::default()),
-    )
-    .expect("Failed to setup sesession context");
+    // Use RoleProviderBridge to decouple AuthManager from pg_catalog
+    let auth_manager = Arc::new(AuthManager::default());
+    let role_bridge = RoleProviderBridge::new(auth_manager);
+
+    setup_pg_catalog(&session_context, "datafusion", role_bridge)
+        .expect("Failed to setup sesession context");
 
     DfSessionService::new(Arc::new(session_context))
 }

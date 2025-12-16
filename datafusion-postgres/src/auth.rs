@@ -6,7 +6,32 @@ use pgwire::api::auth::{AuthSource, LoginInfo, Password};
 use pgwire::error::{PgWireError, PgWireResult};
 use tokio::sync::RwLock;
 
-use datafusion_pg_catalog::pg_catalog::context::*;
+// Re-export Role and related types from pg_catalog context for use by other modules
+pub use datafusion_pg_catalog::pg_catalog::context::{
+    Grant, Permission, ResourceType, Role, RoleConfig, User,
+};
+
+/// Trait for providing role information to pg_catalog
+/// This decouples AuthManager from PgCatalogContextProvider
+#[async_trait]
+pub trait RoleProvider: Send + Sync {
+    /// List all role names
+    async fn list_roles(&self) -> Vec<String>;
+    /// Get role details by name
+    async fn get_role(&self, name: &str) -> Option<Role>;
+}
+
+/// Implement RoleProvider for Arc<T> to allow shared ownership
+#[async_trait]
+impl<T: RoleProvider + ?Sized> RoleProvider for Arc<T> {
+    async fn list_roles(&self) -> Vec<String> {
+        (**self).list_roles().await
+    }
+
+    async fn get_role(&self, name: &str) -> Option<Role> {
+        (**self).get_role(name).await
+    }
+}
 
 /// Authentication manager that handles users and roles
 #[derive(Debug, Clone)]
@@ -446,15 +471,44 @@ impl AuthManager {
 }
 
 #[async_trait]
-impl PgCatalogContextProvider for AuthManager {
-    // retrieve all database role names
-    async fn roles(&self) -> Vec<String> {
-        self.list_roles().await
+impl RoleProvider for AuthManager {
+    async fn list_roles(&self) -> Vec<String> {
+        let roles = self.roles.read().await;
+        roles.keys().cloned().collect()
     }
 
-    // retrieve database role information
+    async fn get_role(&self, name: &str) -> Option<Role> {
+        let roles = self.roles.read().await;
+        roles.get(name).cloned()
+    }
+}
+
+/// Bridge adapter that implements PgCatalogContextProvider using a RoleProvider
+/// This allows decoupling of AuthManager from pg_catalog while still providing
+/// role information to pg_roles table
+#[derive(Debug, Clone)]
+pub struct RoleProviderBridge<R: RoleProvider + Clone> {
+    role_provider: R,
+}
+
+impl<R: RoleProvider + Clone> RoleProviderBridge<R> {
+    pub fn new(role_provider: R) -> Self {
+        Self { role_provider }
+    }
+}
+
+use datafusion_pg_catalog::pg_catalog::context::PgCatalogContextProvider;
+
+#[async_trait]
+impl<R: RoleProvider + Clone + std::fmt::Debug + 'static> PgCatalogContextProvider
+    for RoleProviderBridge<R>
+{
+    async fn roles(&self) -> Vec<String> {
+        self.role_provider.list_roles().await
+    }
+
     async fn role(&self, name: &str) -> Option<Role> {
-        self.get_role(name).await
+        self.role_provider.get_role(name).await
     }
 }
 
