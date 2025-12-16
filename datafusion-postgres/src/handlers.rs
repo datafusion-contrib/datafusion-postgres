@@ -138,8 +138,6 @@ impl SimpleQueryHandler for DfSessionService {
 
         let mut results = vec![];
         'stmt: for statement in statements {
-            let query = statement.to_string();
-
             // Call query hooks with the parsed statement
             for hook in &self.query_hooks {
                 if let Some(result) = hook
@@ -152,6 +150,8 @@ impl SimpleQueryHandler for DfSessionService {
             }
 
             let df_result = {
+                let query = statement.to_string();
+
                 let timeout = client::get_statement_timeout(client);
                 if let Some(timeout_duration) = timeout {
                     tokio::time::timeout(timeout_duration, self.session_context.sql(&query))
