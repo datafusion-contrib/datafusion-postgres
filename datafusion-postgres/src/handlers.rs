@@ -13,11 +13,8 @@ use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::auth::StartupHandler;
 use pgwire::api::portal::{Format, Portal};
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
-use pgwire::api::results::{
-    DescribePortalResponse, DescribeResponse, DescribeStatementResponse, Response, Tag,
-};
+use pgwire::api::results::{FieldInfo, Response, Tag};
 use pgwire::api::stmt::QueryParser;
-use pgwire::api::stmt::StoredStatement;
 use pgwire::api::{ClientInfo, ErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::types::format::FormatOptions;
@@ -202,58 +199,6 @@ impl ExtendedQueryHandler for DfSessionService {
         self.parser.clone()
     }
 
-    async fn do_describe_statement<C>(
-        &self,
-        _client: &mut C,
-        target: &StoredStatement<Self::Statement>,
-    ) -> PgWireResult<DescribeStatementResponse>
-    where
-        C: ClientInfo + Unpin + Send + Sync,
-    {
-        if let (_, Some((_, plan))) = &target.statement {
-            let schema = plan.schema();
-            let fields =
-                arrow_schema_to_pg_fields(schema.as_arrow(), &Format::UnifiedBinary, None)?;
-            let params = plan
-                .get_parameter_types()
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-
-            let mut param_types = Vec::with_capacity(params.len());
-            for param_type in ordered_param_types(&params).iter() {
-                // Fixed: Use &params
-                if let Some(datatype) = param_type {
-                    let pgtype = into_pg_type(datatype)?;
-                    param_types.push(pgtype);
-                } else {
-                    param_types.push(Type::UNKNOWN);
-                }
-            }
-
-            Ok(DescribeStatementResponse::new(param_types, fields))
-        } else {
-            Ok(DescribeStatementResponse::no_data())
-        }
-    }
-
-    async fn do_describe_portal<C>(
-        &self,
-        _client: &mut C,
-        target: &Portal<Self::Statement>,
-    ) -> PgWireResult<DescribePortalResponse>
-    where
-        C: ClientInfo + Unpin + Send + Sync,
-    {
-        if let (_, Some((_, plan))) = &target.statement.statement {
-            let format = &target.result_column_format;
-            let schema = plan.schema();
-            let fields = arrow_schema_to_pg_fields(schema.as_arrow(), format, None)?;
-
-            Ok(DescribePortalResponse::new(fields))
-        } else {
-            Ok(DescribePortalResponse::no_data())
-        }
-    }
-
     async fn do_query<C>(
         &self,
         client: &mut C,
@@ -432,6 +377,48 @@ impl QueryParser for Parser {
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
         Ok((query, Some((statement, logical_plan))))
+    }
+
+    fn get_parameter_types(&self, stmt: &Self::Statement) -> PgWireResult<Vec<Type>> {
+        if let (_, Some((_, plan))) = stmt {
+            let params = plan
+                .get_parameter_types()
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+            let mut param_types = Vec::with_capacity(params.len());
+            for param_type in ordered_param_types(&params).iter() {
+                // Fixed: Use &params
+                if let Some(datatype) = param_type {
+                    let pgtype = into_pg_type(datatype)?;
+                    param_types.push(pgtype);
+                } else {
+                    param_types.push(Type::UNKNOWN);
+                }
+            }
+
+            Ok(param_types)
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    fn get_result_schema(
+        &self,
+        stmt: &Self::Statement,
+        column_format: Option<&Format>,
+    ) -> PgWireResult<Vec<FieldInfo>> {
+        if let (_, Some((_, plan))) = stmt {
+            let schema = plan.schema();
+            let fields = arrow_schema_to_pg_fields(
+                schema.as_arrow(),
+                column_format.unwrap_or(&Format::UnifiedBinary),
+                None,
+            )?;
+
+            Ok(fields)
+        } else {
+            Ok(vec![])
+        }
     }
 }
 

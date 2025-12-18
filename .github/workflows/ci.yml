@@ -91,6 +91,6 @@ jobs:
     - uses: actions/checkout@v4
     - uses: actions-rs/toolchain@v1
       with:
-        toolchain: "1.88.0"
+        toolchain: "1.89"
         override: true
     - run: cargo build --all-features

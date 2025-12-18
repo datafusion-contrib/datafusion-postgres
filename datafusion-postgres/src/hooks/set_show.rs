@@ -111,7 +111,7 @@ fn mock_show_response(name: &str, value: &str) -> PgWireResult<QueryResponse> {
     let row = {
         let mut encoder = DataRowEncoder::new(Arc::new(fields.clone()));
         encoder.encode_field(&Some(value))?;
-        encoder.finish()
+        Ok(encoder.take_row())
     };
 
     let row_stream = futures::stream::once(async move { row });
