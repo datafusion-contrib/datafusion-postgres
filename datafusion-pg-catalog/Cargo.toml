@@ -23,7 +23,7 @@ datafusion = { workspace = true, features = ["sql"] }
 futures.workspace = true
 log = "0.4"
 postgres-types.workspace = true
-tokio = { version = "1.48", features = ["sync"] }
+tokio = { version = "1.49", features = ["sync"] }
 
 [dev-dependencies]
 env_logger = "0.11"
