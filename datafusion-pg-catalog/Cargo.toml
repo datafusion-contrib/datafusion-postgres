@@ -1,7 +1,7 @@
 [package]
 name = "datafusion-pg-catalog"
 description = "pg_catalog compatibility for datafusion"
-version = "0.12.1"
+version = "0.13.1"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -19,7 +19,7 @@ include = [
 
 [dependencies]
 async-trait = "0.1"
-datafusion.workspace = true
+datafusion = { workspace = true, features = ["sql"] }
 futures.workspace = true
 log = "0.4"
 postgres-types.workspace = true
@@ -27,3 +27,8 @@ tokio = { version = "1.48", features = ["sync"] }
 
 [dev-dependencies]
 env_logger = "0.11"
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[[bench]]
+name = "parser_benchmark"
+harness = false

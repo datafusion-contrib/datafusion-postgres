@@ -25,6 +25,7 @@ use datafusion::sql::sqlparser::ast::SetExpr;
 use datafusion::sql::sqlparser::ast::Statement;
 use datafusion::sql::sqlparser::ast::TableFactor;
 use datafusion::sql::sqlparser::ast::TableWithJoins;
+use datafusion::sql::sqlparser::ast::TypedString;
 use datafusion::sql::sqlparser::ast::UnaryOperator;
 use datafusion::sql::sqlparser::ast::Value;
 use datafusion::sql::sqlparser::ast::ValueWithSpan;
@@ -338,7 +339,11 @@ impl VisitorMut for RemoveUnsupportedTypesVisitor<'_> {
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
         match expr {
             // This is the key part: identify constants with type annotations.
-            Expr::TypedString { value, data_type } => {
+            Expr::TypedString(TypedString {
+                data_type,
+                value,
+                uses_odbc_syntax: _,
+            }) => {
                 if self
                     .unsupported_types
                     .contains(data_type.to_string().to_lowercase().as_str())
@@ -586,10 +591,10 @@ impl VisitorMut for FixArrayLiteralVisitor {
                                 }
                             })
                             .collect();
-                        *expr = Box::new(Expr::Array(Array {
+                        **expr = Expr::Array(Array {
                             elem: elems,
                             named: true,
-                        }));
+                        });
                     }
                 }
             }

@@ -14,7 +14,9 @@ use datafusion::catalog::{MemTable, SchemaProvider, TableFunctionImpl};
 use datafusion::common::utils::SingleRowListArrayBuilder;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_expr::{ColumnarValue, ScalarUDF, Volatility};
+use datafusion::logical_expr::{
+    ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+};
 use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::prelude::{create_udf, Expr, SessionContext};
 use postgres_types::Oid;
@@ -40,6 +42,7 @@ pub mod pg_settings;
 pub mod pg_stat_gssapi;
 pub mod pg_tables;
 pub mod pg_views;
+pub mod quote_ident_udf;
 
 const PG_CATALOG_TABLE_PG_AGGREGATE: &str = "pg_aggregate";
 const PG_CATALOG_TABLE_PG_AM: &str = "pg_am";
@@ -1037,7 +1040,7 @@ pub fn create_current_schemas_udf() -> ScalarUDF {
     create_udf(
         "current_schemas",
         vec![DataType::Boolean],
-        DataType::List(Arc::new(Field::new("schema", DataType::Utf8, false))),
+        DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
         Volatility::Immutable,
         Arc::new(func),
     )
@@ -1348,22 +1351,75 @@ pub fn create_pg_stat_get_numscans() -> ScalarUDF {
 }
 
 pub fn create_pg_get_constraintdef() -> ScalarUDF {
-    let func = move |args: &[ColumnarValue]| {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        let oids = &args[0].as_primitive::<Int32Type>();
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct GetConstraintDefUDF {
+        signature: Signature,
+    }
 
-        let mut builder = StringBuilder::new();
-        for _ in 0..oids.len() {
-            builder.append_value("");
+    impl GetConstraintDefUDF {
+        fn new() -> Self {
+            let type_signature = TypeSignature::OneOf(vec![
+                TypeSignature::Exact(vec![DataType::Int32]),
+                TypeSignature::Exact(vec![DataType::Int32, DataType::Boolean]),
+            ]);
+
+            let signature = Signature::new(type_signature, Volatility::Stable);
+            GetConstraintDefUDF { signature }
+        }
+    }
+
+    impl ScalarUDFImpl for GetConstraintDefUDF {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
         }
 
+        fn name(&self) -> &str {
+            "pg_get_constraintdef"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Utf8)
+        }
+
+        fn invoke_with_args(
+            &self,
+            args: datafusion::logical_expr::ScalarFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            let args = ColumnarValue::values_to_arrays(&args.args)?;
+            let oids = &args[0].as_primitive::<Int32Type>();
+
+            let mut builder = StringBuilder::new();
+            for _ in 0..oids.len() {
+                builder.append_value("");
+            }
+
+            let array: ArrayRef = Arc::new(builder.finish());
+            Ok(ColumnarValue::Array(array))
+        }
+    }
+
+    GetConstraintDefUDF::new().into()
+}
+
+pub fn create_pg_get_partition_ancestors_udf() -> ScalarUDF {
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let string_array = args[0].as_string::<i32>();
+
+        let mut builder = StringBuilder::new();
+        string_array.iter().for_each(|i| builder.append_option(i));
         let array: ArrayRef = Arc::new(builder.finish());
+
         Ok(ColumnarValue::Array(array))
     };
 
     create_udf(
-        "pg_get_constraintdef",
-        vec![DataType::Int32],
+        "pg_partition_ancestors",
+        vec![DataType::Utf8],
         DataType::Utf8,
         Volatility::Stable,
         Arc::new(func),
@@ -1425,6 +1481,9 @@ where
     session_context.register_udf(create_pg_total_relation_size_udf());
     session_context.register_udf(create_pg_stat_get_numscans());
     session_context.register_udf(create_pg_get_constraintdef());
+    session_context.register_udf(create_pg_get_partition_ancestors_udf());
+    session_context.register_udf(quote_ident_udf::create_quote_ident_udf());
+    session_context.register_udf(quote_ident_udf::create_parse_ident_udf());
 
     Ok(())
 }

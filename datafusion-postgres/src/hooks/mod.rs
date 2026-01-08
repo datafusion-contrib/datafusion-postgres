@@ -1,4 +1,6 @@
+pub mod permissions;
 pub mod set_show;
+pub mod transactions;
 
 use async_trait::async_trait;
 

@@ -198,8 +198,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let session_config = SessionConfig::new().with_information_schema(true);
     let session_context = SessionContext::new_with_config(session_config);
-    let auth_manager = Arc::new(AuthManager::new());
 
+    // TODO: remove or replace AuthManager for pg_catalog
+    let auth_manager = Arc::new(AuthManager::new());
     setup_session_context(&session_context, &opts, Arc::clone(&auth_manager)).await?;
 
     let server_options = ServerOptions::new()
@@ -208,7 +209,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_tls_cert_path(opts.tls_cert)
         .with_tls_key_path(opts.tls_key);
 
-    serve(Arc::new(session_context), &server_options, auth_manager)
+    serve(Arc::new(session_context), &server_options)
         .await
         .map_err(|e| format!("Failed to run server: {e}"))?;
 

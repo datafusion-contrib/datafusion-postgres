@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::common::{ParamValues, ToDFSchema};
-use datafusion::error::DataFusionError;
+use datafusion::arrow::datatypes::DataType;
+use datafusion::common::ParamValues;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
 use datafusion::sql::parser::Statement;
@@ -14,27 +13,21 @@ use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::auth::StartupHandler;
 use pgwire::api::portal::{Format, Portal};
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
-use pgwire::api::results::{
-    DescribePortalResponse, DescribeResponse, DescribeStatementResponse, Response, Tag,
-};
+use pgwire::api::results::{FieldInfo, Response, Tag};
 use pgwire::api::stmt::QueryParser;
-use pgwire::api::stmt::StoredStatement;
 use pgwire::api::{ClientInfo, ErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
-use pgwire::messages::response::TransactionStatus;
 use pgwire::types::format::FormatOptions;
 
-use crate::auth::AuthManager;
 use crate::client;
 use crate::hooks::set_show::SetShowHook;
+use crate::hooks::transactions::TransactionStatementHook;
 use crate::hooks::QueryHook;
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
-use datafusion_pg_catalog::pg_catalog::context::{Permission, ResourceType};
 use datafusion_pg_catalog::sql::PostgresCompatibilityParser;
 
 /// Simple startup handler that does no authentication
-/// For production, use DfAuthSource with proper pgwire authentication handlers
 pub struct SimpleStartupHandler;
 
 #[async_trait::async_trait]
@@ -45,20 +38,17 @@ pub struct HandlerFactory {
 }
 
 impl HandlerFactory {
-    pub fn new(session_context: Arc<SessionContext>, auth_manager: Arc<AuthManager>) -> Self {
-        let session_service =
-            Arc::new(DfSessionService::new(session_context, auth_manager.clone()));
+    pub fn new(session_context: Arc<SessionContext>) -> Self {
+        let session_service = Arc::new(DfSessionService::new(session_context));
         HandlerFactory { session_service }
     }
 
     pub fn new_with_hooks(
         session_context: Arc<SessionContext>,
-        auth_manager: Arc<AuthManager>,
         query_hooks: Vec<Arc<dyn QueryHook>>,
     ) -> Self {
         let session_service = Arc::new(DfSessionService::new_with_hooks(
             session_context,
-            auth_manager.clone(),
             query_hooks,
         ));
         HandlerFactory { session_service }
@@ -98,22 +88,18 @@ impl ErrorHandler for LoggingErrorHandler {
 pub struct DfSessionService {
     session_context: Arc<SessionContext>,
     parser: Arc<Parser>,
-    auth_manager: Arc<AuthManager>,
     query_hooks: Vec<Arc<dyn QueryHook>>,
 }
 
 impl DfSessionService {
-    pub fn new(
-        session_context: Arc<SessionContext>,
-        auth_manager: Arc<AuthManager>,
-    ) -> DfSessionService {
-        let hooks: Vec<Arc<dyn QueryHook>> = vec![Arc::new(SetShowHook)];
-        Self::new_with_hooks(session_context, auth_manager, hooks)
+    pub fn new(session_context: Arc<SessionContext>) -> DfSessionService {
+        let hooks: Vec<Arc<dyn QueryHook>> =
+            vec![Arc::new(SetShowHook), Arc::new(TransactionStatementHook)];
+        Self::new_with_hooks(session_context, hooks)
     }
 
     pub fn new_with_hooks(
         session_context: Arc<SessionContext>,
-        auth_manager: Arc<AuthManager>,
         query_hooks: Vec<Arc<dyn QueryHook>>,
     ) -> DfSessionService {
         let parser = Arc::new(Parser {
@@ -124,134 +110,7 @@ impl DfSessionService {
         DfSessionService {
             session_context,
             parser,
-            auth_manager,
             query_hooks,
-        }
-    }
-
-    /// Check if the current user has permission to execute a query
-    async fn check_query_permission<C>(&self, client: &C, query: &str) -> PgWireResult<()>
-    where
-        C: ClientInfo,
-    {
-        // Get the username from client metadata
-        let username = client
-            .metadata()
-            .get("user")
-            .map(|s| s.as_str())
-            .unwrap_or("anonymous");
-
-        // Parse query to determine required permissions
-        let query_lower = query.to_lowercase();
-        let query_trimmed = query_lower.trim();
-
-        let (required_permission, resource) = if query_trimmed.starts_with("select") {
-            (Permission::Select, self.extract_table_from_query(query))
-        } else if query_trimmed.starts_with("insert") {
-            (Permission::Insert, self.extract_table_from_query(query))
-        } else if query_trimmed.starts_with("update") {
-            (Permission::Update, self.extract_table_from_query(query))
-        } else if query_trimmed.starts_with("delete") {
-            (Permission::Delete, self.extract_table_from_query(query))
-        } else if query_trimmed.starts_with("create table")
-            || query_trimmed.starts_with("create view")
-        {
-            (Permission::Create, ResourceType::All)
-        } else if query_trimmed.starts_with("drop") {
-            (Permission::Drop, self.extract_table_from_query(query))
-        } else if query_trimmed.starts_with("alter") {
-            (Permission::Alter, self.extract_table_from_query(query))
-        } else {
-            // For other queries (SHOW, EXPLAIN, etc.), allow all users
-            return Ok(());
-        };
-
-        // Check permission
-        let has_permission = self
-            .auth_manager
-            .check_permission(username, required_permission, resource)
-            .await;
-
-        if !has_permission {
-            return Err(PgWireError::UserError(Box::new(
-                pgwire::error::ErrorInfo::new(
-                    "ERROR".to_string(),
-                    "42501".to_string(), // insufficient_privilege
-                    format!("permission denied for user \"{username}\""),
-                ),
-            )));
-        }
-
-        Ok(())
-    }
-
-    /// Extract table name from query (simplified parsing)
-    fn extract_table_from_query(&self, query: &str) -> ResourceType {
-        let words: Vec<&str> = query.split_whitespace().collect();
-
-        // Simple heuristic to find table names
-        for (i, word) in words.iter().enumerate() {
-            let word_lower = word.to_lowercase();
-            if (word_lower == "from" || word_lower == "into" || word_lower == "table")
-                && i + 1 < words.len()
-            {
-                let table_name = words[i + 1].trim_matches(|c| c == '(' || c == ')' || c == ';');
-                return ResourceType::Table(table_name.to_string());
-            }
-        }
-
-        // If we can't determine the table, default to All
-        ResourceType::All
-    }
-
-    async fn try_respond_transaction_statements<C>(
-        &self,
-        client: &C,
-        query_lower: &str,
-    ) -> PgWireResult<Option<Response>>
-    where
-        C: ClientInfo,
-    {
-        // Transaction handling based on pgwire example:
-        // https://github.com/sunng87/pgwire/blob/master/examples/transaction.rs#L57
-        match query_lower.trim() {
-            "begin" | "begin transaction" | "begin work" | "start transaction" => {
-                match client.transaction_status() {
-                    TransactionStatus::Idle => {
-                        Ok(Some(Response::TransactionStart(Tag::new("BEGIN"))))
-                    }
-                    TransactionStatus::Transaction => {
-                        // PostgreSQL behavior: ignore nested BEGIN, just return SUCCESS
-                        // This matches PostgreSQL's handling of nested transaction blocks
-                        log::warn!("BEGIN command ignored: already in transaction block");
-                        Ok(Some(Response::Execution(Tag::new("BEGIN"))))
-                    }
-                    TransactionStatus::Error => {
-                        // Can't start new transaction from failed state
-                        Err(PgWireError::UserError(Box::new(
-                            pgwire::error::ErrorInfo::new(
-                                "ERROR".to_string(),
-                                "25P01".to_string(),
-                                "current transaction is aborted, commands ignored until end of transaction block".to_string(),
-                            ),
-                        )))
-                    }
-                }
-            }
-            "commit" | "commit transaction" | "commit work" | "end" | "end transaction" => {
-                match client.transaction_status() {
-                    TransactionStatus::Idle | TransactionStatus::Transaction => {
-                        Ok(Some(Response::TransactionEnd(Tag::new("COMMIT"))))
-                    }
-                    TransactionStatus::Error => {
-                        Ok(Some(Response::TransactionEnd(Tag::new("ROLLBACK"))))
-                    }
-                }
-            }
-            "rollback" | "rollback transaction" | "rollback work" | "abort" => {
-                Ok(Some(Response::TransactionEnd(Tag::new("ROLLBACK"))))
-            }
-            _ => Ok(None),
         }
     }
 }
@@ -263,15 +122,6 @@ impl SimpleQueryHandler for DfSessionService {
         C: ClientInfo + Unpin + Send + Sync,
     {
         log::debug!("Received query: {query}"); // Log the query for debugging
-
-        // Check for transaction commands early to avoid SQL parsing issues with ABORT
-        let query_lower = query.to_lowercase().trim().to_string();
-        if let Some(resp) = self
-            .try_respond_transaction_statements(client, &query_lower)
-            .await?
-        {
-            return Ok(vec![resp]);
-        }
 
         let statements = self
             .parser
@@ -286,22 +136,7 @@ impl SimpleQueryHandler for DfSessionService {
 
         let mut results = vec![];
         'stmt: for statement in statements {
-            // TODO: improve statement check by using statement directly
             let query = statement.to_string();
-            let query_lower = query.to_lowercase().trim().to_string();
-
-            // Check permissions for the query (skip for SET, transaction, and SHOW statements)
-            if !query_lower.starts_with("set")
-                && !query_lower.starts_with("begin")
-                && !query_lower.starts_with("commit")
-                && !query_lower.starts_with("rollback")
-                && !query_lower.starts_with("start")
-                && !query_lower.starts_with("end")
-                && !query_lower.starts_with("abort")
-                && !query_lower.starts_with("show")
-            {
-                self.check_query_permission(client, &query).await?;
-            }
 
             // Call query hooks with the parsed statement
             for hook in &self.query_hooks {
@@ -312,18 +147,6 @@ impl SimpleQueryHandler for DfSessionService {
                     results.push(result?);
                     continue 'stmt;
                 }
-            }
-
-            // Check if we're in a failed transaction and block non-transaction
-            // commands
-            if client.transaction_status() == TransactionStatus::Error {
-                return Err(PgWireError::UserError(Box::new(
-                pgwire::error::ErrorInfo::new(
-                    "ERROR".to_string(),
-                    "25P01".to_string(),
-                    "current transaction is aborted, commands ignored until end of transaction block".to_string(),
-                ),
-            )));
             }
 
             let df_result = {
@@ -351,7 +174,7 @@ impl SimpleQueryHandler for DfSessionService {
                 }
             };
 
-            if query_lower.starts_with("insert into") {
+            if matches!(statement, sqlparser::ast::Statement::Insert(_)) {
                 let resp = map_rows_affected_for_insert(&df).await?;
                 results.push(resp);
             } else {
@@ -376,59 +199,6 @@ impl ExtendedQueryHandler for DfSessionService {
         self.parser.clone()
     }
 
-    async fn do_describe_statement<C>(
-        &self,
-        _client: &mut C,
-        target: &StoredStatement<Self::Statement>,
-    ) -> PgWireResult<DescribeStatementResponse>
-    where
-        C: ClientInfo + Unpin + Send + Sync,
-    {
-        if let (_, Some((_, plan))) = &target.statement {
-            let schema = plan.schema();
-            let fields =
-                arrow_schema_to_pg_fields(schema.as_arrow(), &Format::UnifiedBinary, None)?;
-            let params = plan
-                .get_parameter_types()
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-
-            let mut param_types = Vec::with_capacity(params.len());
-            for param_type in ordered_param_types(&params).iter() {
-                // Fixed: Use &params
-                if let Some(datatype) = param_type {
-                    let pgtype =
-                        into_pg_type(&Arc::new(Field::new("item", (*datatype).clone(), true)))?;
-                    param_types.push(pgtype);
-                } else {
-                    param_types.push(Type::UNKNOWN);
-                }
-            }
-
-            Ok(DescribeStatementResponse::new(param_types, fields))
-        } else {
-            Ok(DescribeStatementResponse::no_data())
-        }
-    }
-
-    async fn do_describe_portal<C>(
-        &self,
-        _client: &mut C,
-        target: &Portal<Self::Statement>,
-    ) -> PgWireResult<DescribePortalResponse>
-    where
-        C: ClientInfo + Unpin + Send + Sync,
-    {
-        if let (_, Some((_, plan))) = &target.statement.statement {
-            let format = &target.result_column_format;
-            let schema = plan.schema();
-            let fields = arrow_schema_to_pg_fields(schema.as_arrow(), format, None)?;
-
-            Ok(DescribePortalResponse::new(fields))
-        } else {
-            Ok(DescribePortalResponse::no_data())
-        }
-    }
-
     async fn do_query<C>(
         &self,
         client: &mut C,
@@ -438,13 +208,7 @@ impl ExtendedQueryHandler for DfSessionService {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        let query = portal
-            .statement
-            .statement
-            .0
-            .to_lowercase()
-            .trim()
-            .to_string();
+        let query = &portal.statement.statement.0;
         log::debug!("Received execute extended query: {query}"); // Log for debugging
 
         // Check query hooks first
@@ -475,32 +239,7 @@ impl ExtendedQueryHandler for DfSessionService {
             }
         }
 
-        // Check permissions for the query (skip for SET and SHOW statements)
-        if !query.starts_with("set") && !query.starts_with("show") {
-            self.check_query_permission(client, &portal.statement.statement.0)
-                .await?;
-        }
-
-        if let Some(resp) = self
-            .try_respond_transaction_statements(client, &query)
-            .await?
-        {
-            return Ok(resp);
-        }
-
-        // Check if we're in a failed transaction and block non-transaction
-        // commands
-        if client.transaction_status() == TransactionStatus::Error {
-            return Err(PgWireError::UserError(Box::new(
-                pgwire::error::ErrorInfo::new(
-                    "ERROR".to_string(),
-                    "25P01".to_string(),
-                    "current transaction is aborted, commands ignored until end of transaction block".to_string(),
-                ),
-            )));
-        }
-
-        if let (_, Some((_, plan))) = &portal.statement.statement {
+        if let (_, Some((statement, plan))) = &portal.statement.statement {
             let param_types = plan
                 .get_parameter_types()
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
@@ -543,7 +282,7 @@ impl ExtendedQueryHandler for DfSessionService {
                 }
             };
 
-            if query.starts_with("insert into") {
+            if matches!(statement, sqlparser::ast::Statement::Insert(_)) {
                 let resp = map_rows_affected_for_insert(&dataframe).await?;
 
                 Ok(resp)
@@ -595,55 +334,6 @@ pub struct Parser {
     query_hooks: Vec<Arc<dyn QueryHook>>,
 }
 
-impl Parser {
-    fn try_shortcut_parse_plan(&self, sql: &str) -> Result<Option<LogicalPlan>, DataFusionError> {
-        // Check for transaction commands that shouldn't be parsed by DataFusion
-        let sql_lower = sql.to_lowercase();
-        let sql_trimmed = sql_lower.trim();
-
-        if matches!(
-            sql_trimmed,
-            "" | "begin"
-                | "begin transaction"
-                | "begin work"
-                | "start transaction"
-                | "commit"
-                | "commit transaction"
-                | "commit work"
-                | "end"
-                | "end transaction"
-                | "rollback"
-                | "rollback transaction"
-                | "rollback work"
-                | "abort"
-        ) {
-            // Return a dummy plan for transaction commands - they'll be handled by transaction handler
-            let dummy_schema = datafusion::common::DFSchema::empty();
-            return Ok(Some(LogicalPlan::EmptyRelation(
-                datafusion::logical_expr::EmptyRelation {
-                    produce_one_row: false,
-                    schema: Arc::new(dummy_schema),
-                },
-            )));
-        }
-
-        // show statement may not be supported by datafusion
-        if sql_trimmed.starts_with("show") {
-            let show_schema =
-                Arc::new(Schema::new(vec![Field::new("show", DataType::Utf8, false)]));
-            let df_schema = show_schema.to_dfschema()?;
-            return Ok(Some(LogicalPlan::EmptyRelation(
-                datafusion::logical_expr::EmptyRelation {
-                    produce_one_row: true,
-                    schema: Arc::new(df_schema),
-                },
-            )));
-        }
-
-        Ok(None)
-    }
-}
-
 #[async_trait]
 impl QueryParser for Parser {
     type Statement = (String, Option<(sqlparser::ast::Statement, LogicalPlan)>);
@@ -652,7 +342,7 @@ impl QueryParser for Parser {
         &self,
         client: &C,
         sql: &str,
-        _types: &[Type],
+        _types: &[Option<Type>],
     ) -> PgWireResult<Self::Statement>
     where
         C: ClientInfo + Unpin + Send + Sync,
@@ -668,15 +358,6 @@ impl QueryParser for Parser {
         }
 
         let statement = statements.remove(0);
-
-        // Check for transaction commands that shouldn't be parsed by DataFusion
-        if let Some(plan) = self
-            .try_shortcut_parse_plan(sql)
-            .map_err(|e| PgWireError::ApiError(Box::new(e)))?
-        {
-            return Ok((sql.to_string(), Some((statement, plan))));
-        }
-
         let query = statement.to_string();
 
         let context = &self.session_context;
@@ -696,6 +377,48 @@ impl QueryParser for Parser {
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
         Ok((query, Some((statement, logical_plan))))
+    }
+
+    fn get_parameter_types(&self, stmt: &Self::Statement) -> PgWireResult<Vec<Type>> {
+        if let (_, Some((_, plan))) = stmt {
+            let params = plan
+                .get_parameter_types()
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+            let mut param_types = Vec::with_capacity(params.len());
+            for param_type in ordered_param_types(&params).iter() {
+                // Fixed: Use &params
+                if let Some(datatype) = param_type {
+                    let pgtype = into_pg_type(datatype)?;
+                    param_types.push(pgtype);
+                } else {
+                    param_types.push(Type::UNKNOWN);
+                }
+            }
+
+            Ok(param_types)
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    fn get_result_schema(
+        &self,
+        stmt: &Self::Statement,
+        column_format: Option<&Format>,
+    ) -> PgWireResult<Vec<FieldInfo>> {
+        if let (_, Some((_, plan))) = stmt {
+            let schema = plan.schema();
+            let fields = arrow_schema_to_pg_fields(
+                schema.as_arrow(),
+                column_format.unwrap_or(&Format::UnifiedBinary),
+                None,
+            )?;
+
+            Ok(fields)
+        } else {
+            Ok(vec![])
+        }
     }
 }
 
@@ -782,10 +505,9 @@ mod tests {
         // which would exit the entire statement loop, preventing subsequent statements
         // from being processed.
         let session_context = Arc::new(SessionContext::new());
-        let auth_manager = Arc::new(AuthManager::new());
 
         let hooks: Vec<Arc<dyn QueryHook>> = vec![Arc::new(TestHook)];
-        let service = DfSessionService::new_with_hooks(session_context, auth_manager, hooks);
+        let service = DfSessionService::new_with_hooks(session_context, hooks);
 
         let mut client = MockClient::new();
 
