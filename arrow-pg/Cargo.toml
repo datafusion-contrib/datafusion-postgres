@@ -21,11 +21,10 @@ geo = ["postgres-types/with-geo-types-0_7", "dep:geoarrow-schema"]
 _duckdb = []
 _bundled = ["duckdb/bundled"]
 
-
 [dependencies]
 arrow = { workspace = true, optional = true }
 arrow-schema = { workspace = true}
-geoarrow = { version = "0.6", optional = true }
+geoarrow-schema = { version = "0.7", optional = true }
 bytes.workspace = true
 chrono.workspace = true
 datafusion = { workspace = true, optional = true }
