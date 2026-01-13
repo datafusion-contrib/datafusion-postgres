@@ -33,4 +33,4 @@ rust_decimal.workspace = true
 
 [dev-dependencies]
 async-trait = "0.1"
-tokio = { version = "1.48", features = ["full"]}
+tokio = { version = "1.49", features = ["full"]}
