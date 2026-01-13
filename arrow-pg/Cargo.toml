@@ -13,7 +13,7 @@ readme = "../README.md"
 rust-version.workspace = true
 
 [features]
-default = ["arrow", "geo"]
+default = ["arrow"]
 arrow = ["dep:arrow"]
 datafusion = ["dep:datafusion"]
 geo = ["postgres-types/with-geo-types-0_7", "dep:geoarrow", "dep:geoarrow-schema", "dep:wkb"]
