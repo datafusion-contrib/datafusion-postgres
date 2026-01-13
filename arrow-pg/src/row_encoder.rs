@@ -37,14 +37,18 @@ impl RowEncoder {
         }
 
         let arrow_schema = self.rb.schema_ref();
-        let mut encoder = DataRowEncoder::new(self.fields.clone());
         for col in 0..self.rb.num_columns() {
             let array = self.rb.column(col);
             let arrow_field = arrow_schema.field(col);
             let pg_field = &self.fields[col];
 
-            if let Err(e) = encode_value(&mut encoder, array, self.curr_idx, arrow_field, pg_field)
-            {
+            if let Err(e) = encode_value(
+                &mut self.row_encoder,
+                array,
+                self.curr_idx,
+                arrow_field,
+                pg_field,
+            ) {
                 return Some(Err(e));
             };
         }
