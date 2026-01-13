@@ -388,6 +388,7 @@ dependencies = [
  "postgres-types",
  "rust_decimal",
  "tokio",
+ "wkb",
 ]
 
 [[package]]

@@ -5,8 +5,6 @@ use std::sync::Arc;
 
 #[cfg(not(feature = "datafusion"))]
 use arrow::{array::*, datatypes::*};
-#[cfg(feature = "geo")]
-use arrow_schema::extension::ExtensionType;
 use bytes::BufMut;
 use bytes::BytesMut;
 use chrono::NaiveTime;
@@ -22,6 +20,8 @@ use rust_decimal::Decimal;
 use timezone::Tz;
 
 use crate::error::ToSqlError;
+#[cfg(feature = "geo")]
+use crate::geo_encoder::encode_geo;
 use crate::list_encoder::encode_list;
 use crate::struct_encoder::encode_struct;
 
@@ -293,21 +293,21 @@ pub fn encode_value<T: Encoder>(
     let arrow_type = arrow_field.data_type();
 
     #[cfg(feature = "geo")]
-    if let Some(geoarrow_type) = geoarrow_schema::GeoArrowType::from_extension_field(&arrow_field)
+    if let Some(geoarrow_type) = geoarrow_schema::GeoArrowType::from_extension_field(arrow_field)
         .map_err(|e| PgWireError::ApiError(Box::new(e)))?
     {
-        use geoarrow::array::AsGeoArrowArray;
-
         let geoarrow_array: Arc<dyn geoarrow::array::GeoArrowArray> =
             geoarrow::array::from_arrow_array(arr, arrow_field)
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        match geoarrow_type {
-            geoarrow_schema::GeoArrowType::Point(_) => {
-                let array: &geoarrow::array::PointArray = geoarrow_array.as_point();
-                // encode pointarray
-            }
-            _ => todo!("handle other geometry types"),
-        }
+
+        return encode_geo(
+            encoder,
+            geoarrow_type,
+            &geoarrow_array,
+            idx,
+            arrow_field,
+            pg_field,
+        );
     }
 
     match arrow_type {
