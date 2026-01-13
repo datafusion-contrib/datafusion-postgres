@@ -527,7 +527,11 @@ mod tests {
 
         let mut encoder = MockEncoder::default();
 
-        let arrow_field = Field::new("x", DataType::Utf8, true);
+        let arrow_field = Field::new(
+            "x",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            true,
+        );
         let pg_field = FieldInfo::new("x".to_string(), None, None, Type::TEXT, FieldFormat::Text);
         let result = encode_value(&mut encoder, &dict_arr, 2, &arrow_field, &pg_field);
 
