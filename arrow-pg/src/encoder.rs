@@ -292,22 +292,22 @@ pub fn encode_value<T: Encoder>(
 ) -> PgWireResult<()> {
     let arrow_type = arrow_field.data_type();
 
-    match arrow_field.extension_type_name() {
-        #[cfg(feature = "geo")]
-        Some(geoarrow::datatype::PointType::NAME) => {
-            // downcast array as geoarrow
-            // convert to point
-            // encode as point
-            let geoarrow_array: Arc<dyn geoarrow::array::GeoArrowArray> =
-                geoarrow::array::from_arrow_array(array, field).unwrap();
-            match geoarrow_array.data_type() {
-                GeoArrowType::Point(_) => {
-                    let array: &PointArray = geoarrow_array.as_point();
-                }
-                _ => todo!("handle other geometry types"),
+    #[cfg(feature = "geo")]
+    if let Some(geoarrow_type) = geoarrow_schema::GeoArrowType::from_extension_field(&arrow_field)
+        .map_err(|e| PgWireError::ApiError(Box::new(e)))?
+    {
+        use geoarrow::array::AsGeoArrowArray;
+
+        let geoarrow_array: Arc<dyn geoarrow::array::GeoArrowArray> =
+            geoarrow::array::from_arrow_array(arr, arrow_field)
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+        match geoarrow_type {
+            geoarrow_schema::GeoArrowType::Point(_) => {
+                let array: &geoarrow::array::PointArray = geoarrow_array.as_point();
+                // encode pointarray
             }
+            _ => todo!("handle other geometry types"),
         }
-        _ => {}
     }
 
     match arrow_type {

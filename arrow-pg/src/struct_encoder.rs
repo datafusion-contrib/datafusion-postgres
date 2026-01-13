@@ -12,7 +12,7 @@ use pgwire::error::PgWireResult;
 use pgwire::types::{ToSqlText, QUOTE_CHECK, QUOTE_ESCAPE};
 use postgres_types::{Field, IsNull, ToSql};
 
-use crate::datatypes::into_pg_type;
+use crate::datatypes::field_into_pg_type;
 use crate::encoder::{encode_value, EncodedValue, Encoder};
 
 pub(crate) fn encode_struct(
@@ -28,7 +28,7 @@ pub(crate) fn encode_struct(
 
     let fields = arrow_fields
         .iter()
-        .map(|f| into_pg_type(f).map(|t| Field::new(f.name().to_owned(), t)))
+        .map(|f| field_into_pg_type(f).map(|t| Field::new(f.name().to_owned(), t)))
         .collect::<PgWireResult<Vec<_>>>()?;
 
     let mut row_encoder = StructEncoder::new(arrow_fields.len());

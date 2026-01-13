@@ -2,7 +2,7 @@ use std::iter;
 use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
-use datafusion::arrow::datatypes::{DataType, Date32Type, Field, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Date32Type, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::ParamValues;
 use datafusion::prelude::*;
@@ -70,7 +70,7 @@ where
         if let Some(ty) = pg_type_hint {
             Ok(ty.clone())
         } else if let Some(infer_type) = inferenced_type {
-            into_pg_type(&Arc::new(Field::new("item", infer_type.clone(), true)))
+            into_pg_type(infer_type)
         } else {
             Ok(Type::UNKNOWN)
         }

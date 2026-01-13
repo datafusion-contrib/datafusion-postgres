@@ -16,11 +16,12 @@ rust-version.workspace = true
 default = ["arrow", "geo"]
 arrow = ["dep:arrow"]
 datafusion = ["dep:datafusion"]
-geo = ["postgres-types/with-geo-types-0_7", "dep:geoarrow-schema"]
+geo = ["postgres-types/with-geo-types-0_7", "dep:geoarrow", "dep:geoarrow-schema"]
 
 [dependencies]
 arrow = { workspace = true, optional = true }
 arrow-schema = { workspace = true}
+geoarrow = { version = "0.7", optional = true }
 geoarrow-schema = { version = "0.7", optional = true }
 bytes.workspace = true
 chrono.workspace = true
