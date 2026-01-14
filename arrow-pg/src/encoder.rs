@@ -20,6 +20,8 @@ use rust_decimal::Decimal;
 use timezone::Tz;
 
 use crate::error::ToSqlError;
+#[cfg(feature = "geo")]
+use crate::geo_encoder::encode_geo;
 use crate::list_encoder::encode_list;
 use crate::struct_encoder::encode_struct;
 
@@ -285,11 +287,30 @@ pub fn encode_value<T: Encoder>(
     encoder: &mut T,
     arr: &Arc<dyn Array>,
     idx: usize,
+    arrow_field: &Field,
     pg_field: &FieldInfo,
 ) -> PgWireResult<()> {
-    let type_ = pg_field.datatype();
+    let arrow_type = arrow_field.data_type();
 
-    match arr.data_type() {
+    #[cfg(feature = "geo")]
+    if let Some(geoarrow_type) = geoarrow_schema::GeoArrowType::from_extension_field(arrow_field)
+        .map_err(|e| PgWireError::ApiError(Box::new(e)))?
+    {
+        let geoarrow_array: Arc<dyn geoarrow::array::GeoArrowArray> =
+            geoarrow::array::from_arrow_array(arr, arrow_field)
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+        return encode_geo(
+            encoder,
+            geoarrow_type,
+            &geoarrow_array,
+            idx,
+            arrow_field,
+            pg_field,
+        );
+    }
+
+    match arrow_type {
         DataType::Null => encoder.encode_field(&None::<i8>, pg_field)?,
         DataType::Boolean => encoder.encode_field(&get_bool_value(arr, idx), pg_field)?,
         DataType::Int8 => encoder.encode_field(&get_i8_value(arr, idx), pg_field)?,
@@ -423,16 +444,8 @@ pub fn encode_value<T: Encoder>(
             let value = encode_list(array, pg_field)?;
             encoder.encode_field(&value, pg_field)?
         }
-        DataType::Struct(_) => {
-            let fields = match type_.kind() {
-                postgres_types::Kind::Composite(fields) => fields,
-                _ => {
-                    return Err(PgWireError::ApiError(ToSqlError::from(format!(
-                        "Failed to unwrap a composite type from type {type_}"
-                    ))));
-                }
-            };
-            let value = encode_struct(arr, idx, fields, pg_field)?;
+        DataType::Struct(arrow_fields) => {
+            let value = encode_struct(arr, idx, arrow_fields, pg_field)?;
             encoder.encode_field(&value, pg_field)?
         }
         DataType::Dictionary(_, value_type) => {
@@ -463,7 +476,9 @@ pub fn encode_value<T: Encoder>(
                     ))
                 })?;
 
-            encode_value(encoder, values, idx, pg_field)?
+            let inner_arrow_field = Field::new(pg_field.name(), *value_type.clone(), true);
+
+            encode_value(encoder, values, idx, &inner_arrow_field, pg_field)?
         }
         _ => {
             return Err(PgWireError::ApiError(ToSqlError::from(format!(
@@ -512,8 +527,13 @@ mod tests {
 
         let mut encoder = MockEncoder::default();
 
+        let arrow_field = Field::new(
+            "x",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            true,
+        );
         let pg_field = FieldInfo::new("x".to_string(), None, None, Type::TEXT, FieldFormat::Text);
-        let result = encode_value(&mut encoder, &dict_arr, 2, &pg_field);
+        let result = encode_value(&mut encoder, &dict_arr, 2, &arrow_field, &pg_field);
 
         assert!(result.is_ok());
 

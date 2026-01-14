@@ -16,16 +16,21 @@ rust-version.workspace = true
 default = ["arrow"]
 arrow = ["dep:arrow"]
 datafusion = ["dep:datafusion"]
+geo = ["postgres-types/with-geo-types-0_7", "dep:geoarrow", "dep:geoarrow-schema", "dep:wkb"]
 
 [dependencies]
 arrow = { workspace = true, optional = true }
+arrow-schema = { workspace = true}
 bytes.workspace = true
 chrono.workspace = true
 datafusion = { workspace = true, optional = true }
 futures.workspace = true
+geoarrow = { version = "0.7", optional = true }
+geoarrow-schema = { version = "0.7", optional = true }
 pgwire = { workspace = true, default-features = false, features = ["server-api", "pg-ext-types"] }
 postgres-types.workspace = true
 rust_decimal.workspace = true
+wkb = { version = "0.9", optional = true }
 
 [dev-dependencies]
 async-trait = "0.1"
