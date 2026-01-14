@@ -21,9 +21,8 @@
         ]);
         buildInputs = with pkgs; [
           llvmPackages.libclang
-          libpq
-          duckdb.dev
-          duckdb.lib
+          libpq.dev
+          libpq.out
         ];
       in
       {
@@ -31,8 +30,8 @@
           nativeBuildInputs = with pkgs; [
             pkg-config
             clang
+            llvmPackages.bintools
             git
-            mold
             (fenix.packages.${system}.stable.withComponents [
               "cargo"
               "clippy"
@@ -45,15 +44,14 @@
             cargo-release
             curl
             pythonEnv
-            postgresql.out
+            postgresql_18.out
           ];
 
-          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
+          buildInputs = buildInputs;
+
           shellHook = ''
             export CC=clang
             export CXX=clang++
-            export DUCKDB_LIB_DIR="${pkgs.duckdb.lib}/lib"
-            export DUCKDB_INCLUDE_DIR="${pkgs.duckdb.dev}/include"
           '';
         };
       });

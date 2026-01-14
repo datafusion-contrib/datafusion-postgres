@@ -37,10 +37,10 @@ use datafusion::arrow::{
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, TimeZone, Utc};
-use pgwire::api::results::FieldFormat;
+use pgwire::api::results::{FieldFormat, FieldInfo};
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::types::{ToSqlText, QUOTE_ESCAPE};
-use postgres_types::{ToSql, Type};
+use postgres_types::ToSql;
 use rust_decimal::Decimal;
 
 use crate::encoder::EncodedValue;
@@ -93,44 +93,44 @@ get_primitive_list_value!(get_u64_list_value, UInt64Type, i64, |val: u64| {
 get_primitive_list_value!(get_f32_list_value, Float32Type, f32);
 get_primitive_list_value!(get_f64_list_value, Float64Type, f64);
 
-fn encode_field<T: ToSql + ToSqlText>(
-    t: &[T],
-    type_: &Type,
-    format: FieldFormat,
-) -> PgWireResult<EncodedValue> {
+fn encode_field<T: ToSql + ToSqlText>(t: &[T], field: &FieldInfo) -> PgWireResult<EncodedValue> {
     let mut bytes = BytesMut::new();
+
+    let format = field.format();
+    let type_ = field.datatype();
     match format {
-        FieldFormat::Text => t.to_sql_text(type_, &mut bytes)?,
+        FieldFormat::Text => t.to_sql_text(type_, &mut bytes, field.format_options().as_ref())?,
         FieldFormat::Binary => t.to_sql(type_, &mut bytes)?,
     };
     Ok(EncodedValue { bytes })
 }
 
-pub(crate) fn encode_list(
-    arr: Arc<dyn Array>,
-    type_: &Type,
-    format: FieldFormat,
-) -> PgWireResult<EncodedValue> {
+pub(crate) fn encode_list(arr: Arc<dyn Array>, pg_field: &FieldInfo) -> PgWireResult<EncodedValue> {
+    let type_ = pg_field.datatype();
+    let format = pg_field.format();
+
     match arr.data_type() {
         DataType::Null => {
             let mut bytes = BytesMut::new();
             match format {
-                FieldFormat::Text => None::<i8>.to_sql_text(type_, &mut bytes),
+                FieldFormat::Text => {
+                    None::<i8>.to_sql_text(type_, &mut bytes, pg_field.format_options().as_ref())
+                }
                 FieldFormat::Binary => None::<i8>.to_sql(type_, &mut bytes),
             }?;
             Ok(EncodedValue { bytes })
         }
-        DataType::Boolean => encode_field(&get_bool_list_value(&arr), type_, format),
-        DataType::Int8 => encode_field(&get_i8_list_value(&arr), type_, format),
-        DataType::Int16 => encode_field(&get_i16_list_value(&arr), type_, format),
-        DataType::Int32 => encode_field(&get_i32_list_value(&arr), type_, format),
-        DataType::Int64 => encode_field(&get_i64_list_value(&arr), type_, format),
-        DataType::UInt8 => encode_field(&get_u8_list_value(&arr), type_, format),
-        DataType::UInt16 => encode_field(&get_u16_list_value(&arr), type_, format),
-        DataType::UInt32 => encode_field(&get_u32_list_value(&arr), type_, format),
-        DataType::UInt64 => encode_field(&get_u64_list_value(&arr), type_, format),
-        DataType::Float32 => encode_field(&get_f32_list_value(&arr), type_, format),
-        DataType::Float64 => encode_field(&get_f64_list_value(&arr), type_, format),
+        DataType::Boolean => encode_field(&get_bool_list_value(&arr), pg_field),
+        DataType::Int8 => encode_field(&get_i8_list_value(&arr), pg_field),
+        DataType::Int16 => encode_field(&get_i16_list_value(&arr), pg_field),
+        DataType::Int32 => encode_field(&get_i32_list_value(&arr), pg_field),
+        DataType::Int64 => encode_field(&get_i64_list_value(&arr), pg_field),
+        DataType::UInt8 => encode_field(&get_u8_list_value(&arr), pg_field),
+        DataType::UInt16 => encode_field(&get_u16_list_value(&arr), pg_field),
+        DataType::UInt32 => encode_field(&get_u32_list_value(&arr), pg_field),
+        DataType::UInt64 => encode_field(&get_u64_list_value(&arr), pg_field),
+        DataType::Float32 => encode_field(&get_f32_list_value(&arr), pg_field),
+        DataType::Float64 => encode_field(&get_f64_list_value(&arr), pg_field),
         DataType::Decimal128(_, s) => {
             let value: Vec<_> = arr
                 .as_any()
@@ -139,7 +139,7 @@ pub(crate) fn encode_list(
                 .iter()
                 .map(|ov| ov.map(|v| Decimal::from_i128_with_scale(v, *s as u32)))
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
         DataType::Utf8 => {
             let value: Vec<Option<&str>> = arr
@@ -148,7 +148,7 @@ pub(crate) fn encode_list(
                 .unwrap()
                 .iter()
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
         DataType::Utf8View => {
             let value: Vec<Option<&str>> = arr
@@ -157,7 +157,7 @@ pub(crate) fn encode_list(
                 .unwrap()
                 .iter()
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
         DataType::Binary => {
             let value: Vec<Option<_>> = arr
@@ -166,7 +166,7 @@ pub(crate) fn encode_list(
                 .unwrap()
                 .iter()
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
         DataType::LargeBinary => {
             let value: Vec<Option<_>> = arr
@@ -175,7 +175,7 @@ pub(crate) fn encode_list(
                 .unwrap()
                 .iter()
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
         DataType::BinaryView => {
             let value: Vec<Option<_>> = arr
@@ -184,7 +184,7 @@ pub(crate) fn encode_list(
                 .unwrap()
                 .iter()
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
 
         DataType::Date32 => {
@@ -195,7 +195,7 @@ pub(crate) fn encode_list(
                 .iter()
                 .map(|val| val.and_then(|x| as_date::<Date32Type>(x as i64)))
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
         DataType::Date64 => {
             let value: Vec<Option<_>> = arr
@@ -205,7 +205,7 @@ pub(crate) fn encode_list(
                 .iter()
                 .map(|val| val.and_then(as_date::<Date64Type>))
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
         DataType::Time32(unit) => match unit {
             TimeUnit::Second => {
@@ -216,7 +216,7 @@ pub(crate) fn encode_list(
                     .iter()
                     .map(|val| val.and_then(|x| as_time::<Time32SecondType>(x as i64)))
                     .collect();
-                encode_field(&value, type_, format)
+                encode_field(&value, pg_field)
             }
             TimeUnit::Millisecond => {
                 let value: Vec<Option<_>> = arr
@@ -226,7 +226,7 @@ pub(crate) fn encode_list(
                     .iter()
                     .map(|val| val.and_then(|x| as_time::<Time32MillisecondType>(x as i64)))
                     .collect();
-                encode_field(&value, type_, format)
+                encode_field(&value, pg_field)
             }
             _ => {
                 // Time32 only supports Second and Millisecond in Arrow
@@ -243,7 +243,7 @@ pub(crate) fn encode_list(
                     .iter()
                     .map(|val| val.and_then(as_time::<Time64MicrosecondType>))
                     .collect();
-                encode_field(&value, type_, format)
+                encode_field(&value, pg_field)
             }
             TimeUnit::Nanosecond => {
                 let value: Vec<Option<_>> = arr
@@ -253,7 +253,7 @@ pub(crate) fn encode_list(
                     .iter()
                     .map(|val| val.and_then(as_time::<Time64NanosecondType>))
                     .collect();
-                encode_field(&value, type_, format)
+                encode_field(&value, pg_field)
             }
             _ => {
                 // Time64 only supports Microsecond and Nanosecond in Arrow
@@ -283,14 +283,14 @@ pub(crate) fn encode_list(
                             })
                         })
                         .collect();
-                    encode_field(&value, type_, format)
+                    encode_field(&value, pg_field)
                 } else {
                     let value: Vec<_> = array_iter
                         .map(|i| {
                             i.and_then(|i| DateTime::from_timestamp(i, 0).map(|dt| dt.naive_utc()))
                         })
                         .collect();
-                    encode_field(&value, type_, format)
+                    encode_field(&value, pg_field)
                 }
             }
             TimeUnit::Millisecond => {
@@ -313,7 +313,7 @@ pub(crate) fn encode_list(
                             })
                         })
                         .collect();
-                    encode_field(&value, type_, format)
+                    encode_field(&value, pg_field)
                 } else {
                     let value: Vec<_> = array_iter
                         .map(|i| {
@@ -322,7 +322,7 @@ pub(crate) fn encode_list(
                             })
                         })
                         .collect();
-                    encode_field(&value, type_, format)
+                    encode_field(&value, pg_field)
                 }
             }
             TimeUnit::Microsecond => {
@@ -345,7 +345,7 @@ pub(crate) fn encode_list(
                             })
                         })
                         .collect();
-                    encode_field(&value, type_, format)
+                    encode_field(&value, pg_field)
                 } else {
                     let value: Vec<_> = array_iter
                         .map(|i| {
@@ -354,7 +354,7 @@ pub(crate) fn encode_list(
                             })
                         })
                         .collect();
-                    encode_field(&value, type_, format)
+                    encode_field(&value, pg_field)
                 }
             }
             TimeUnit::Nanosecond => {
@@ -377,36 +377,18 @@ pub(crate) fn encode_list(
                             })
                         })
                         .collect();
-                    encode_field(&value, type_, format)
+                    encode_field(&value, pg_field)
                 } else {
                     let value: Vec<_> = array_iter
                         .map(|i| i.map(|i| DateTime::from_timestamp_nanos(i).naive_utc()))
                         .collect();
-                    encode_field(&value, type_, format)
+                    encode_field(&value, pg_field)
                 }
             }
         },
-        DataType::Struct(_) => {
-            let fields = match type_.kind() {
-                postgres_types::Kind::Array(struct_type_) => Ok(struct_type_),
-                _ => Err(format!(
-                    "Expected list type found type {} of kind {:?}",
-                    type_,
-                    type_.kind()
-                )),
-            }
-            .and_then(|struct_type| match struct_type.kind() {
-                postgres_types::Kind::Composite(fields) => Ok(fields),
-                _ => Err(format!(
-                    "Failed to unwrap a composite type inside from type {} kind {:?}",
-                    type_,
-                    type_.kind()
-                )),
-            })
-            .map_err(ToSqlError::from)?;
-
+        DataType::Struct(arrow_fields) => {
             let values: PgWireResult<Vec<_>> = (0..arr.len())
-                .map(|row| encode_struct(&arr, row, fields, format))
+                .map(|row| encode_struct(&arr, row, arrow_fields, pg_field))
                 .map(|x| {
                     if matches!(format, FieldFormat::Text) {
                         x.map(|opt| {
@@ -430,7 +412,7 @@ pub(crate) fn encode_list(
                     }
                 })
                 .collect();
-            encode_field(&values?, type_, format)
+            encode_field(&values?, pg_field)
         }
         DataType::LargeUtf8 => {
             let value: Vec<Option<&str>> = arr
@@ -439,7 +421,7 @@ pub(crate) fn encode_list(
                 .unwrap()
                 .iter()
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
         DataType::Decimal256(_, s) => {
             // Convert Decimal256 to string representation for now
@@ -474,7 +456,7 @@ pub(crate) fn encode_list(
                     }
                 })
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
         DataType::Duration(_) => {
             // Convert duration to microseconds for now
@@ -484,7 +466,7 @@ pub(crate) fn encode_list(
                 .unwrap()
                 .iter()
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
         DataType::List(_) => {
             // Support for nested lists (list of lists)
@@ -500,7 +482,7 @@ pub(crate) fn encode_list(
                     }
                 })
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
         DataType::LargeList(_) => {
             // Support for large lists
@@ -514,7 +496,7 @@ pub(crate) fn encode_list(
                     }
                 })
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
         DataType::Map(_, _) => {
             // Support for map types
@@ -528,7 +510,7 @@ pub(crate) fn encode_list(
                     }
                 })
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
 
         DataType::Union(_, _) => {
@@ -542,7 +524,7 @@ pub(crate) fn encode_list(
                     }
                 })
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
         DataType::Dictionary(_, _) => {
             // Support for dictionary types
@@ -555,7 +537,7 @@ pub(crate) fn encode_list(
                     }
                 })
                 .collect();
-            encode_field(&value, type_, format)
+            encode_field(&value, pg_field)
         }
         // TODO: add support for more advanced types (fixed size lists, etc.)
         list_type => Err(PgWireError::ApiError(ToSqlError::from(format!(

@@ -1,7 +1,7 @@
 [package]
 name = "datafusion-postgres"
 description = "Exporting datafusion query engine with postgres wire protocol"
-version.workspace = true
+version = "0.14.0"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -13,12 +13,12 @@ readme = "../README.md"
 rust-version.workspace = true
 
 [dependencies]
-arrow-pg = { path = "../arrow-pg", version = "0.8.0", default-features = false, features = ["datafusion"] }
+arrow-pg = { path = "../arrow-pg", version = "0.10.0", default-features = false, features = ["datafusion"] }
 bytes.workspace = true
 async-trait = "0.1"
 chrono.workspace = true
 datafusion.workspace = true
-datafusion-pg-catalog = { path = "../datafusion-pg-catalog", version = "0.12.1" }
+datafusion-pg-catalog = { path = "../datafusion-pg-catalog", version = "0.14.0" }
 geodatafusion = { version = "0.1.1", optional = true }
 futures.workspace = true
 getset = "0.1"
@@ -26,7 +26,7 @@ log = "0.4"
 pgwire = { workspace = true, features = ["server-api-ring"] }
 postgres-types.workspace = true
 rust_decimal.workspace = true
-tokio = { version = "1.48", features = ["sync", "net"] }
+tokio = { version = "1.49", features = ["sync", "net"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 rustls-pemfile = "2.0"
 rustls-pki-types = "1.13"

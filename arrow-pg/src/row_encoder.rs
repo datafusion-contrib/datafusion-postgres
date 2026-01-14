@@ -17,6 +17,7 @@ pub struct RowEncoder {
     rb: RecordBatch,
     curr_idx: usize,
     fields: Arc<Vec<FieldInfo>>,
+    row_encoder: DataRowEncoder,
 }
 
 impl RowEncoder {
@@ -24,8 +25,9 @@ impl RowEncoder {
         assert_eq!(rb.num_columns(), fields.len());
         Self {
             rb,
-            fields,
+            fields: fields.clone(),
             curr_idx: 0,
+            row_encoder: DataRowEncoder::new(fields),
         }
     }
 
@@ -33,15 +35,24 @@ impl RowEncoder {
         if self.curr_idx == self.rb.num_rows() {
             return None;
         }
-        let mut encoder = DataRowEncoder::new(self.fields.clone());
+
+        let arrow_schema = self.rb.schema_ref();
         for col in 0..self.rb.num_columns() {
             let array = self.rb.column(col);
-            let field = &self.fields[col];
-            let type_ = field.datatype();
-            let format = field.format();
-            encode_value(&mut encoder, array, self.curr_idx, type_, format).unwrap();
+            let arrow_field = arrow_schema.field(col);
+            let pg_field = &self.fields[col];
+
+            if let Err(e) = encode_value(
+                &mut self.row_encoder,
+                array,
+                self.curr_idx,
+                arrow_field,
+                pg_field,
+            ) {
+                return Some(Err(e));
+            };
         }
         self.curr_idx += 1;
-        Some(encoder.finish())
+        Some(Ok(self.row_encoder.take_row()))
     }
 }

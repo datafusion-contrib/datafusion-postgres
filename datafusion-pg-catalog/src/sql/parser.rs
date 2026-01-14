@@ -7,12 +7,11 @@ use datafusion::sql::sqlparser::parser::ParserError;
 use datafusion::sql::sqlparser::tokenizer::Token;
 use datafusion::sql::sqlparser::tokenizer::TokenWithSpan;
 
-use crate::sql::rules::FixVersionColumnName;
-
 use super::rules::AliasDuplicatedProjectionRewrite;
 use super::rules::CurrentUserVariableToSessionUserFunctionCall;
 use super::rules::FixArrayLiteral;
 use super::rules::FixCollate;
+use super::rules::FixVersionColumnName;
 use super::rules::PrependUnqualifiedPgTableName;
 use super::rules::RemoveQualifier;
 use super::rules::RemoveSubqueryFromProjection;
@@ -164,6 +163,17 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
    NULL::TEXT AS _2
  WHERE false"
     ),
+
+    // grafana array index magic
+    (r#"SELECT
+            CASE WHEN trim(s[i]) = '"$user"' THEN user ELSE trim(s[i]) END
+        FROM
+            generate_series(
+                array_lower(string_to_array(current_setting('search_path'),','),1),
+                array_upper(string_to_array(current_setting('search_path'),','),1)
+            ) as i,
+            string_to_array(current_setting('search_path'),',') s"#,
+"''")
 ];
 
 /// A parser with Postgres Compatibility for Datafusion
@@ -173,7 +183,7 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
 /// statement to a similar version if rewrite doesn't worth the effort for now.
 #[derive(Debug)]
 pub struct PostgresCompatibilityParser {
-    blacklist: Vec<(Vec<Token>, Statement)>,
+    blacklist: Vec<(Vec<Token>, Vec<Token>)>,
     rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>>,
 }
 
@@ -200,8 +210,11 @@ impl PostgresCompatibilityParser {
                 Parser::new(&PostgreSqlDialect {})
                     .try_with_sql(sql_to)
                     .unwrap()
-                    .parse_statement()
-                    .unwrap(),
+                    .into_tokens()
+                    .into_iter()
+                    .map(|t| t.token)
+                    .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+                    .collect(),
             ));
         }
 
@@ -225,52 +238,110 @@ impl PostgresCompatibilityParser {
         }
     }
 
-    /// return statement if matched
-    fn parse_and_replace(&self, input: &str) -> Result<MatchResult, ParserError> {
+    /// return tokens with replacements applied
+    fn maybe_replace_tokens(&self, input: &str) -> Result<Vec<Token>, ParserError> {
         let parser = Parser::new(&PostgreSqlDialect {});
         let tokens = parser.try_with_sql(input)?.into_tokens();
 
-        let tokens_without_whitespace = tokens
+        // Get token values (without spans) and filter out only whitespace
+        // Keep semicolons as they separate statements
+        let filtered_tokens: Vec<Token> = tokens
             .iter()
-            .filter(|t| !matches!(t.token, Token::Whitespace(_) | Token::SemiColon))
-            .collect::<Vec<_>>();
+            .map(|t| t.token.clone())
+            .filter(|t| !matches!(t, Token::Whitespace(_)))
+            .collect();
 
-        for (blacklisted_sql_tokens, replacement) in &self.blacklist {
-            if blacklisted_sql_tokens.len() == tokens_without_whitespace.len() {
-                let matches = blacklisted_sql_tokens
-                    .iter()
-                    .zip(tokens_without_whitespace.iter())
-                    .all(|(a, b)| {
-                        if matches!(a, Token::Placeholder(_)) {
-                            true
-                        } else {
-                            *a == b.token
-                        }
-                    });
-                if matches {
-                    return Ok(MatchResult::Matches(Box::new(replacement.clone())));
-                }
-            } else {
+        // Handle empty input
+        if filtered_tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build result by processing filtered tokens sequentially
+        let mut result = Vec::new();
+        let mut i = 0;
+
+        while i < filtered_tokens.len() {
+            // Keep semicolons as-is
+            if matches!(&filtered_tokens[i], Token::SemiColon) {
+                result.push(filtered_tokens[i].clone());
+                i += 1;
                 continue;
+            }
+
+            // Try to find a blacklist pattern match starting at this position
+            let mut matched = false;
+            for (pattern, replacement) in &self.blacklist {
+                if pattern.is_empty() {
+                    continue;
+                }
+
+                // Check if we have enough tokens remaining
+                let mut j = 0;
+                let mut pattern_idx = 0;
+                while i + j < filtered_tokens.len() && pattern_idx < pattern.len() {
+                    // Skip semicolons in the input when matching patterns
+                    if matches!(&filtered_tokens[i + j], Token::SemiColon) {
+                        j += 1;
+                        continue;
+                    }
+
+                    match &pattern[pattern_idx] {
+                        Token::Placeholder(_) => {
+                            // Placeholder matches any non-semicolon token
+                            pattern_idx += 1;
+                            j += 1;
+                        }
+                        _ => {
+                            if filtered_tokens[i + j] != pattern[pattern_idx] {
+                                break;
+                            }
+                            pattern_idx += 1;
+                            j += 1;
+                        }
+                    }
+                }
+
+                // Check if we matched the entire pattern
+                if pattern_idx == pattern.len() {
+                    // Add replacement tokens
+                    result.extend(replacement.iter().cloned());
+                    // Skip the matched pattern (including any semicolons we skipped)
+                    i += j;
+                    matched = true;
+                    break;
+                }
+            }
+
+            if !matched {
+                // No match, keep the original token
+                result.push(filtered_tokens[i].clone());
+                i += 1;
             }
         }
 
-        Ok(MatchResult::Unmatches(tokens))
+        Ok(result)
     }
 
-    fn parse_tokens(&self, tokens: Vec<TokenWithSpan>) -> Result<Vec<Statement>, ParserError> {
+    fn parse_tokens(&self, tokens: Vec<Token>) -> Result<Vec<Statement>, ParserError> {
         let parser = Parser::new(&PostgreSqlDialect {});
-        parser.with_tokens_with_locations(tokens).parse_statements()
+        // Convert tokens to TokenWithSpan with dummy spans
+        let tokens_with_spans: Vec<TokenWithSpan> = tokens
+            .into_iter()
+            .map(|token| TokenWithSpan {
+                token,
+                span: datafusion::sql::sqlparser::tokenizer::Span::empty(),
+            })
+            .collect();
+        parser
+            .with_tokens_with_locations(tokens_with_spans)
+            .parse_statements()
     }
 
     pub fn parse(&self, input: &str) -> Result<Vec<Statement>, ParserError> {
-        let statements = match self.parse_and_replace(input)? {
-            MatchResult::Matches(statement) => vec![*statement],
-            MatchResult::Unmatches(tokens) => self.parse_tokens(tokens)?,
-        };
+        let tokens = self.maybe_replace_tokens(input)?;
+        let statements = self.parse_tokens(tokens)?;
 
-        let statements = statements.into_iter().map(|s| self.rewrite(s)).collect();
-
+        let statements: Vec<_> = statements.into_iter().map(|s| self.rewrite(s)).collect();
         Ok(statements)
     }
 
@@ -283,17 +354,12 @@ impl PostgresCompatibilityParser {
     }
 }
 
-pub(crate) enum MatchResult {
-    Matches(Box<Statement>),
-    Unmatches(Vec<TokenWithSpan>),
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_sql_mapping() {
+    fn test_full_match() {
         let sql = "SELECT pol.polname, pol.polpermissive,
               CASE WHEN pol.polroles = '{0}' THEN NULL ELSE pg_catalog.array_to_string(array(select rolname from pg_catalog.pg_roles where oid = any (pol.polroles) order by 1),',') END,
               pg_catalog.pg_get_expr(pol.polqual, pol.polrelid),
@@ -308,8 +374,32 @@ mod tests {
             WHERE pol.polrelid = '16384' ORDER BY 1;";
 
         let parser = PostgresCompatibilityParser::new();
-        let match_result = parser.parse_and_replace(sql).expect("failed to parse sql");
-        assert!(matches!(match_result, MatchResult::Matches(_)));
+        let actual_tokens = parser
+            .maybe_replace_tokens(sql)
+            .expect("failed to parse sql")
+            .into_iter()
+            .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+            .collect::<Vec<_>>();
+
+        let expected_sql = r#"SELECT
+   NULL::TEXT AS polname,
+   NULL::TEXT AS polpermissive,
+   NULL::TEXT AS array_to_string,
+   NULL::TEXT AS pg_get_expr_1,
+   NULL::TEXT AS pg_get_expr_2,
+   NULL::TEXT AS cmd
+ WHERE false"#;
+
+        let expected_tokens = Parser::new(&PostgreSqlDialect {})
+            .try_with_sql(expected_sql)
+            .unwrap()
+            .into_tokens()
+            .into_iter()
+            .map(|t| t.token)
+            .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual_tokens, expected_tokens);
 
         let sql = "SELECT n.nspname schema_name,
                                        t.typname type_name
@@ -333,7 +423,180 @@ mod tests {
                                 ORDER BY 1, 2";
 
         let parser = PostgresCompatibilityParser::new();
-        let match_result = parser.parse_and_replace(sql).expect("failed to parse sql");
-        assert!(matches!(match_result, MatchResult::Matches(_)));
+
+        let actual_tokens = parser
+            .maybe_replace_tokens(sql)
+            .expect("failed to parse sql")
+            .into_iter()
+            .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+            .collect::<Vec<_>>();
+
+        let expected_sql =
+            r#"SELECT NULL::TEXT AS schema_name, NULL::TEXT AS type_name WHERE false"#;
+
+        let expected_tokens = Parser::new(&PostgreSqlDialect {})
+            .try_with_sql(expected_sql)
+            .unwrap()
+            .into_tokens()
+            .into_iter()
+            .map(|t| t.token)
+            .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual_tokens, expected_tokens);
+
+        let sql = "SELECT pubname
+             , NULL
+             , NULL
+        FROM pg_catalog.pg_publication p
+             JOIN pg_catalog.pg_publication_namespace pn ON p.oid = pn.pnpubid
+             JOIN pg_catalog.pg_class pc ON pc.relnamespace = pn.pnnspid
+        WHERE pc.oid ='16384' and pg_catalog.pg_relation_is_publishable('16384')
+        UNION
+        SELECT pubname
+             , pg_get_expr(pr.prqual, c.oid)
+             , (CASE WHEN pr.prattrs IS NOT NULL THEN
+                 (SELECT string_agg(attname, ', ')
+                   FROM pg_catalog.generate_series(0, pg_catalog.array_upper(pr.prattrs::pg_catalog.int2[], 1)) s,
+                        pg_catalog.pg_attribute
+                  WHERE attrelid = pr.prrelid AND attnum = prattrs[s])
+                ELSE NULL END) FROM pg_catalog.pg_publication p
+             JOIN pg_catalog.pg_publication_rel pr ON p.oid = pr.prpubid
+             JOIN pg_catalog.pg_class c ON c.oid = pr.prrelid
+        WHERE pr.prrelid = '16384'
+        UNION
+        SELECT pubname
+             , NULL
+             , NULL
+        FROM pg_catalog.pg_publication p
+        WHERE p.puballtables AND pg_catalog.pg_relation_is_publishable('16384')
+        ORDER BY 1;";
+
+        let parser = PostgresCompatibilityParser::new();
+
+        let actual_tokens = parser
+            .maybe_replace_tokens(sql)
+            .expect("failed to parse sql")
+            .into_iter()
+            .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+            .collect::<Vec<_>>();
+
+        let expected_sql = r#"SELECT
+   NULL::TEXT AS pubname,
+   NULL::TEXT AS _1,
+   NULL::TEXT AS _2
+ WHERE false"#;
+
+        let expected_tokens = Parser::new(&PostgreSqlDialect {})
+            .try_with_sql(expected_sql)
+            .unwrap()
+            .into_tokens()
+            .into_iter()
+            .map(|t| t.token)
+            .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual_tokens, expected_tokens);
+    }
+
+    #[test]
+    fn test_empty_query() {
+        let parser = PostgresCompatibilityParser::new();
+        let result = parser.parse(" ").expect("failed to parse sql");
+        assert!(result.is_empty());
+
+        let result = parser.parse("").expect("failed to parse sql");
+        assert!(result.is_empty());
+
+        let result = parser.parse(";").expect("failed to parse sql");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_partial_match() {
+        let parser = PostgresCompatibilityParser::new();
+
+        // Test partial match where the beginning matches a blacklisted query
+        // Using a simpler query that doesn't have placeholders for easier testing
+        let sql = r#"SELECT
+        CASE WHEN
+              quote_ident(table_schema) IN (
+              SELECT
+                CASE WHEN trim(s[i]) = '"$user"' THEN user ELSE trim(s[i]) END
+              FROM
+                generate_series(
+                  array_lower(string_to_array(current_setting('search_path'),','),1),
+                  array_upper(string_to_array(current_setting('search_path'),','),1)
+                ) as i,
+                string_to_array(current_setting('search_path'),',') s
+              )
+          THEN quote_ident(table_name)
+          ELSE quote_ident(table_schema) || '.' || quote_ident(table_name)
+        END AS "table"
+        FROM information_schema.tables
+        WHERE quote_ident(table_schema) NOT IN ('information_schema',
+                                 'pg_catalog',
+                                 '_timescaledb_cache',
+                                 '_timescaledb_catalog',
+                                 '_timescaledb_internal',
+                                 '_timescaledb_config',
+                                 'timescaledb_information',
+                                 'timescaledb_experimental')
+        ORDER BY CASE WHEN
+              quote_ident(table_schema) IN (
+              SELECT
+                CASE WHEN trim(s[i]) = '"$user"' THEN user ELSE trim(s[i]) END
+              FROM
+                generate_series(
+                  array_lower(string_to_array(current_setting('search_path'),','),1),
+                  array_upper(string_to_array(current_setting('search_path'),','),1)
+                ) as i,
+                string_to_array(current_setting('search_path'),',') s
+              ) THEN 0 ELSE 1 END, 1"#;
+
+        let tokens = parser
+            .maybe_replace_tokens(sql)
+            .expect("failed to parse sql");
+        // Should have the beginning replaced with 'SELECT' and the rest preserved
+        assert!(tokens.len() > 0);
+
+        let expected_sql = r#"SELECT
+        CASE WHEN
+              quote_ident(table_schema) IN (
+              '')
+          THEN quote_ident(table_name)
+          ELSE quote_ident(table_schema) || '.' || quote_ident(table_name)
+        END AS "table"
+        FROM information_schema.tables
+        WHERE quote_ident(table_schema) NOT IN ('information_schema',
+                                 'pg_catalog',
+                                 '_timescaledb_cache',
+                                 '_timescaledb_catalog',
+                                 '_timescaledb_internal',
+                                 '_timescaledb_config',
+                                 'timescaledb_information',
+                                 'timescaledb_experimental')
+        ORDER BY CASE WHEN
+              quote_ident(table_schema) IN (
+              ''
+              ) THEN 0 ELSE 1 END, 1"#;
+
+        let expected_tokens = Parser::new(&PostgreSqlDialect {})
+            .try_with_sql(expected_sql)
+            .unwrap()
+            .into_tokens();
+
+        // Compare token values (ignoring spans and whitespace)
+        let actual_tokens: Vec<_> = tokens
+            .iter()
+            .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+            .collect();
+        let expected_token_values: Vec<_> = expected_tokens
+            .iter()
+            .map(|t| &t.token)
+            .filter(|t| !matches!(t, Token::Whitespace(_) | Token::SemiColon))
+            .collect();
+
+        assert_eq!(actual_tokens, expected_token_values);
     }
 }

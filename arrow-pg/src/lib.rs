@@ -6,6 +6,13 @@
 pub mod datatypes;
 pub mod encoder;
 mod error;
+#[cfg(feature = "geo")]
+pub mod geo_encoder;
 pub mod list_encoder;
 pub mod row_encoder;
 pub mod struct_encoder;
+
+#[cfg(feature = "datafusion")]
+pub use datatypes::df::encode_dataframe;
+
+pub use datatypes::encode_recordbatch;
