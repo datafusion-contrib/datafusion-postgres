@@ -129,6 +129,20 @@ pub fn field_into_pg_type(field: &Arc<Field>) -> PgWireResult<Type> {
         // for placeholder.
         #[cfg(feature = "postgis")]
         Some(geoarrow_schema::PointType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::LineStringType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::PolygonType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::MultiPointType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::MultiLineStringType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::MultiPolygonType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::GeometryCollectionType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::RectType::NAME) => Ok(Type::TEXT),
 
         _ => into_pg_type(arrow_type),
     }
