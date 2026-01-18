@@ -142,6 +142,8 @@ pub fn field_into_pg_type(field: &Arc<Field>) -> PgWireResult<Type> {
         #[cfg(feature = "postgis")]
         Some(geoarrow_schema::GeometryCollectionType::NAME) => Ok(Type::TEXT),
         #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::GeometryType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
         Some(geoarrow_schema::RectType::NAME) => Ok(Type::TEXT),
         #[cfg(feature = "postgis")]
         Some(geoarrow_schema::WktType::NAME) => Ok(Type::TEXT),

@@ -6,7 +6,7 @@ use arrow::datatypes::*;
 use datafusion::arrow::datatypes::*;
 use geo_postgis::ToPostgis;
 use geo_traits::to_geo::{
-    ToGeoGeometryCollection, ToGeoLineString, ToGeoMultiLineString, ToGeoMultiPoint,
+    ToGeoGeometry, ToGeoGeometryCollection, ToGeoLineString, ToGeoMultiLineString, ToGeoMultiPoint,
     ToGeoMultiPolygon, ToGeoPoint, ToGeoPolygon, ToGeoRect,
 };
 use geoarrow::array::{AsGeoArrowArray, GeoArrowArray, GeoArrowArrayAccessor};
@@ -86,6 +86,9 @@ encode_geo_fn!(encode_large_wkb, geoarrow::array::LargeWkbArray, Vec<u8>,
 encode_geo_fn!(encode_wkb_view, geoarrow::array::WkbViewArray, Vec<u8>,
     .buf().to_vec());
 
+encode_geo_fn!(encode_geometry, geoarrow::array::GeometryArray, postgis::ewkb::Geometry,
+    .to_geometry().to_postgis_with_srid(None));
+
 pub fn encode_geo<T: Encoder>(
     encoder: &mut T,
     geoarrow_type: GeoArrowType,
@@ -152,7 +155,8 @@ pub fn encode_geo<T: Encoder>(
             encode_large_wkb(encoder, array, idx, pg_field)
         }
         GeoArrowType::Geometry(_) => {
-            todo!()
+            let array = arr.as_geometry();
+            encode_geometry(encoder, array, idx, pg_field)
         }
     }
 }

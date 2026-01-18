@@ -43,10 +43,10 @@ def main():
 def test_geometry_creation(cur):
     """Test geometry creation functions."""
     # Test ST_GeomFromText
-    # cur.execute("SELECT ST_GeomFromText('POINT(1 1)')")
-    # result = cur.fetchone()[0]
-    # assert result is not None
-    # print("  ✓ ST_GeomFromText('POINT(1 1)')")
+    cur.execute("SELECT ST_GeomFromText('POINT(1 1)')")
+    result = cur.fetchone()[0]
+    assert result is not None
+    print("  ✓ ST_GeomFromText('POINT(1 1)')")
 
     # Test ST_Point
     cur.execute("SELECT ST_Point(1, 2)")
@@ -72,7 +72,7 @@ def test_geometry_creation(cur):
     # assert result is not None
     # print("  ✓ ST_PolygonFromText('POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))')")
 
-    # # Test ST_GeomFromWKB
+    # Test ST_GeomFromWKB
     # try:
     #     cur.execute("SELECT ST_AsBinary(ST_Point(1, 2))")
     #     wkb = cur.fetchone()[0]
