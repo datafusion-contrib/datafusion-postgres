@@ -13,10 +13,10 @@ readme = "../README.md"
 rust-version.workspace = true
 
 [features]
-default = ["arrow", "geo"]
+default = ["arrow", "postgis"]
 arrow = ["dep:arrow"]
 datafusion = ["dep:datafusion"]
-geo = ["postgres-types/with-geo-types-0_7", "dep:geoarrow", "dep:geoarrow-schema", "dep:postgis", "dep:geo-postgis", "pgwire/pg-type-postgis", "dep:geo-traits"]
+postgis = ["postgres-types/with-geo-types-0_7", "dep:geoarrow", "dep:geoarrow-schema", "dep:postgis", "dep:geo-postgis", "pgwire/pg-type-postgis", "dep:geo-traits"]
 
 [dependencies]
 arrow = { workspace = true, optional = true }
