@@ -382,13 +382,15 @@ dependencies = [
  "chrono",
  "datafusion",
  "futures",
+ "geo-postgis",
+ "geo-traits",
  "geoarrow",
  "geoarrow-schema",
  "pgwire",
+ "postgis",
  "postgres-types",
  "rust_decimal",
  "tokio",
- "wkb",
 ]
 
 [[package]]
@@ -2072,6 +2074,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "geo-postgis"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90fdc8b3bd7e9f4c91b8e69b508cd8a5520b83bad3e4a94b8e08a2b184a152b8"
+dependencies = [
+ "geo-types",
+ "postgis",
+]
+
+[[package]]
 name = "geo-traits"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3053,8 +3065,7 @@ dependencies = [
 [[package]]
 name = "pgwire"
 version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02d86d57e732d40382ceb9bfea80901d839bae8571aa11c06af9177aed9dfb6c"
+source = "git+https://github.com/sunng87/pgwire?branch=feature%2Fpostgis-types#cafc2ccc4998fec12fd0ce0d1ea5030310220846"
 dependencies = [
  "async-trait",
  "base64",
@@ -3065,6 +3076,7 @@ dependencies = [
  "hex",
  "lazy-regex",
  "md5",
+ "postgis",
  "postgres-types",
  "rand 0.9.2",
  "ring",
@@ -3159,6 +3171,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8a2f0d8d040d7848a709caf78912debcc3f33ee4b3cac47d73d1e1069e83507"
 dependencies = [
  "portable-atomic",
+]
+
+[[package]]
+name = "postgis"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b52406590b7a682cadd0f0339c43905eb323568e84a2e97e855ef92645e0ec09"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "postgres-types",
 ]
 
 [[package]]

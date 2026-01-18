@@ -1,17 +1,17 @@
-use bytes::BytesMut;
 use std::sync::Arc;
 
 #[cfg(not(feature = "datafusion"))]
 use arrow::datatypes::*;
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::datatypes::*;
+use geo_postgis::ToPostgis;
+use geo_traits::to_geo::ToGeoPoint;
 use geoarrow::array::{AsGeoArrowArray, GeoArrowArray, GeoArrowArrayAccessor};
 use geoarrow_schema::GeoArrowType;
 use pgwire::api::results::FieldInfo;
 use pgwire::error::{PgWireError, PgWireResult};
-use wkb::{writer::WriteOptions, Endianness};
 
-use crate::encoder::{EncodedValue, Encoder};
+use crate::encoder::Encoder;
 
 pub fn encode_geo<T: Encoder>(
     encoder: &mut T,
@@ -38,22 +38,15 @@ fn encode_point<T: Encoder>(
     pg_field: &FieldInfo,
 ) -> PgWireResult<()> {
     if array.is_null(idx) {
-        encoder.encode_field(&None::<EncodedValue>, pg_field)?;
-        return Ok(());
+        return encoder.encode_field(&None::<postgis::ewkb::Point>, pg_field);
     }
 
     let point = array
         .value(idx)
         .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-    let mut bytes = Vec::new();
-    let options = WriteOptions {
-        endianness: Endianness::LittleEndian,
-    };
-    wkb::writer::write_point(&mut bytes, &point, &options)
-        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-    let encoded_value = EncodedValue {
-        bytes: BytesMut::from(&bytes[..]),
-    };
-    encoder.encode_field(&encoded_value, pg_field)
+    let geo_point = point.to_point();
+    let ewkb_point = geo_point.to_postgis_with_srid(None);
+
+    encoder.encode_field(&ewkb_point, pg_field)
 }
