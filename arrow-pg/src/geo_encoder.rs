@@ -122,6 +122,74 @@ fn encode_rect<T: Encoder>(
     encoder.encode_field(&ewkb_polygon, pg_field)
 }
 
+fn encode_wkt<T: Encoder>(
+    encoder: &mut T,
+    array: &geoarrow::array::WktArray,
+    idx: usize,
+    pg_field: &FieldInfo,
+) -> PgWireResult<()> {
+    if array.is_null(idx) {
+        return encoder.encode_field(&None::<String>, pg_field);
+    }
+
+    let value = array
+        .value(idx)
+        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+    encoder.encode_field(&value.to_string(), pg_field)
+}
+
+fn encode_wkt_view<T: Encoder>(
+    encoder: &mut T,
+    array: &geoarrow::array::WktViewArray,
+    idx: usize,
+    pg_field: &FieldInfo,
+) -> PgWireResult<()> {
+    if array.is_null(idx) {
+        return encoder.encode_field(&None::<String>, pg_field);
+    }
+
+    let value = array
+        .value(idx)
+        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+    encoder.encode_field(&value.to_string(), pg_field)
+}
+
+fn encode_wkb<T: Encoder>(
+    encoder: &mut T,
+    array: &geoarrow::array::WkbArray,
+    idx: usize,
+    pg_field: &FieldInfo,
+) -> PgWireResult<()> {
+    if array.is_null(idx) {
+        return encoder.encode_field(&None::<Vec<u8>>, pg_field);
+    }
+
+    let value = array
+        .value(idx)
+        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+    encoder.encode_field(&value.buf(), pg_field)
+}
+
+fn encode_wkb_view<T: Encoder>(
+    encoder: &mut T,
+    array: &geoarrow::array::WkbViewArray,
+    idx: usize,
+    pg_field: &FieldInfo,
+) -> PgWireResult<()> {
+    if array.is_null(idx) {
+        return encoder.encode_field(&None::<Vec<u8>>, pg_field);
+    }
+
+    let value = array
+        .value(idx)
+        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+    encoder.encode_field(&value.buf(), pg_field)
+}
+
 pub fn encode_geo<T: Encoder>(
     encoder: &mut T,
     geoarrow_type: GeoArrowType,
@@ -162,6 +230,22 @@ pub fn encode_geo<T: Encoder>(
         geoarrow_schema::GeoArrowType::Rect(_) => {
             let array: &geoarrow::array::RectArray = arr.as_rect();
             encode_rect(encoder, array, idx, pg_field)
+        }
+        geoarrow_schema::GeoArrowType::Wkt(_) => {
+            let array: &geoarrow::array::WktArray = arr.as_wkt();
+            encode_wkt(encoder, array, idx, pg_field)
+        }
+        geoarrow_schema::GeoArrowType::WktView(_) => {
+            let array: &geoarrow::array::WktViewArray = arr.as_wkt_view();
+            encode_wkt_view(encoder, array, idx, pg_field)
+        }
+        geoarrow_schema::GeoArrowType::Wkb(_) => {
+            let array: &geoarrow::array::WkbArray = arr.as_wkb();
+            encode_wkb(encoder, array, idx, pg_field)
+        }
+        geoarrow_schema::GeoArrowType::WkbView(_) => {
+            let array: &geoarrow::array::WkbViewArray = arr.as_wkb_view();
+            encode_wkb_view(encoder, array, idx, pg_field)
         }
         geo_type => Err(PgWireError::ApiError(
             format!("Unsupported GeoArrowType {:?}", geo_type).into(),
