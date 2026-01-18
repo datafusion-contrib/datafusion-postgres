@@ -5,6 +5,10 @@ use arrow::datatypes::*;
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::datatypes::*;
 use geo_postgis::ToPostgis;
+use geo_traits::to_geo::{
+    ToGeoGeometryCollection, ToGeoLineString, ToGeoMultiLineString, ToGeoMultiPoint,
+    ToGeoMultiPolygon, ToGeoPoint, ToGeoPolygon, ToGeoRect,
+};
 use geoarrow::array::{AsGeoArrowArray, GeoArrowArray, GeoArrowArrayAccessor};
 use geoarrow_schema::GeoArrowType;
 use pgwire::api::results::FieldInfo;
@@ -12,18 +16,12 @@ use pgwire::error::{PgWireError, PgWireResult};
 
 use crate::encoder::Encoder;
 
-use geo_traits::to_geo::{
-    ToGeoGeometryCollection, ToGeoLineString, ToGeoMultiLineString, ToGeoMultiPoint,
-    ToGeoMultiPolygon, ToGeoPoint, ToGeoPolygon, ToGeoRect,
-};
-
 macro_rules! encode_geo_fn {
     (
         $name:ident,
         $array_type:ty,
         $postgis_type:ty,
-        $geoarrow_value_type:ty,
-        $to_geo_fn:ident
+        $($conversion:tt)+
     ) => {
         fn $name<T: Encoder>(
             encoder: &mut T,
@@ -35,160 +33,52 @@ macro_rules! encode_geo_fn {
                 return encoder.encode_field(&None::<$postgis_type>, pg_field);
             }
 
-            let value: $geoarrow_value_type = array
+            let value = array
                 .value(idx)
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-            let ewkb_value = value.$to_geo_fn().to_postgis_with_srid(None);
+            let converted_value = value $($conversion)+;
 
-            encoder.encode_field(&ewkb_value, pg_field)
+            encoder.encode_field(&converted_value, pg_field)
         }
     };
 }
 
-encode_geo_fn!(
-    encode_point,
-    geoarrow::array::PointArray,
-    postgis::ewkb::Point,
-    geoarrow::array::Point<'_>,
-    to_point
-);
+encode_geo_fn!(encode_point, geoarrow::array::PointArray, postgis::ewkb::Point,
+    .to_point().to_postgis_with_srid(None));
 
-encode_geo_fn!(
-    encode_linestring,
-    geoarrow::array::LineStringArray,
-    postgis::ewkb::LineString,
-    geoarrow::array::LineString<'_>,
-    to_line_string
-);
+encode_geo_fn!(encode_linestring, geoarrow::array::LineStringArray, postgis::ewkb::LineString,
+    .to_line_string().to_postgis_with_srid(None));
 
-encode_geo_fn!(
-    encode_polygon,
-    geoarrow::array::PolygonArray,
-    postgis::ewkb::Polygon,
-    geoarrow::array::Polygon<'_>,
-    to_polygon
-);
+encode_geo_fn!(encode_polygon, geoarrow::array::PolygonArray, postgis::ewkb::Polygon,
+    .to_polygon().to_postgis_with_srid(None));
 
-encode_geo_fn!(
-    encode_multipoint,
-    geoarrow::array::MultiPointArray,
-    postgis::ewkb::MultiPoint,
-    geoarrow::array::MultiPoint<'_>,
-    to_multi_point
-);
+encode_geo_fn!(encode_multipoint, geoarrow::array::MultiPointArray, postgis::ewkb::MultiPoint,
+    .to_multi_point().to_postgis_with_srid(None));
 
-encode_geo_fn!(
-    encode_multilinestring,
-    geoarrow::array::MultiLineStringArray,
-    postgis::ewkb::MultiLineString,
-    geoarrow::array::MultiLineString<'_>,
-    to_multi_line_string
-);
+encode_geo_fn!(encode_multilinestring, geoarrow::array::MultiLineStringArray, postgis::ewkb::MultiLineString,
+    .to_multi_line_string().to_postgis_with_srid(None));
 
-encode_geo_fn!(
-    encode_multipolygon,
-    geoarrow::array::MultiPolygonArray,
-    postgis::ewkb::MultiPolygon,
-    geoarrow::array::MultiPolygon<'_>,
-    to_multi_polygon
-);
+encode_geo_fn!(encode_multipolygon, geoarrow::array::MultiPolygonArray, postgis::ewkb::MultiPolygon,
+    .to_multi_polygon().to_postgis_with_srid(None));
 
-encode_geo_fn!(
-    encode_geometrycollection,
-    geoarrow::array::GeometryCollectionArray,
-    postgis::ewkb::GeometryCollection,
-    geoarrow::array::GeometryCollection<'_>,
-    to_geometry_collection
-);
+encode_geo_fn!(encode_geometrycollection, geoarrow::array::GeometryCollectionArray, postgis::ewkb::GeometryCollection,
+    .to_geometry_collection().to_postgis_with_srid(None));
 
-fn encode_rect<T: Encoder>(
-    encoder: &mut T,
-    array: &geoarrow::array::RectArray,
-    idx: usize,
-    pg_field: &FieldInfo,
-) -> PgWireResult<()> {
-    if array.is_null(idx) {
-        return encoder.encode_field(&None::<postgis::ewkb::Polygon>, pg_field);
-    }
+encode_geo_fn!(encode_rect, geoarrow::array::RectArray, postgis::ewkb::Polygon,
+    .to_rect().to_polygon().to_postgis_with_srid(None));
 
-    let rect: geoarrow::array::Rect<'_> = array
-        .value(idx)
-        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+encode_geo_fn!(encode_wkt, geoarrow::array::WktArray, String,
+    .to_string());
 
-    let geo_rect = rect.to_rect();
-    let ewkb_polygon = geo_rect.to_polygon().to_postgis_with_srid(None);
+encode_geo_fn!(encode_wkt_view, geoarrow::array::WktViewArray, String,
+    .to_string());
 
-    encoder.encode_field(&ewkb_polygon, pg_field)
-}
+encode_geo_fn!(encode_wkb, geoarrow::array::WkbArray, Vec<u8>,
+    .buf().to_vec());
 
-fn encode_wkt<T: Encoder>(
-    encoder: &mut T,
-    array: &geoarrow::array::WktArray,
-    idx: usize,
-    pg_field: &FieldInfo,
-) -> PgWireResult<()> {
-    if array.is_null(idx) {
-        return encoder.encode_field(&None::<String>, pg_field);
-    }
-
-    let value = array
-        .value(idx)
-        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-
-    encoder.encode_field(&value.to_string(), pg_field)
-}
-
-fn encode_wkt_view<T: Encoder>(
-    encoder: &mut T,
-    array: &geoarrow::array::WktViewArray,
-    idx: usize,
-    pg_field: &FieldInfo,
-) -> PgWireResult<()> {
-    if array.is_null(idx) {
-        return encoder.encode_field(&None::<String>, pg_field);
-    }
-
-    let value = array
-        .value(idx)
-        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-
-    encoder.encode_field(&value.to_string(), pg_field)
-}
-
-fn encode_wkb<T: Encoder>(
-    encoder: &mut T,
-    array: &geoarrow::array::WkbArray,
-    idx: usize,
-    pg_field: &FieldInfo,
-) -> PgWireResult<()> {
-    if array.is_null(idx) {
-        return encoder.encode_field(&None::<Vec<u8>>, pg_field);
-    }
-
-    let value = array
-        .value(idx)
-        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-
-    encoder.encode_field(&value.buf(), pg_field)
-}
-
-fn encode_wkb_view<T: Encoder>(
-    encoder: &mut T,
-    array: &geoarrow::array::WkbViewArray,
-    idx: usize,
-    pg_field: &FieldInfo,
-) -> PgWireResult<()> {
-    if array.is_null(idx) {
-        return encoder.encode_field(&None::<Vec<u8>>, pg_field);
-    }
-
-    let value = array
-        .value(idx)
-        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-
-    encoder.encode_field(&value.buf(), pg_field)
-}
+encode_geo_fn!(encode_wkb_view, geoarrow::array::WkbViewArray, Vec<u8>,
+    .buf().to_vec());
 
 pub fn encode_geo<T: Encoder>(
     encoder: &mut T,
@@ -200,51 +90,51 @@ pub fn encode_geo<T: Encoder>(
 ) -> PgWireResult<()> {
     match geoarrow_type {
         geoarrow_schema::GeoArrowType::Point(_) => {
-            let array: &geoarrow::array::PointArray = arr.as_point();
+            let array = arr.as_point();
             encode_point(encoder, array, idx, pg_field)
         }
         geoarrow_schema::GeoArrowType::LineString(_) => {
-            let array: &geoarrow::array::LineStringArray = arr.as_line_string();
+            let array = arr.as_line_string();
             encode_linestring(encoder, array, idx, pg_field)
         }
         geoarrow_schema::GeoArrowType::Polygon(_) => {
-            let array: &geoarrow::array::PolygonArray = arr.as_polygon();
+            let array = arr.as_polygon();
             encode_polygon(encoder, array, idx, pg_field)
         }
         geoarrow_schema::GeoArrowType::MultiPoint(_) => {
-            let array: &geoarrow::array::MultiPointArray = arr.as_multi_point();
+            let array = arr.as_multi_point();
             encode_multipoint(encoder, array, idx, pg_field)
         }
         geoarrow_schema::GeoArrowType::MultiLineString(_) => {
-            let array: &geoarrow::array::MultiLineStringArray = arr.as_multi_line_string();
+            let array = arr.as_multi_line_string();
             encode_multilinestring(encoder, array, idx, pg_field)
         }
         geoarrow_schema::GeoArrowType::MultiPolygon(_) => {
-            let array: &geoarrow::array::MultiPolygonArray = arr.as_multi_polygon();
+            let array = arr.as_multi_polygon();
             encode_multipolygon(encoder, array, idx, pg_field)
         }
         geoarrow_schema::GeoArrowType::GeometryCollection(_) => {
-            let array: &geoarrow::array::GeometryCollectionArray = arr.as_geometry_collection();
+            let array = arr.as_geometry_collection();
             encode_geometrycollection(encoder, array, idx, pg_field)
         }
         geoarrow_schema::GeoArrowType::Rect(_) => {
-            let array: &geoarrow::array::RectArray = arr.as_rect();
+            let array = arr.as_rect();
             encode_rect(encoder, array, idx, pg_field)
         }
         geoarrow_schema::GeoArrowType::Wkt(_) => {
-            let array: &geoarrow::array::WktArray = arr.as_wkt();
+            let array = arr.as_wkt();
             encode_wkt(encoder, array, idx, pg_field)
         }
         geoarrow_schema::GeoArrowType::WktView(_) => {
-            let array: &geoarrow::array::WktViewArray = arr.as_wkt_view();
+            let array = arr.as_wkt_view();
             encode_wkt_view(encoder, array, idx, pg_field)
         }
         geoarrow_schema::GeoArrowType::Wkb(_) => {
-            let array: &geoarrow::array::WkbArray = arr.as_wkb();
+            let array = arr.as_wkb();
             encode_wkb(encoder, array, idx, pg_field)
         }
         geoarrow_schema::GeoArrowType::WkbView(_) => {
-            let array: &geoarrow::array::WkbViewArray = arr.as_wkb_view();
+            let array = arr.as_wkb_view();
             encode_wkb_view(encoder, array, idx, pg_field)
         }
         geo_type => Err(PgWireError::ApiError(
