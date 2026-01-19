@@ -1,3 +1,5 @@
+use std::error::Error;
+use std::io::Write;
 use std::sync::Arc;
 
 #[cfg(not(feature = "datafusion"))]
@@ -9,21 +11,107 @@ use datafusion::arrow::array::{Array, StructArray};
 use bytes::{BufMut, BytesMut};
 use pgwire::api::results::{FieldFormat, FieldInfo};
 use pgwire::error::PgWireResult;
+use pgwire::types::format::FormatOptions;
 use pgwire::types::{ToSqlText, QUOTE_CHECK, QUOTE_ESCAPE};
-use postgres_types::{Field, IsNull, ToSql};
+use postgres_types::{Field, IsNull, ToSql, Type};
 
 use crate::datatypes::field_into_pg_type;
-use crate::encoder::{encode_value, EncodedValue, Encoder};
+use crate::encoder::{encode_value, Encoder};
 
-pub(crate) fn encode_struct(
+#[derive(Debug)]
+struct BytesWrapper(BytesMut);
+
+impl ToSql for BytesWrapper {
+    fn to_sql(&self, _ty: &Type, out: &mut BytesMut) -> Result<IsNull, Box<dyn Error + Send + Sync>>
+    where
+        Self: Sized,
+    {
+        out.writer().write_all(&self.0)?;
+        Ok(IsNull::No)
+    }
+
+    fn accepts(_ty: &Type) -> bool
+    where
+        Self: Sized,
+    {
+        true
+    }
+
+    fn to_sql_checked(
+        &self,
+        ty: &Type,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn Error + Send + Sync>> {
+        self.to_sql(ty, out)
+    }
+}
+
+impl ToSqlText for BytesWrapper {
+    fn to_sql_text(
+        &self,
+        _ty: &Type,
+        out: &mut BytesMut,
+        _format_options: &FormatOptions,
+    ) -> Result<IsNull, Box<dyn Error + Send + Sync>>
+    where
+        Self: Sized,
+    {
+        out.put_slice(&self.0);
+        Ok(IsNull::No)
+    }
+}
+
+pub(crate) fn encode_structs<T: Encoder>(
+    encoder: &mut T,
+    arr: &Arc<dyn Array>,
+    arrow_fields: &Fields,
+    parent_pg_field_info: &FieldInfo,
+) -> PgWireResult<()> {
+    let arr = arr.as_any().downcast_ref::<StructArray>().unwrap();
+
+    let fields = arrow_fields
+        .iter()
+        .map(|f| field_into_pg_type(f).map(|t| Field::new(f.name().to_owned(), t)))
+        .collect::<PgWireResult<Vec<_>>>()?;
+
+    let values: PgWireResult<Vec<_>> = (0..arr.len())
+        .map(|row| {
+            if arr.is_null(row) {
+                Ok(None)
+            } else {
+                let mut row_encoder = StructEncoder::new(arrow_fields.len());
+
+                for (i, arr) in arr.columns().iter().enumerate() {
+                    let field = &fields[i];
+                    let type_ = field.type_();
+                    let arrow_field = &arrow_fields[i];
+
+                    let format = parent_pg_field_info.format();
+                    let format_options = parent_pg_field_info.format_options().clone();
+                    let mut pg_field =
+                        FieldInfo::new(field.name().to_string(), None, None, type_.clone(), format);
+                    pg_field = pg_field.with_format_options(format_options);
+
+                    encode_value(&mut row_encoder, arr, row, arrow_field, &pg_field).unwrap();
+                }
+
+                Ok(Some(BytesWrapper(row_encoder.take_buffer())))
+            }
+        })
+        .collect();
+    encoder.encode_field(&values?, parent_pg_field_info)
+}
+
+pub(crate) fn encode_struct<T: Encoder>(
+    encoder: &mut T,
     arr: &Arc<dyn Array>,
     idx: usize,
     arrow_fields: &Fields,
     parent_pg_field_info: &FieldInfo,
-) -> PgWireResult<Option<EncodedValue>> {
+) -> PgWireResult<()> {
     let arr = arr.as_any().downcast_ref::<StructArray>().unwrap();
     if arr.is_null(idx) {
-        return Ok(None);
+        return Ok(());
     }
 
     let fields = arrow_fields
@@ -50,9 +138,8 @@ pub(crate) fn encode_struct(
 
         encode_value(&mut row_encoder, arr, idx, arrow_field, &pg_field).unwrap();
     }
-    Ok(Some(EncodedValue {
-        bytes: row_encoder.row_buffer,
-    }))
+    let encoded_value = BytesWrapper(row_encoder.row_buffer);
+    encoder.encode_field(&encoded_value, parent_pg_field_info)
 }
 
 pub(crate) struct StructEncoder {
@@ -68,6 +155,10 @@ impl StructEncoder {
             curr_col: 0,
             row_buffer: BytesMut::new(),
         }
+    }
+
+    pub(crate) fn take_buffer(self) -> BytesMut {
+        self.row_buffer
     }
 }
 
