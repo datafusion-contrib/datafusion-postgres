@@ -384,6 +384,7 @@ dependencies = [
  "futures",
  "geoarrow",
  "geoarrow-schema",
+ "pg_interval_2",
  "pgwire",
  "postgres-types",
  "rust_decimal",
@@ -2889,10 +2890,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg_interval_2"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "469827e70c8c74562f88b9434cf8a8fe35665281d2442304e99efcadf8f76a8f"
+dependencies = [
+ "bytes",
+ "chrono",
+ "postgres-types",
+]
+
+[[package]]
 name = "pgwire"
 version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02d86d57e732d40382ceb9bfea80901d839bae8571aa11c06af9177aed9dfb6c"
 dependencies = [
  "async-trait",
  "base64",
@@ -2903,6 +2913,7 @@ dependencies = [
  "hex",
  "lazy-regex",
  "md5",
+ "pg_interval_2",
  "postgres-types",
  "rand 0.9.2",
  "ring",
