@@ -299,7 +299,7 @@ where
                                     i.microseconds * 1_000i64,
                                 )
                             } else {
-                                ScalarValue::Null
+                                ScalarValue::IntervalMonthDayNano(None)
                             }
                         })
                         .collect()
