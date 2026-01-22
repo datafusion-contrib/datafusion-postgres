@@ -1,21 +1,16 @@
-use std::error::Error;
-use std::io::Write;
 use std::str::FromStr;
 use std::sync::Arc;
 
 #[cfg(not(feature = "datafusion"))]
 use arrow::{array::*, datatypes::*};
-use bytes::BufMut;
-use bytes::BytesMut;
 use chrono::NaiveTime;
 use chrono::{NaiveDate, NaiveDateTime};
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::{array::*, datatypes::*};
 use pgwire::api::results::{DataRowEncoder, FieldInfo};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
-use pgwire::types::format::FormatOptions;
 use pgwire::types::ToSqlText;
-use postgres_types::{ToSql, Type};
+use postgres_types::ToSql;
 use rust_decimal::Decimal;
 use timezone::Tz;
 
@@ -42,60 +37,6 @@ impl Encoder for DataRowEncoder {
             pg_field.format(),
             pg_field.format_options(),
         )
-    }
-}
-
-pub(crate) struct EncodedValue {
-    pub(crate) bytes: BytesMut,
-}
-
-impl std::fmt::Debug for EncodedValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EncodedValue").finish()
-    }
-}
-
-impl ToSql for EncodedValue {
-    fn to_sql(
-        &self,
-        _ty: &Type,
-        out: &mut BytesMut,
-    ) -> Result<postgres_types::IsNull, Box<dyn Error + Send + Sync>>
-    where
-        Self: Sized,
-    {
-        out.writer().write_all(&self.bytes)?;
-        Ok(postgres_types::IsNull::No)
-    }
-
-    fn accepts(_ty: &Type) -> bool
-    where
-        Self: Sized,
-    {
-        true
-    }
-
-    fn to_sql_checked(
-        &self,
-        ty: &Type,
-        out: &mut BytesMut,
-    ) -> Result<postgres_types::IsNull, Box<dyn Error + Send + Sync>> {
-        self.to_sql(ty, out)
-    }
-}
-
-impl ToSqlText for EncodedValue {
-    fn to_sql_text(
-        &self,
-        _ty: &Type,
-        out: &mut BytesMut,
-        _format_options: &FormatOptions,
-    ) -> Result<postgres_types::IsNull, Box<dyn Error + Send + Sync>>
-    where
-        Self: Sized,
-    {
-        out.writer().write_all(&self.bytes)?;
-        Ok(postgres_types::IsNull::No)
     }
 }
 
@@ -441,13 +382,9 @@ pub fn encode_value<T: Encoder>(
                 return encoder.encode_field(&None::<&[i8]>, pg_field);
             }
             let array = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-            let value = encode_list(array, pg_field)?;
-            encoder.encode_field(&value, pg_field)?
+            encode_list(encoder, array, pg_field)?
         }
-        DataType::Struct(arrow_fields) => {
-            let value = encode_struct(arr, idx, arrow_fields, pg_field)?;
-            encoder.encode_field(&value, pg_field)?
-        }
+        DataType::Struct(arrow_fields) => encode_struct(encoder, arr, idx, arrow_fields, pg_field)?,
         DataType::Dictionary(_, value_type) => {
             if arr.is_null(idx) {
                 return encoder.encode_field(&None::<i8>, pg_field);
@@ -494,7 +431,9 @@ pub fn encode_value<T: Encoder>(
 
 #[cfg(test)]
 mod tests {
-    use pgwire::api::results::FieldFormat;
+    use bytes::BytesMut;
+    use pgwire::{api::results::FieldFormat, types::format::FormatOptions};
+    use postgres_types::Type;
 
     use super::*;
 
