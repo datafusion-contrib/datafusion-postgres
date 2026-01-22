@@ -19,7 +19,7 @@ use crate::datatypes::field_into_pg_type;
 use crate::encoder::{encode_value, Encoder};
 
 #[derive(Debug)]
-struct BytesWrapper(BytesMut);
+struct BytesWrapper(BytesMut, bool);
 
 impl ToSql for BytesWrapper {
     fn to_sql(&self, _ty: &Type, out: &mut BytesMut) -> Result<IsNull, Box<dyn Error + Send + Sync>>
@@ -56,7 +56,17 @@ impl ToSqlText for BytesWrapper {
     where
         Self: Sized,
     {
-        out.put_slice(&self.0);
+        if self.1 {
+            out.put_u8(b'"');
+            out.put_slice(
+                QUOTE_ESCAPE
+                    .replace_all(&String::from_utf8_lossy(&self.0), r#"\$1"#)
+                    .as_bytes(),
+            );
+            out.put_u8(b'"');
+        } else {
+            out.put_slice(&self.0);
+        }
         Ok(IsNull::No)
     }
 }
@@ -68,6 +78,7 @@ pub(crate) fn encode_structs<T: Encoder>(
     parent_pg_field_info: &FieldInfo,
 ) -> PgWireResult<()> {
     let arr = arr.as_any().downcast_ref::<StructArray>().unwrap();
+    let quote_wrapper = matches!(parent_pg_field_info.format(), FieldFormat::Text);
 
     let fields = arrow_fields
         .iter()
@@ -95,7 +106,7 @@ pub(crate) fn encode_structs<T: Encoder>(
                     encode_value(&mut row_encoder, arr, row, arrow_field, &pg_field).unwrap();
                 }
 
-                Ok(Some(BytesWrapper(row_encoder.take_buffer())))
+                Ok(Some(BytesWrapper(row_encoder.take_buffer(), quote_wrapper)))
             }
         })
         .collect();
@@ -138,7 +149,7 @@ pub(crate) fn encode_struct<T: Encoder>(
 
         encode_value(&mut row_encoder, arr, idx, arrow_field, &pg_field).unwrap();
     }
-    let encoded_value = BytesWrapper(row_encoder.row_buffer);
+    let encoded_value = BytesWrapper(row_encoder.row_buffer, false);
     encoder.encode_field(&encoded_value, parent_pg_field_info)
 }
 
