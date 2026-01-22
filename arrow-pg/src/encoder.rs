@@ -7,6 +7,7 @@ use chrono::NaiveTime;
 use chrono::{NaiveDate, NaiveDateTime};
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::{array::*, datatypes::*};
+use pg_interval::Interval as PgInterval;
 use pgwire::api::results::{DataRowEncoder, FieldInfo};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::types::ToSqlText;
@@ -375,6 +376,78 @@ pub fn encode_value<T: Encoder>(
                     let value = ts_array.value_as_datetime(idx);
                     encoder.encode_field(&value, pg_field)?;
                 }
+            }
+        },
+        DataType::Interval(interval_unit) => match interval_unit {
+            IntervalUnit::YearMonth => {
+                let interval_array = arr
+                    .as_any()
+                    .downcast_ref::<IntervalYearMonthArray>()
+                    .unwrap();
+                let months = IntervalYearMonthType::to_months(interval_array.value(idx));
+                encoder.encode_field(&PgInterval::new(months, 0, 0), pg_field)?;
+            }
+            IntervalUnit::DayTime => {
+                let interval_array = arr.as_any().downcast_ref::<IntervalDayTimeArray>().unwrap();
+                let (days, millis) = IntervalDayTimeType::to_parts(interval_array.value(idx));
+                encoder
+                    .encode_field(&PgInterval::new(0, days, millis as i64 * 1000i64), pg_field)?;
+            }
+            IntervalUnit::MonthDayNano => {
+                let interval_array = arr
+                    .as_any()
+                    .downcast_ref::<IntervalMonthDayNanoArray>()
+                    .unwrap();
+                let (months, days, nanoseconds) =
+                    IntervalMonthDayNanoType::to_parts(interval_array.value(idx));
+
+                encoder.encode_field(
+                    &PgInterval::new(months, days, nanoseconds / 1000i64),
+                    pg_field,
+                )?;
+            }
+        },
+        DataType::Duration(unit) => match unit {
+            TimeUnit::Second => {
+                if arr.is_null(idx) {
+                    return encoder.encode_field(&None::<PgInterval>, pg_field);
+                }
+                let duration_array = arr.as_any().downcast_ref::<DurationSecondArray>().unwrap();
+                let microseconds = duration_array.value(idx) * 1_000_000i64;
+                encoder.encode_field(&PgInterval::new(0, 0, microseconds), pg_field)?;
+            }
+            TimeUnit::Millisecond => {
+                if arr.is_null(idx) {
+                    return encoder.encode_field(&None::<PgInterval>, pg_field);
+                }
+                let duration_array = arr
+                    .as_any()
+                    .downcast_ref::<DurationMillisecondArray>()
+                    .unwrap();
+                let microseconds = duration_array.value(idx) * 1_000i64;
+                encoder.encode_field(&PgInterval::new(0, 0, microseconds), pg_field)?;
+            }
+            TimeUnit::Microsecond => {
+                if arr.is_null(idx) {
+                    return encoder.encode_field(&None::<PgInterval>, pg_field);
+                }
+                let duration_array = arr
+                    .as_any()
+                    .downcast_ref::<DurationMicrosecondArray>()
+                    .unwrap();
+                let microseconds = duration_array.value(idx);
+                encoder.encode_field(&PgInterval::new(0, 0, microseconds), pg_field)?;
+            }
+            TimeUnit::Nanosecond => {
+                if arr.is_null(idx) {
+                    return encoder.encode_field(&None::<PgInterval>, pg_field);
+                }
+                let duration_array = arr
+                    .as_any()
+                    .downcast_ref::<DurationNanosecondArray>()
+                    .unwrap();
+                let microseconds = duration_array.value(idx) / 1_000i64;
+                encoder.encode_field(&PgInterval::new(0, 0, microseconds), pg_field)?;
             }
         },
         DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {

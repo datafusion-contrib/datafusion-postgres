@@ -4,11 +4,13 @@ use std::{str::FromStr, sync::Arc};
 use arrow::{
     array::{
         timezone::Tz, Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-        Decimal128Array, Decimal256Array, DurationMicrosecondArray, LargeBinaryArray,
-        LargeListArray, LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray,
-        StringViewArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampNanosecondArray, TimestampSecondArray,
+        Decimal128Array, Decimal256Array, DurationMicrosecondArray, DurationMillisecondArray,
+        DurationNanosecondArray, DurationSecondArray, IntervalDayTimeArray,
+        IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
+        LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray, StringViewArray,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+        TimestampSecondArray,
     },
     datatypes::{
         DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,
@@ -21,11 +23,13 @@ use arrow::{
 use datafusion::arrow::{
     array::{
         timezone::Tz, Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-        Decimal128Array, Decimal256Array, DurationMicrosecondArray, LargeBinaryArray,
-        LargeListArray, LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray,
-        StringViewArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampNanosecondArray, TimestampSecondArray,
+        Decimal128Array, Decimal256Array, DurationMicrosecondArray, DurationMillisecondArray,
+        DurationNanosecondArray, DurationSecondArray, IntervalDayTimeArray,
+        IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
+        LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray, StringViewArray,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+        TimestampSecondArray,
     },
     datatypes::{
         DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,
@@ -36,6 +40,7 @@ use datafusion::arrow::{
 };
 
 use chrono::{DateTime, TimeZone, Utc};
+use pg_interval::Interval as PgInterval;
 use pgwire::api::results::FieldInfo;
 use pgwire::error::{PgWireError, PgWireResult};
 use rust_decimal::Decimal;
@@ -446,17 +451,98 @@ pub fn encode_list<T: Encoder>(
             encoder.encode_field(&value, pg_field)?;
             Ok(())
         }
-        DataType::Duration(_) => {
-            // Convert duration to microseconds for now
-            let value: Vec<Option<i64>> = arr
-                .as_any()
-                .downcast_ref::<DurationMicrosecondArray>()
-                .unwrap()
-                .iter()
-                .collect();
-            encoder.encode_field(&value, pg_field)?;
-            Ok(())
-        }
+        DataType::Duration(unit) => match unit {
+            TimeUnit::Second => {
+                let value: Vec<Option<PgInterval>> = arr
+                    .as_any()
+                    .downcast_ref::<DurationSecondArray>()
+                    .unwrap()
+                    .iter()
+                    .map(|val| val.map(|v| PgInterval::new(0, 0, v * 1_000_000i64)))
+                    .collect();
+                encoder.encode_field(&value, pg_field)?;
+                Ok(())
+            }
+            TimeUnit::Millisecond => {
+                let value: Vec<Option<PgInterval>> = arr
+                    .as_any()
+                    .downcast_ref::<DurationMillisecondArray>()
+                    .unwrap()
+                    .iter()
+                    .map(|val| val.map(|v| PgInterval::new(0, 0, v * 1_000i64)))
+                    .collect();
+                encoder.encode_field(&value, pg_field)?;
+                Ok(())
+            }
+            TimeUnit::Microsecond => {
+                let value: Vec<Option<PgInterval>> = arr
+                    .as_any()
+                    .downcast_ref::<DurationMicrosecondArray>()
+                    .unwrap()
+                    .iter()
+                    .map(|val| val.map(|v| PgInterval::new(0, 0, v)))
+                    .collect();
+                encoder.encode_field(&value, pg_field)?;
+                Ok(())
+            }
+            TimeUnit::Nanosecond => {
+                let value: Vec<Option<PgInterval>> = arr
+                    .as_any()
+                    .downcast_ref::<DurationNanosecondArray>()
+                    .unwrap()
+                    .iter()
+                    .map(|val| val.map(|v| PgInterval::new(0, 0, v / 1_000i64)))
+                    .collect();
+                encoder.encode_field(&value, pg_field)?;
+                Ok(())
+            }
+        },
+        DataType::Interval(interval_unit) => match interval_unit {
+            arrow::datatypes::IntervalUnit::YearMonth => {
+                let value: Vec<Option<PgInterval>> = arr
+                    .as_any()
+                    .downcast_ref::<IntervalYearMonthArray>()
+                    .unwrap()
+                    .iter()
+                    .map(|val| val.map(|v| PgInterval::new(v, 0, 0)))
+                    .collect();
+                encoder.encode_field(&value, pg_field)?;
+                Ok(())
+            }
+            arrow::datatypes::IntervalUnit::DayTime => {
+                let value: Vec<Option<PgInterval>> = arr
+                    .as_any()
+                    .downcast_ref::<IntervalDayTimeArray>()
+                    .unwrap()
+                    .iter()
+                    .map(|val| {
+                        val.map(|v| {
+                            let (days, millis) = arrow::datatypes::IntervalDayTimeType::to_parts(v);
+                            PgInterval::new(0, days, millis as i64 * 1000i64)
+                        })
+                    })
+                    .collect();
+                encoder.encode_field(&value, pg_field)?;
+                Ok(())
+            }
+            arrow::datatypes::IntervalUnit::MonthDayNano => {
+                let value: Vec<Option<PgInterval>> = arr
+                    .as_any()
+                    .downcast_ref::<IntervalMonthDayNanoArray>()
+                    .unwrap()
+                    .iter()
+                    .map(|val| {
+                        val.map(|v| {
+                            let (months, days, nanos) =
+                                arrow::datatypes::IntervalMonthDayNanoType::to_parts(v);
+                            PgInterval::new(months, days, nanos / 1000i64)
+                        })
+                    })
+                    .collect();
+                encoder.encode_field(&value, pg_field)?;
+                Ok(())
+            }
+        },
         DataType::List(_) => {
             // Support for nested lists (list of lists)
             // For now, convert to string representation
