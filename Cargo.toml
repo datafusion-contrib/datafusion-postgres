@@ -19,8 +19,7 @@ bytes = "1.11.0"
 chrono = { version = "0.4", features = ["std"] }
 datafusion = { version = "52", default-features = false }
 futures = "0.3"
-#pgwire = { version = "0.37", default-features = false }
-pgwire = { git = "https://github.com/sunng87/pgwire", branch ="feature/postgis-types", default-features = false}
+pgwire = { version = "0.37.1", default-features = false }
 postgres-types = "0.2"
 rust_decimal = { version = "1.40", features = ["db-postgres"] }
 tokio = { version = "1", default-features = false }

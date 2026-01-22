@@ -27,6 +27,7 @@ datafusion = { workspace = true, optional = true }
 futures.workspace = true
 geoarrow = { version = "0.7", optional = true }
 geoarrow-schema = { version = "0.7", optional = true }
+pg_interval = { version = "0.5.1", package = "pg_interval_2" }
 pgwire = { workspace = true, default-features = false, features = ["server-api", "pg-ext-types"] }
 postgres-types.workspace = true
 rust_decimal.workspace = true
