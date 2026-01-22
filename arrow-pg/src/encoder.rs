@@ -407,7 +407,49 @@ pub fn encode_value<T: Encoder>(
                 )?;
             }
         },
-        DataType::Duration(_) => {}
+        DataType::Duration(unit) => match unit {
+            TimeUnit::Second => {
+                if arr.is_null(idx) {
+                    return encoder.encode_field(&None::<PgInterval>, pg_field);
+                }
+                let duration_array = arr.as_any().downcast_ref::<DurationSecondArray>().unwrap();
+                let microseconds = duration_array.value(idx) * 1_000_000i64;
+                encoder.encode_field(&PgInterval::new(0, 0, microseconds), pg_field)?;
+            }
+            TimeUnit::Millisecond => {
+                if arr.is_null(idx) {
+                    return encoder.encode_field(&None::<PgInterval>, pg_field);
+                }
+                let duration_array = arr
+                    .as_any()
+                    .downcast_ref::<DurationMillisecondArray>()
+                    .unwrap();
+                let microseconds = duration_array.value(idx) * 1_000i64;
+                encoder.encode_field(&PgInterval::new(0, 0, microseconds), pg_field)?;
+            }
+            TimeUnit::Microsecond => {
+                if arr.is_null(idx) {
+                    return encoder.encode_field(&None::<PgInterval>, pg_field);
+                }
+                let duration_array = arr
+                    .as_any()
+                    .downcast_ref::<DurationMicrosecondArray>()
+                    .unwrap();
+                let microseconds = duration_array.value(idx);
+                encoder.encode_field(&PgInterval::new(0, 0, microseconds), pg_field)?;
+            }
+            TimeUnit::Nanosecond => {
+                if arr.is_null(idx) {
+                    return encoder.encode_field(&None::<PgInterval>, pg_field);
+                }
+                let duration_array = arr
+                    .as_any()
+                    .downcast_ref::<DurationNanosecondArray>()
+                    .unwrap();
+                let microseconds = duration_array.value(idx) / 1_000i64;
+                encoder.encode_field(&PgInterval::new(0, 0, microseconds), pg_field)?;
+            }
+        },
         DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
             if arr.is_null(idx) {
                 return encoder.encode_field(&None::<&[i8]>, pg_field);
