@@ -37,7 +37,7 @@ pub fn into_pg_type(arrow_type: &DataType) -> PgWireResult<Type> {
         }
         DataType::Time32(_) | DataType::Time64(_) => Type::TIME,
         DataType::Date32 | DataType::Date64 => Type::DATE,
-        DataType::Interval(_) => Type::INTERVAL,
+        DataType::Interval(_) | DataType::Duration(_) => Type::INTERVAL,
         DataType::Binary
         | DataType::FixedSizeBinary(_)
         | DataType::LargeBinary
@@ -65,7 +65,7 @@ pub fn into_pg_type(arrow_type: &DataType) -> PgWireResult<Type> {
             }
             DataType::Time32(_) | DataType::Time64(_) => Type::TIME_ARRAY,
             DataType::Date32 | DataType::Date64 => Type::DATE_ARRAY,
-            DataType::Interval(_) => Type::INTERVAL_ARRAY,
+            DataType::Interval(_) | DataType::Duration(_) => Type::INTERVAL_ARRAY,
             DataType::FixedSizeBinary(_)
             | DataType::Binary
             | DataType::LargeBinary
