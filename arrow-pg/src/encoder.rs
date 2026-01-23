@@ -71,6 +71,10 @@ get_primitive_value!(get_u8_value, UInt8Type, u8);
 get_primitive_value!(get_u16_value, UInt16Type, u16);
 get_primitive_value!(get_u32_value, UInt32Type, u32);
 get_primitive_value!(get_u64_value, UInt64Type, u64);
+
+fn get_u64_as_decimal_value(arr: &Arc<dyn Array>, idx: usize) -> Option<Decimal> {
+    get_u64_value(arr, idx).map(Decimal::from)
+}
 get_primitive_value!(get_f32_value, Float32Type, f32);
 get_primitive_value!(get_f64_value, Float64Type, f64);
 
@@ -260,15 +264,15 @@ pub fn encode_value<T: Encoder>(
         DataType::Int32 => encoder.encode_field(&get_i32_value(arr, idx), pg_field)?,
         DataType::Int64 => encoder.encode_field(&get_i64_value(arr, idx), pg_field)?,
         DataType::UInt8 => {
-            encoder.encode_field(&(get_u8_value(arr, idx).map(|x| x as i8)), pg_field)?
+            encoder.encode_field(&(get_u8_value(arr, idx).map(|x| x as i16)), pg_field)?
         }
         DataType::UInt16 => {
-            encoder.encode_field(&(get_u16_value(arr, idx).map(|x| x as i16)), pg_field)?
+            encoder.encode_field(&(get_u16_value(arr, idx).map(|x| x as i32)), pg_field)?
         }
-        DataType::UInt32 => encoder.encode_field(&get_u32_value(arr, idx), pg_field)?,
-        DataType::UInt64 => {
-            encoder.encode_field(&(get_u64_value(arr, idx).map(|x| x as i64)), pg_field)?
+        DataType::UInt32 => {
+            encoder.encode_field(&get_u32_value(arr, idx).map(|x| x as i64), pg_field)?
         }
+        DataType::UInt64 => encoder.encode_field(&get_u64_as_decimal_value(arr, idx), pg_field)?,
         DataType::Float32 => encoder.encode_field(&get_f32_value(arr, idx), pg_field)?,
         DataType::Float64 => encoder.encode_field(&get_f64_value(arr, idx), pg_field)?,
         DataType::Decimal128(_, s) => {

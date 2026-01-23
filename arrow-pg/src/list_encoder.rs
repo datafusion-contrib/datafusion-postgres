@@ -84,13 +84,15 @@ get_primitive_list_value!(get_i8_list_value, Int8Type, i8);
 get_primitive_list_value!(get_i16_list_value, Int16Type, i16);
 get_primitive_list_value!(get_i32_list_value, Int32Type, i32);
 get_primitive_list_value!(get_i64_list_value, Int64Type, i64);
-get_primitive_list_value!(get_u8_list_value, UInt8Type, i8, |val: u8| { val as i8 });
-get_primitive_list_value!(get_u16_list_value, UInt16Type, i16, |val: u16| {
-    val as i16
+get_primitive_list_value!(get_u8_list_value, UInt8Type, i16, |val: u8| { val as i16 });
+get_primitive_list_value!(get_u16_list_value, UInt16Type, i32, |val: u16| {
+    val as i32
 });
-get_primitive_list_value!(get_u32_list_value, UInt32Type, u32);
-get_primitive_list_value!(get_u64_list_value, UInt64Type, i64, |val: u64| {
+get_primitive_list_value!(get_u32_list_value, UInt32Type, i64, |val: u32| {
     val as i64
+});
+get_primitive_list_value!(get_u64_list_value, UInt64Type, Decimal, |val: u64| {
+    Decimal::from(val)
 });
 get_primitive_list_value!(get_f32_list_value, Float32Type, f32);
 get_primitive_list_value!(get_f64_list_value, Float64Type, f64);
