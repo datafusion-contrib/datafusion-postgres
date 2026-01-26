@@ -16,7 +16,7 @@ use rust_decimal::Decimal;
 use timezone::Tz;
 
 use crate::error::ToSqlError;
-#[cfg(feature = "geo")]
+#[cfg(feature = "postgis")]
 use crate::geo_encoder::encode_geo;
 use crate::list_encoder::encode_list;
 use crate::struct_encoder::encode_struct;
@@ -238,7 +238,7 @@ pub fn encode_value<T: Encoder>(
 ) -> PgWireResult<()> {
     let arrow_type = arrow_field.data_type();
 
-    #[cfg(feature = "geo")]
+    #[cfg(feature = "postgis")]
     if let Some(geoarrow_type) = geoarrow_schema::GeoArrowType::from_extension_field(arrow_field)
         .map_err(|e| PgWireError::ApiError(Box::new(e)))?
     {
