@@ -6,7 +6,7 @@
 pub mod datatypes;
 pub mod encoder;
 mod error;
-#[cfg(feature = "geo")]
+#[cfg(feature = "postgis")]
 pub mod geo_encoder;
 pub mod list_encoder;
 pub mod row_encoder;

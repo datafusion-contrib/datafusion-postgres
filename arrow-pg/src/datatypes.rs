@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 #[cfg(not(feature = "datafusion"))]
 use arrow::{datatypes::*, record_batch::RecordBatch};
-#[cfg(feature = "geo")]
+#[cfg(feature = "postgis")]
 use arrow_schema::extension::ExtensionType;
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::{datatypes::*, record_batch::RecordBatch};
@@ -126,8 +126,31 @@ pub fn field_into_pg_type(field: &Arc<Field>) -> PgWireResult<Type> {
     match field.extension_type_name() {
         // As of arrow 56, there are additional extension logical type that is
         // defined using field metadata, for instance, json or geo.
-        #[cfg(feature = "geo")]
-        Some(geoarrow_schema::PointType::NAME) => Ok(Type::POINT),
+        //
+        // TODO: there is no fixed Geometry/Geography type id, here we use text
+        // for placeholder.
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::PointType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::LineStringType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::PolygonType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::MultiPointType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::MultiLineStringType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::MultiPolygonType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::GeometryCollectionType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::GeometryType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::RectType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::WktType::NAME) => Ok(Type::TEXT),
+        #[cfg(feature = "postgis")]
+        Some(geoarrow_schema::WkbType::NAME) => Ok(Type::TEXT),
 
         _ => into_pg_type(arrow_type),
     }
