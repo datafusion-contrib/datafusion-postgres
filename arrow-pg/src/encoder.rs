@@ -10,6 +10,8 @@ use datafusion::arrow::{array::*, datatypes::*};
 use pg_interval::Interval as PgInterval;
 use pgwire::api::results::{CopyEncoder, DataRowEncoder, FieldInfo};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use pgwire::messages::copy::CopyData;
+use pgwire::messages::data::DataRow;
 use pgwire::types::ToSqlText;
 use postgres_types::ToSql;
 use rust_decimal::Decimal;
@@ -22,12 +24,18 @@ use crate::list_encoder::encode_list;
 use crate::struct_encoder::encode_struct;
 
 pub trait Encoder {
+    type Item;
+
     fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
     where
         T: ToSql + ToSqlText + Sized;
+
+    fn take_row(&mut self) -> Self::Item;
 }
 
 impl Encoder for DataRowEncoder {
+    type Item = DataRow;
+
     fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
     where
         T: ToSql + ToSqlText + Sized,
@@ -39,14 +47,24 @@ impl Encoder for DataRowEncoder {
             pg_field.format_options(),
         )
     }
+
+    fn take_row(&mut self) -> Self::Item {
+        self.take_row()
+    }
 }
 
 impl Encoder for CopyEncoder {
+    type Item = CopyData;
+
     fn encode_field<T>(&mut self, value: &T, _pg_field: &FieldInfo) -> PgWireResult<()>
     where
         T: ToSql + ToSqlText + Sized,
     {
         self.encode_field(value)
+    }
+
+    fn take_row(&mut self) -> Self::Item {
+        self.take_copy()
     }
 }
 
@@ -531,6 +549,8 @@ mod tests {
         }
 
         impl Encoder for MockEncoder {
+            type Item = String;
+
             fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
             where
                 T: ToSql + ToSqlText + Sized,
@@ -541,6 +561,10 @@ mod tests {
                 let string = String::from_utf8(bytes.to_vec());
                 self.encoded_value = string.unwrap();
                 Ok(())
+            }
+
+            fn take_row(&mut self) -> Self::Item {
+                std::mem::take(&mut self.encoded_value)
             }
         }
 
