@@ -30,3 +30,6 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
+
+[patch.crates-io]
+pgwire = { git = "https://github.com/sunng87/pgwire.git", branch = "feature/copy-encoding" }

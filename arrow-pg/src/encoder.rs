@@ -8,7 +8,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::{array::*, datatypes::*};
 use pg_interval::Interval as PgInterval;
-use pgwire::api::results::{DataRowEncoder, FieldInfo};
+use pgwire::api::results::{CopyEncoder, DataRowEncoder, FieldInfo};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::types::ToSqlText;
 use postgres_types::ToSql;
@@ -38,6 +38,15 @@ impl Encoder for DataRowEncoder {
             pg_field.format(),
             pg_field.format_options(),
         )
+    }
+}
+
+impl Encoder for CopyEncoder {
+    fn encode_field<T>(&mut self, value: &T, _pg_field: &FieldInfo) -> PgWireResult<()>
+    where
+        T: ToSql + ToSqlText + Sized,
+    {
+        self.encode_field(value)
     }
 }
 
