@@ -19,7 +19,7 @@ bytes = "1.11.1"
 chrono = { version = "0.4", features = ["std"] }
 datafusion = { version = "52", default-features = false }
 futures = "0.3"
-pgwire = { version = "0.37.3", default-features = false }
+pgwire = { version = "0.38", default-features = false }
 postgres-types = "0.2"
 rust_decimal = { version = "1.40", features = ["db-postgres"] }
 tokio = { version = "1", default-features = false }
@@ -30,6 +30,3 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
-
-[patch.crates-io]
-pgwire = { git = "https://github.com/sunng87/pgwire.git", branch = "feature/copy-encoding" }
