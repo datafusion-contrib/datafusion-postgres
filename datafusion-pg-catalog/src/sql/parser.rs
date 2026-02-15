@@ -18,6 +18,7 @@ use super::rules::RemoveSubqueryFromProjection;
 use super::rules::RemoveUnsupportedTypes;
 use super::rules::ResolveUnqualifiedIdentifer;
 use super::rules::RewriteArrayAnyAllOperation;
+use super::rules::RewriteRegclassCastToSubquery;
 use super::rules::SqlStatementRewriteRule;
 
 const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
@@ -228,6 +229,7 @@ impl PostgresCompatibilityParser {
                 Arc::new(RewriteArrayAnyAllOperation),
                 Arc::new(PrependUnqualifiedPgTableName),
                 Arc::new(RemoveQualifier),
+                Arc::new(RewriteRegclassCastToSubquery::new()),
                 Arc::new(RemoveUnsupportedTypes::new()),
                 Arc::new(FixArrayLiteral),
                 Arc::new(CurrentUserVariableToSessionUserFunctionCall),
