@@ -361,6 +361,7 @@ impl VisitorMut for RemoveUnsupportedTypesVisitor<'_> {
                     .unsupported_types
                     .contains(data_type.to_string().to_lowercase().as_str())
                 {
+                    self.remove_nested_unsupported_casts(value);
                     *expr = *value.clone();
                 }
             }
@@ -369,6 +370,25 @@ impl VisitorMut for RemoveUnsupportedTypesVisitor<'_> {
         }
 
         ControlFlow::Continue(())
+    }
+}
+
+impl RemoveUnsupportedTypesVisitor<'_> {
+    fn remove_nested_unsupported_casts(&mut self, expr: &mut Expr) {
+        if let Expr::Cast {
+            data_type,
+            expr: value,
+            ..
+        } = expr
+        {
+            if self
+                .unsupported_types
+                .contains(data_type.to_string().to_lowercase().as_str())
+            {
+                self.remove_nested_unsupported_casts(value);
+                *expr = *value.clone();
+            }
+        }
     }
 }
 
@@ -995,6 +1015,8 @@ mod tests {
     WHERE c.oid = '16386'",
             "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, c.relhastriggers, c.relrowsecurity, c.relforcerowsecurity, false AS relhasoids, c.relispartition, '', c.reltablespace, CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::TEXT END, c.relpersistence, c.relreplident, am.amname FROM pg_catalog.pg_class AS c LEFT JOIN pg_catalog.pg_class AS tc ON (c.reltoastrelid = tc.oid) LEFT JOIN pg_catalog.pg_am AS am ON (c.relam = am.oid) WHERE c.oid = '16386'"
         );
+
+        assert_rewrite!(&rules, "SELECT $1::regclass::oid", "SELECT $1");
     }
 
     #[test]
