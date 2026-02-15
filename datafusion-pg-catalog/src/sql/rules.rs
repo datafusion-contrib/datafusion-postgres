@@ -391,6 +391,12 @@ impl SqlStatementRewriteRule for RemoveUnsupportedTypes {
 #[derive(Debug)]
 pub struct RewriteRegclassCastToSubquery(Box<Query>);
 
+impl Default for RewriteRegclassCastToSubquery {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RewriteRegclassCastToSubquery {
     pub fn new() -> Self {
         let sql = "SELECT oid FROM pg_catalog.pg_class WHERE relname = $1";
@@ -419,10 +425,8 @@ impl RewriteRegclassCastToSubqueryVisitor {
     fn create_subquery(&self, expr: &Expr) -> Expr {
         let mut query = self.0.clone();
         if let SetExpr::Select(select) = query.body.as_mut() {
-            if let Some(selection) = &mut select.selection {
-                if let Expr::BinaryOp { right, .. } = selection {
-                    *right = Box::new(expr.clone());
-                }
+            if let Some(Expr::BinaryOp { right, .. }) = &mut select.selection {
+                **right = expr.clone();
             }
         }
         Expr::Subquery(query)
