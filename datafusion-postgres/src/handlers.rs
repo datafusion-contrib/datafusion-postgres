@@ -19,10 +19,10 @@ use pgwire::api::{ClientInfo, ErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::types::format::FormatOptions;
 
-use crate::client;
 use crate::hooks::set_show::SetShowHook;
 use crate::hooks::transactions::TransactionStatementHook;
 use crate::hooks::QueryHook;
+use crate::{client, planner};
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
 use datafusion_pg_catalog::sql::PostgresCompatibilityParser;
@@ -215,8 +215,7 @@ impl ExtendedQueryHandler for DfSessionService {
         if !self.query_hooks.is_empty() {
             if let (_, Some((statement, plan))) = &portal.statement.statement {
                 // TODO: in the case where query hooks all return None, we do the param handling again later.
-                let param_types = plan
-                    .get_parameter_types()
+                let param_types = planner::get_inferred_parameter_types(plan)
                     .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
                 let param_values: ParamValues =
@@ -240,8 +239,7 @@ impl ExtendedQueryHandler for DfSessionService {
         }
 
         if let (_, Some((statement, plan))) = &portal.statement.statement {
-            let param_types = plan
-                .get_parameter_types()
+            let param_types = planner::get_inferred_parameter_types(plan)
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
             let param_values =
@@ -381,8 +379,7 @@ impl QueryParser for Parser {
 
     fn get_parameter_types(&self, stmt: &Self::Statement) -> PgWireResult<Vec<Type>> {
         if let (_, Some((_, plan))) = stmt {
-            let params = plan
-                .get_parameter_types()
+            let params = planner::get_inferred_parameter_types(plan)
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
             let mut param_types = Vec::with_capacity(params.len());
