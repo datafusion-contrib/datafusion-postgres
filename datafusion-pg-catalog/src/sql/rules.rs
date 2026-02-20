@@ -399,7 +399,15 @@ impl Default for RewriteRegclassCastToSubquery {
 
 impl RewriteRegclassCastToSubquery {
     pub fn new() -> Self {
-        let sql = "SELECT oid FROM pg_catalog.pg_class WHERE relname = $1";
+        let sql = "SELECT c.oid
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p
+WHERE n.nspname = COALESCE(
+    CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END,
+    current_schema()
+)
+AND c.relname = p.parts[-1]";
         let dialect = PostgreSqlDialect {};
         let query = Parser::parse_sql(&dialect, sql)
             .map(|mut stmts| {
@@ -423,12 +431,26 @@ impl RewriteRegclassCastToSubqueryVisitor {
     }
 
     fn create_subquery(&self, expr: &Expr) -> Expr {
-        let mut query = self.0.clone();
-        if let SetExpr::Select(select) = query.body.as_mut() {
-            if let Some(Expr::BinaryOp { right, .. }) = &mut select.selection {
-                **right = expr.clone();
+        struct PlaceholderReplacer(Expr);
+
+        impl VisitorMut for PlaceholderReplacer {
+            type Break = ();
+
+            fn pre_visit_expr(&mut self, e: &mut Expr) -> ControlFlow<Self::Break> {
+                if let Expr::Value(ValueWithSpan {
+                    value: Value::Placeholder(_placeholder),
+                    ..
+                }) = e
+                {
+                    *e = self.0.clone();
+                }
+                ControlFlow::Continue(())
             }
         }
+
+        let mut query = self.0.clone();
+        let mut replacer = PlaceholderReplacer(expr.clone());
+        let _ = query.visit(&mut replacer);
         Expr::Subquery(query)
     }
 
@@ -1144,25 +1166,25 @@ mod tests {
         assert_rewrite!(
             &rules,
             "SELECT $1::regclass::oid",
-            "SELECT (SELECT oid FROM pg_catalog.pg_class WHERE relname = $1)"
+            "SELECT (SELECT c.oid FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) AS p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
         );
 
         assert_rewrite!(
             &rules,
             "SELECT $1::pg_catalog.regclass::oid",
-            "SELECT (SELECT oid FROM pg_catalog.pg_class WHERE relname = $1)"
+            "SELECT (SELECT c.oid FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) AS p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
         );
 
         assert_rewrite!(
             &rules,
             "SELECT $1::pg_catalog.regclass::pg_catalog.oid",
-            "SELECT (SELECT oid FROM pg_catalog.pg_class WHERE relname = $1)"
+            "SELECT (SELECT c.oid FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) AS p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
         );
 
         assert_rewrite!(
             &rules,
             "SELECT * FROM pg_catalog.pg_class WHERE oid = 't'::pg_catalog.regclass::pg_catalog.oid",
-            "SELECT * FROM pg_catalog.pg_class WHERE oid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 't')"
+            "SELECT * FROM pg_catalog.pg_class WHERE oid = (SELECT c.oid FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident('t'::TEXT) AS parts) AS p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
         );
     }
 
