@@ -17,9 +17,10 @@ use pgwire::api::results::{FieldInfo, Response, Tag};
 use pgwire::api::stmt::QueryParser;
 use pgwire::api::{ClientInfo, ErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
+use pgwire::messages::PgWireBackendMessage;
 use pgwire::types::format::FormatOptions;
 
-use crate::hooks::set_show::SetShowHook;
+use crate::hooks::set_show::{self, SetShowHook};
 use crate::hooks::transactions::TransactionStatementHook;
 use crate::hooks::QueryHook;
 use crate::{client, planner};
@@ -119,7 +120,9 @@ impl DfSessionService {
 impl SimpleQueryHandler for DfSessionService {
     async fn do_query<C>(&self, client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
     where
-        C: ClientInfo + Unpin + Send + Sync,
+        C: ClientInfo + futures::Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::Error: std::fmt::Debug,
+        PgWireError: From<<C as futures::Sink<PgWireBackendMessage>>::Error>,
     {
         log::debug!("Received query: {query}"); // Log the query for debugging
 
@@ -144,6 +147,20 @@ impl SimpleQueryHandler for DfSessionService {
                     .handle_simple_query(&statement, &self.session_context, client)
                     .await
                 {
+                    if result.is_ok() {
+                        if let Some((name, value)) =
+                            set_show::parameter_status_key_for_set(&statement, client)
+                        {
+                            use futures::SinkExt;
+                            use pgwire::messages::startup::ParameterStatus;
+                            client
+                                .feed(PgWireBackendMessage::ParameterStatus(
+                                    ParameterStatus::new(name, value),
+                                ))
+                                .await
+                                .map_err(PgWireError::from)?;
+                        }
+                    }
                     results.push(result?);
                     continue 'stmt;
                 }
@@ -206,7 +223,9 @@ impl ExtendedQueryHandler for DfSessionService {
         _max_rows: usize,
     ) -> PgWireResult<Response>
     where
-        C: ClientInfo + Unpin + Send + Sync,
+        C: ClientInfo + futures::Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::Error: std::fmt::Debug,
+        PgWireError: From<<C as futures::Sink<PgWireBackendMessage>>::Error>,
     {
         let query = &portal.statement.statement.0;
         log::debug!("Received execute extended query: {query}"); // Log for debugging
@@ -232,6 +251,20 @@ impl ExtendedQueryHandler for DfSessionService {
                         )
                         .await
                     {
+                        if result.is_ok() {
+                            if let Some((name, value)) =
+                                set_show::parameter_status_key_for_set(statement, client)
+                            {
+                                use futures::SinkExt;
+                                use pgwire::messages::startup::ParameterStatus;
+                                client
+                                    .feed(PgWireBackendMessage::ParameterStatus(
+                                        ParameterStatus::new(name, value),
+                                    ))
+                                    .await
+                                    .map_err(PgWireError::from)?;
+                            }
+                        }
                         return result;
                     }
                 }
