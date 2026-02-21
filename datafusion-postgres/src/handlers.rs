@@ -556,4 +556,72 @@ mod tests {
         assert!(matches!(results[2], Response::EmptyQuery));
         assert!(matches!(results[3], Response::Query(_)));
     }
+
+    #[tokio::test]
+    async fn test_set_sends_parameter_status_via_sink() {
+        use pgwire::messages::PgWireBackendMessage;
+
+        let service = crate::testing::setup_handlers();
+        let mut client = MockClient::new();
+
+        let test_cases = vec![
+            ("SET datestyle = 'ISO, MDY'", "DateStyle", "ISO, MDY"),
+            ("SET intervalstyle = 'postgres'", "IntervalStyle", "postgres"),
+            ("SET bytea_output = 'hex'", "bytea_output", "hex"),
+            ("SET application_name = 'myapp'", "application_name", "myapp"),
+            ("SET search_path = 'public'", "search_path", "public"),
+            ("SET extra_float_digits = '2'", "extra_float_digits", "2"),
+            ("SET TIME ZONE 'America/New_York'", "TimeZone", "America/New_York"),
+        ];
+
+        for (sql, expected_key, expected_value) in test_cases {
+            client.sent_messages.clear();
+
+            let responses =
+                <DfSessionService as SimpleQueryHandler>::do_query(&service, &mut client, sql)
+                    .await
+                    .unwrap();
+
+            assert!(
+                matches!(responses[0], Response::Execution(_)),
+                "Expected SET tag for {sql}"
+            );
+
+            let ps_msgs: Vec<_> = client
+                .sent_messages()
+                .iter()
+                .filter_map(|m| match m {
+                    PgWireBackendMessage::ParameterStatus(ps) => Some(ps),
+                    _ => None,
+                })
+                .collect();
+
+            assert_eq!(ps_msgs.len(), 1, "Expected 1 ParameterStatus for {sql}");
+            assert_eq!(ps_msgs[0].name, expected_key, "Wrong key for {sql}");
+            assert_eq!(ps_msgs[0].value, expected_value, "Wrong value for {sql}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_statement_timeout_no_parameter_status() {
+        use pgwire::messages::PgWireBackendMessage;
+
+        let service = crate::testing::setup_handlers();
+        let mut client = MockClient::new();
+
+        <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "SET statement_timeout TO '5000ms'",
+        )
+        .await
+        .unwrap();
+
+        let has_ps = client
+            .sent_messages()
+            .iter()
+            .any(|m| matches!(m, PgWireBackendMessage::ParameterStatus(_)));
+
+        assert!(!has_ps, "statement_timeout should not send ParameterStatus");
+    }
 }
