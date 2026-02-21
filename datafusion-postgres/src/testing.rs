@@ -30,6 +30,7 @@ pub fn setup_handlers() -> DfSessionService {
 pub struct MockClient {
     metadata: HashMap<String, String>,
     portal_store: HashMap<String, String>,
+    pub sent_messages: Vec<PgWireBackendMessage>,
 }
 
 impl MockClient {
@@ -40,7 +41,12 @@ impl MockClient {
         MockClient {
             metadata,
             portal_store: HashMap::default(),
+            sent_messages: Vec::new(),
         }
+    }
+
+    pub fn sent_messages(&self) -> &[PgWireBackendMessage] {
+        &self.sent_messages
     }
 }
 
@@ -101,6 +107,17 @@ impl ClientPortalStore for MockClient {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mock_client_captures_messages() {
+        let client = MockClient::new();
+        assert!(client.sent_messages().is_empty());
+    }
+}
+
 impl Sink<PgWireBackendMessage> for MockClient {
     type Error = std::io::Error;
 
@@ -112,9 +129,10 @@ impl Sink<PgWireBackendMessage> for MockClient {
     }
 
     fn start_send(
-        self: std::pin::Pin<&mut Self>,
-        _item: PgWireBackendMessage,
+        mut self: std::pin::Pin<&mut Self>,
+        item: PgWireBackendMessage,
     ) -> Result<(), Self::Error> {
+        self.sent_messages.push(item);
         Ok(())
     }
 
