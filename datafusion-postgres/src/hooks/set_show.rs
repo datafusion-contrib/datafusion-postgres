@@ -249,17 +249,18 @@ pub fn parameter_status_key_for_set(
     match set_stmt {
         Set::SingleAssignment { variable, .. } => {
             let var = variable.to_string().to_lowercase();
-            if matches!(
-                var.as_str(),
-                "datestyle"
-                    | "bytea_output"
-                    | "intervalstyle"
-                    | "application_name"
-                    | "extra_float_digits"
-                    | "search_path"
-            ) {
+            let display_name = match var.as_str() {
+                "datestyle" => Some("DateStyle"),
+                "intervalstyle" => Some("IntervalStyle"),
+                "bytea_output" => Some("bytea_output"),
+                "application_name" => Some("application_name"),
+                "extra_float_digits" => Some("extra_float_digits"),
+                "search_path" => Some("search_path"),
+                _ => None,
+            };
+            if let Some(display_name) = display_name {
                 let value = client.metadata().get(&var)?.clone();
-                Some((var, value))
+                Some((display_name.to_string(), value))
             } else if var == "timezone" {
                 let tz = client::get_timezone(client).unwrap_or("UTC").to_string();
                 Some(("TimeZone".to_string(), tz))
@@ -515,7 +516,7 @@ mod tests {
             "Expected ParameterStatus for SET datestyle"
         );
         let (name, value) = key_value.unwrap();
-        assert_eq!(name, "datestyle");
+        assert_eq!(name, "DateStyle");
         assert_eq!(value, "ISO, MDY");
     }
 
@@ -525,7 +526,7 @@ mod tests {
             ("set bytea_output = 'escape'", "bytea_output", "escape"),
             (
                 "set intervalstyle = 'postgres'",
-                "intervalstyle",
+                "IntervalStyle",
                 "postgres",
             ),
             (
@@ -535,7 +536,7 @@ mod tests {
             ),
             ("set search_path = 'public'", "search_path", "public"),
             ("set extra_float_digits = '2'", "extra_float_digits", "2"),
-            ("set datestyle = 'ISO, MDY'", "datestyle", "ISO, MDY"),
+            ("set datestyle = 'ISO, MDY'", "DateStyle", "ISO, MDY"),
         ];
 
         for (sql, expected_key, expected_value) in test_cases {
