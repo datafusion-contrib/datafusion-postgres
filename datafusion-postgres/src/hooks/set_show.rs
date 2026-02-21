@@ -522,6 +522,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_parameter_status_for_all_metadata_vars() {
+        let test_cases = vec![
+            ("set bytea_output = 'escape'", "bytea_output", "escape"),
+            ("set intervalstyle = 'postgres'", "intervalstyle", "postgres"),
+            ("set application_name = 'myapp'", "application_name", "myapp"),
+            ("set search_path = 'public'", "search_path", "public"),
+            ("set extra_float_digits = '2'", "extra_float_digits", "2"),
+            ("set datestyle = 'ISO, MDY'", "datestyle", "ISO, MDY"),
+        ];
+
+        for (sql, expected_key, expected_value) in test_cases {
+            let session_context = SessionContext::new();
+            let mut client = MockClient::new();
+            let statement = Parser::new(&PostgreSqlDialect {})
+                .try_with_sql(sql)
+                .unwrap()
+                .parse_statement()
+                .unwrap();
+
+            let _response =
+                try_respond_set_statements(&mut client, &statement, &session_context).await;
+
+            let key_value = parameter_status_key_for_set(&statement, &client);
+            assert!(key_value.is_some(), "Expected ParameterStatus for {sql}");
+            let (name, value) = key_value.unwrap();
+            assert_eq!(name, expected_key, "Wrong key for {sql}");
+            assert_eq!(value, expected_value, "Wrong value for {sql}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parameter_status_for_timezone() {
+        let session_context = SessionContext::new();
+        let mut client = MockClient::new();
+
+        let statement = Parser::new(&PostgreSqlDialect {})
+            .try_with_sql("set time zone 'America/New_York'")
+            .unwrap()
+            .parse_statement()
+            .unwrap();
+
+        let _response =
+            try_respond_set_statements(&mut client, &statement, &session_context).await;
+
+        let key_value = parameter_status_key_for_set(&statement, &client);
+        assert!(key_value.is_some());
+        let (name, value) = key_value.unwrap();
+        assert_eq!(name, "TimeZone");
+        assert_eq!(value, "America/New_York");
+    }
+
+    #[tokio::test]
+    async fn test_no_parameter_status_for_statement_timeout() {
+        let session_context = SessionContext::new();
+        let mut client = MockClient::new();
+
+        let statement = Parser::new(&PostgreSqlDialect {})
+            .try_with_sql("set statement_timeout to '5000ms'")
+            .unwrap()
+            .parse_statement()
+            .unwrap();
+
+        let _response =
+            try_respond_set_statements(&mut client, &statement, &session_context).await;
+
+        let key_value = parameter_status_key_for_set(&statement, &client);
+        assert!(key_value.is_none(), "statement_timeout should not produce ParameterStatus");
+    }
+
+    #[tokio::test]
     async fn test_supported_show_statements_returned_columns() {
         let session_context = SessionContext::new();
         let client = MockClient::new();
