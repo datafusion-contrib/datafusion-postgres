@@ -261,9 +261,6 @@ pub fn parameter_status_key_for_set(
             if let Some(display_name) = display_name {
                 let value = client.metadata().get(&var)?.clone();
                 Some((display_name.to_string(), value))
-            } else if var == "timezone" {
-                let tz = client::get_timezone(client).unwrap_or("UTC").to_string();
-                Some(("TimeZone".to_string(), tz))
             } else {
                 None
             }
