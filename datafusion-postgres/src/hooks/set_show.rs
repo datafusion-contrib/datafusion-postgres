@@ -239,6 +239,46 @@ async fn execute_set_statement(
         .map(|_| ())
 }
 
+pub fn parameter_status_key_for_set(
+    statement: &Statement,
+    client: &dyn ClientInfo,
+) -> Option<(String, String)> {
+    let Statement::Set(set_stmt) = statement else {
+        return None;
+    };
+    match set_stmt {
+        Set::SingleAssignment { variable, .. } => {
+            let var = variable.to_string().to_lowercase();
+            if matches!(
+                var.as_str(),
+                "datestyle"
+                    | "bytea_output"
+                    | "intervalstyle"
+                    | "application_name"
+                    | "extra_float_digits"
+                    | "search_path"
+            ) {
+                let value = client.metadata().get(&var)?.clone();
+                Some((var, value))
+            } else if var == "timezone" {
+                let tz = client::get_timezone(client)
+                    .unwrap_or("UTC")
+                    .to_string();
+                Some(("TimeZone".to_string(), tz))
+            } else {
+                None
+            }
+        }
+        Set::SetTimeZone { .. } => {
+            let tz = client::get_timezone(client)
+                .unwrap_or("UTC")
+                .to_string();
+            Some(("TimeZone".to_string(), tz))
+        }
+        _ => None,
+    }
+}
+
 async fn try_respond_show_statements<C>(
     client: &C,
     statement: &Statement,
