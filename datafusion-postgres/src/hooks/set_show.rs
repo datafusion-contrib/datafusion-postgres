@@ -261,18 +261,14 @@ pub fn parameter_status_key_for_set(
                 let value = client.metadata().get(&var)?.clone();
                 Some((var, value))
             } else if var == "timezone" {
-                let tz = client::get_timezone(client)
-                    .unwrap_or("UTC")
-                    .to_string();
+                let tz = client::get_timezone(client).unwrap_or("UTC").to_string();
                 Some(("TimeZone".to_string(), tz))
             } else {
                 None
             }
         }
         Set::SetTimeZone { .. } => {
-            let tz = client::get_timezone(client)
-                .unwrap_or("UTC")
-                .to_string();
+            let tz = client::get_timezone(client).unwrap_or("UTC").to_string();
             Some(("TimeZone".to_string(), tz))
         }
         _ => None,
@@ -511,11 +507,13 @@ mod tests {
             .parse_statement()
             .unwrap();
 
-        let _response =
-            try_respond_set_statements(&mut client, &statement, &session_context).await;
+        let _response = try_respond_set_statements(&mut client, &statement, &session_context).await;
 
         let key_value = parameter_status_key_for_set(&statement, &client);
-        assert!(key_value.is_some(), "Expected ParameterStatus for SET datestyle");
+        assert!(
+            key_value.is_some(),
+            "Expected ParameterStatus for SET datestyle"
+        );
         let (name, value) = key_value.unwrap();
         assert_eq!(name, "datestyle");
         assert_eq!(value, "ISO, MDY");
@@ -525,8 +523,16 @@ mod tests {
     async fn test_parameter_status_for_all_metadata_vars() {
         let test_cases = vec![
             ("set bytea_output = 'escape'", "bytea_output", "escape"),
-            ("set intervalstyle = 'postgres'", "intervalstyle", "postgres"),
-            ("set application_name = 'myapp'", "application_name", "myapp"),
+            (
+                "set intervalstyle = 'postgres'",
+                "intervalstyle",
+                "postgres",
+            ),
+            (
+                "set application_name = 'myapp'",
+                "application_name",
+                "myapp",
+            ),
             ("set search_path = 'public'", "search_path", "public"),
             ("set extra_float_digits = '2'", "extra_float_digits", "2"),
             ("set datestyle = 'ISO, MDY'", "datestyle", "ISO, MDY"),
@@ -563,8 +569,7 @@ mod tests {
             .parse_statement()
             .unwrap();
 
-        let _response =
-            try_respond_set_statements(&mut client, &statement, &session_context).await;
+        let _response = try_respond_set_statements(&mut client, &statement, &session_context).await;
 
         let key_value = parameter_status_key_for_set(&statement, &client);
         assert!(key_value.is_some());
@@ -584,11 +589,13 @@ mod tests {
             .parse_statement()
             .unwrap();
 
-        let _response =
-            try_respond_set_statements(&mut client, &statement, &session_context).await;
+        let _response = try_respond_set_statements(&mut client, &statement, &session_context).await;
 
         let key_value = parameter_status_key_for_set(&statement, &client);
-        assert!(key_value.is_none(), "statement_timeout should not produce ParameterStatus");
+        assert!(
+            key_value.is_none(),
+            "statement_timeout should not produce ParameterStatus"
+        );
     }
 
     #[tokio::test]

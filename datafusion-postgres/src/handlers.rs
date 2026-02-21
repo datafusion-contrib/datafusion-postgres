@@ -154,9 +154,9 @@ impl SimpleQueryHandler for DfSessionService {
                             use futures::SinkExt;
                             use pgwire::messages::startup::ParameterStatus;
                             client
-                                .feed(PgWireBackendMessage::ParameterStatus(
-                                    ParameterStatus::new(name, value),
-                                ))
+                                .feed(PgWireBackendMessage::ParameterStatus(ParameterStatus::new(
+                                    name, value,
+                                )))
                                 .await
                                 .map_err(PgWireError::from)?;
                         }
