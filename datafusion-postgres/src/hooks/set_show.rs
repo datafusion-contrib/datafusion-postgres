@@ -461,6 +461,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_parameter_status_key_for_set_datestyle() {
+        let session_context = SessionContext::new();
+        let mut client = MockClient::new();
+
+        let statement = Parser::new(&PostgreSqlDialect {})
+            .try_with_sql("set datestyle = 'ISO, MDY'")
+            .unwrap()
+            .parse_statement()
+            .unwrap();
+
+        let _response =
+            try_respond_set_statements(&mut client, &statement, &session_context).await;
+
+        let key_value = parameter_status_key_for_set(&statement, &client);
+        assert!(key_value.is_some(), "Expected ParameterStatus for SET datestyle");
+        let (name, value) = key_value.unwrap();
+        assert_eq!(name, "datestyle");
+        assert_eq!(value, "ISO, MDY");
+    }
+
+    #[tokio::test]
     async fn test_supported_show_statements_returned_columns() {
         let session_context = SessionContext::new();
         let client = MockClient::new();
