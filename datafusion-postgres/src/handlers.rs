@@ -566,12 +566,24 @@ mod tests {
 
         let test_cases = vec![
             ("SET datestyle = 'ISO, MDY'", "DateStyle", "ISO, MDY"),
-            ("SET intervalstyle = 'postgres'", "IntervalStyle", "postgres"),
+            (
+                "SET intervalstyle = 'postgres'",
+                "IntervalStyle",
+                "postgres",
+            ),
             ("SET bytea_output = 'hex'", "bytea_output", "hex"),
-            ("SET application_name = 'myapp'", "application_name", "myapp"),
+            (
+                "SET application_name = 'myapp'",
+                "application_name",
+                "myapp",
+            ),
             ("SET search_path = 'public'", "search_path", "public"),
             ("SET extra_float_digits = '2'", "extra_float_digits", "2"),
-            ("SET TIME ZONE 'America/New_York'", "TimeZone", "America/New_York"),
+            (
+                "SET TIME ZONE 'America/New_York'",
+                "TimeZone",
+                "America/New_York",
+            ),
         ];
 
         for (sql, expected_key, expected_value) in test_cases {
