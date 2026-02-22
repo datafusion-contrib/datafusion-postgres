@@ -239,6 +239,40 @@ async fn execute_set_statement(
         .map(|_| ())
 }
 
+pub fn parameter_status_key_for_set(
+    statement: &Statement,
+    client: &dyn ClientInfo,
+) -> Option<(String, String)> {
+    let Statement::Set(set_stmt) = statement else {
+        return None;
+    };
+    match set_stmt {
+        Set::SingleAssignment { variable, .. } => {
+            let var = variable.to_string().to_lowercase();
+            let display_name = match var.as_str() {
+                "datestyle" => Some("DateStyle"),
+                "intervalstyle" => Some("IntervalStyle"),
+                "bytea_output" => Some("bytea_output"),
+                "application_name" => Some("application_name"),
+                "extra_float_digits" => Some("extra_float_digits"),
+                "search_path" => Some("search_path"),
+                _ => None,
+            };
+            if let Some(display_name) = display_name {
+                let value = client.metadata().get(&var)?.clone();
+                Some((display_name.to_string(), value))
+            } else {
+                None
+            }
+        }
+        Set::SetTimeZone { .. } => {
+            let tz = client::get_timezone(client).unwrap_or("UTC").to_string();
+            Some(("TimeZone".to_string(), tz))
+        }
+        _ => None,
+    }
+}
+
 async fn try_respond_show_statements<C>(
     client: &C,
     statement: &Statement,
@@ -458,6 +492,70 @@ mod tests {
 
         let timeout = client::get_statement_timeout(&client);
         assert_eq!(timeout, None);
+    }
+
+    #[tokio::test]
+    async fn test_parameter_status_key_for_all_set_vars() {
+        let test_cases = vec![
+            ("set bytea_output = 'escape'", "bytea_output", "escape"),
+            (
+                "set intervalstyle = 'postgres'",
+                "IntervalStyle",
+                "postgres",
+            ),
+            (
+                "set application_name = 'myapp'",
+                "application_name",
+                "myapp",
+            ),
+            ("set search_path = 'public'", "search_path", "public"),
+            ("set extra_float_digits = '2'", "extra_float_digits", "2"),
+            ("set datestyle = 'ISO, MDY'", "DateStyle", "ISO, MDY"),
+            (
+                "set time zone 'America/New_York'",
+                "TimeZone",
+                "America/New_York",
+            ),
+        ];
+
+        for (sql, expected_key, expected_value) in test_cases {
+            let session_context = SessionContext::new();
+            let mut client = MockClient::new();
+            let statement = Parser::new(&PostgreSqlDialect {})
+                .try_with_sql(sql)
+                .unwrap()
+                .parse_statement()
+                .unwrap();
+
+            let _response =
+                try_respond_set_statements(&mut client, &statement, &session_context).await;
+
+            let key_value = parameter_status_key_for_set(&statement, &client);
+            assert!(key_value.is_some(), "Expected ParameterStatus for {sql}");
+            let (name, value) = key_value.unwrap();
+            assert_eq!(name, expected_key, "Wrong key for {sql}");
+            assert_eq!(value, expected_value, "Wrong value for {sql}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_no_parameter_status_for_statement_timeout() {
+        let session_context = SessionContext::new();
+        let mut client = MockClient::new();
+
+        let statement = Parser::new(&PostgreSqlDialect {})
+            .try_with_sql("set statement_timeout to '5000ms'")
+            .unwrap()
+            .parse_statement()
+            .unwrap();
+
+        let _response = try_respond_set_statements(&mut client, &statement, &session_context).await;
+
+        let key_value = parameter_status_key_for_set(&statement, &client);
+        assert!(
+            key_value.is_none(),
+            "statement_timeout should not produce ParameterStatus"
+        );
     }
 
     #[tokio::test]
