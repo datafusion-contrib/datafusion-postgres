@@ -14,6 +14,7 @@ use datafusion::sql::sqlparser::ast::FunctionArgExpr;
 use datafusion::sql::sqlparser::ast::FunctionArgumentList;
 use datafusion::sql::sqlparser::ast::FunctionArguments;
 use datafusion::sql::sqlparser::ast::Ident;
+use datafusion::sql::sqlparser::ast::LimitClause;
 use datafusion::sql::sqlparser::ast::ObjectName;
 use datafusion::sql::sqlparser::ast::ObjectNamePart;
 use datafusion::sql::sqlparser::ast::OrderByKind;
@@ -30,6 +31,7 @@ use datafusion::sql::sqlparser::ast::UnaryOperator;
 use datafusion::sql::sqlparser::ast::Value;
 use datafusion::sql::sqlparser::ast::ValueWithSpan;
 use datafusion::sql::sqlparser::ast::VisitMut;
+use datafusion::sql::sqlparser::ast::Visitor;
 use datafusion::sql::sqlparser::ast::VisitorMut;
 
 pub trait SqlStatementRewriteRule: Send + Sync + Debug {
@@ -776,11 +778,83 @@ impl SqlStatementRewriteRule for FixCollate {
     }
 }
 
-/// Datafusion doesn't support subquery on projection
+/// A processor to replace unsupported subquery from projection with NULL.
+///
+/// It will also add `LIMIT 1` to supported subquery to ensure it returns scalar
+/// value.
 #[derive(Debug)]
 pub struct RemoveSubqueryFromProjection;
 
 struct RemoveSubqueryFromProjectionVisitor;
+
+impl RemoveSubqueryFromProjectionVisitor {
+    fn has_correlation(&self, query: &Query) -> bool {
+        if let SetExpr::Select(select) = &*query.body {
+            let table_aliases: HashSet<String> = select
+                .from
+                .iter()
+                .flat_map(|twj| {
+                    let mut aliases = HashSet::new();
+                    Self::collect_table_aliases_from_table_factor(&twj.relation, &mut aliases);
+                    for join in &twj.joins {
+                        Self::collect_table_aliases_from_table_factor(&join.relation, &mut aliases);
+                    }
+                    aliases
+                })
+                .collect();
+
+            let mut has_correlation = false;
+            let mut visitor = CorrelationCheckVisitor(&mut has_correlation, &table_aliases);
+            let _ = datafusion::logical_expr::sqlparser::ast::Visit::visit(query, &mut visitor);
+            has_correlation
+        } else {
+            false
+        }
+    }
+
+    fn has_limit(&self, query: &Query) -> bool {
+        query.limit_clause.is_some() || query.fetch.is_some()
+    }
+
+    fn collect_table_aliases_from_table_factor(
+        table_factor: &TableFactor,
+        aliases: &mut HashSet<String>,
+    ) {
+        if let TableFactor::Table {
+            alias: Some(alias), ..
+        } = table_factor
+        {
+            aliases.insert(alias.name.value.clone());
+        }
+    }
+}
+
+struct CorrelationCheckVisitor<'a>(&'a mut bool, &'a HashSet<String>);
+
+impl Visitor for CorrelationCheckVisitor<'_> {
+    type Break = ();
+
+    fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<Self::Break> {
+        match expr {
+            Expr::Value(ValueWithSpan {
+                value: Value::Placeholder(_placeholder),
+                ..
+            }) => {
+                *self.0 = true;
+            }
+            Expr::CompoundIdentifier(idents) => {
+                if !idents.is_empty() {
+                    let table_name = &idents[0].value;
+                    if !self.1.contains(table_name) {
+                        *self.0 = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        ControlFlow::Continue(())
+    }
+}
 
 impl VisitorMut for RemoveSubqueryFromProjectionVisitor {
     type Break = ();
@@ -790,13 +864,33 @@ impl VisitorMut for RemoveSubqueryFromProjectionVisitor {
             for projection in &mut select.projection {
                 match projection {
                     SelectItem::UnnamedExpr(expr) => {
-                        if let Expr::Subquery(_) = expr {
-                            *expr = Expr::Value(Value::Null.with_empty_span());
+                        if let Expr::Subquery(subquery) = expr {
+                            if self.has_correlation(subquery) {
+                                *expr = Expr::Value(Value::Null.with_empty_span());
+                            } else if !self.has_limit(subquery) {
+                                subquery.limit_clause = Some(LimitClause::LimitOffset {
+                                    limit: Some(Expr::Value(
+                                        Value::Number("1".to_string(), false).with_empty_span(),
+                                    )),
+                                    offset: None,
+                                    limit_by: vec![],
+                                });
+                            }
                         }
                     }
                     SelectItem::ExprWithAlias { expr, .. } => {
-                        if let Expr::Subquery(_) = expr {
-                            *expr = Expr::Value(Value::Null.with_empty_span());
+                        if let Expr::Subquery(subquery) = expr {
+                            if self.has_correlation(subquery) {
+                                *expr = Expr::Value(Value::Null.with_empty_span());
+                            } else if !self.has_limit(subquery) {
+                                subquery.limit_clause = Some(LimitClause::LimitOffset {
+                                    limit: Some(Expr::Value(
+                                        Value::Number("1".to_string(), false).with_empty_span(),
+                                    )),
+                                    offset: None,
+                                    limit_by: vec![],
+                                });
+                            }
                         }
                     }
                     _ => {}
@@ -1116,6 +1210,57 @@ mod tests {
         assert_rewrite!(&rules,
             "SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), (SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true) FROM pg_catalog.pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef), a.attnotnull, (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type t WHERE c.oid = a.attcollation AND t.oid = a.atttypid AND a.attcollation <> t.typcollation LIMIT 1) AS attcollation, a.attidentity, a.attgenerated FROM pg_catalog.pg_attribute a WHERE a.attrelid = '16384' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;",
             "SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), NULL, a.attnotnull, NULL AS attcollation, a.attidentity, a.attgenerated FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = '16384' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum");
+    }
+
+    #[test]
+    fn test_keep_simple_aggregated_subquery() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RemoveSubqueryFromProjection)];
+
+        assert_rewrite!(&rules,
+            "SELECT id, (SELECT COUNT(*) FROM pg_catalog.pg_attribute) AS attr_count FROM pg_catalog.pg_class",
+            "SELECT id, (SELECT COUNT(*) FROM pg_catalog.pg_attribute LIMIT 1) AS attr_count FROM pg_catalog.pg_class"
+        );
+    }
+
+    #[test]
+    fn test_remove_correlated_subquery() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RemoveSubqueryFromProjection)];
+
+        assert_rewrite!(&rules,
+            "SELECT a.attname, (SELECT COUNT(*) FROM pg_catalog.pg_attribute WHERE attrelid = a.oid) AS count FROM pg_catalog.pg_attribute a",
+            "SELECT a.attname, NULL AS count FROM pg_catalog.pg_attribute AS a"
+        );
+    }
+
+    #[test]
+    fn test_remove_non_aggregated_subquery() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RemoveSubqueryFromProjection)];
+
+        assert_rewrite!(&rules,
+            "SELECT id, (SELECT attname FROM pg_catalog.pg_attribute LIMIT 1) AS first_attr FROM pg_catalog.pg_class",
+            "SELECT id, (SELECT attname FROM pg_catalog.pg_attribute LIMIT 1) AS first_attr FROM pg_catalog.pg_class"
+        );
+    }
+
+    #[test]
+    fn test_keep_simple_scalar_subquery() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RemoveSubqueryFromProjection)];
+
+        assert_rewrite!(
+            &rules,
+            "SELECT (SELECT 1) AS constant",
+            "SELECT (SELECT 1 LIMIT 1) AS constant"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT (SELECT 'value') AS str_val",
+            "SELECT (SELECT 'value' LIMIT 1) AS str_val"
+        );
     }
 
     #[test]
