@@ -12,11 +12,29 @@ use pgwire::api::results::Response;
 use pgwire::api::ClientInfo;
 use pgwire::error::PgWireResult;
 
-/// Optional ParameterStatus (name, value) to send after a successful SET.
-pub type ParameterStatusChange = Option<(String, String)>;
+#[non_exhaustive]
+pub struct HookOutput {
+    pub response: Response,
+    pub parameter_status: Vec<(String, String)>,
+}
 
-/// Response from a query hook: the protocol Response plus an optional ParameterStatus.
-pub type HookOutput = (Response, ParameterStatusChange);
+impl HookOutput {
+    pub fn new(response: Response) -> Self {
+        HookOutput {
+            response,
+            parameter_status: Vec::new(),
+        }
+    }
+
+    pub fn with_parameter_status(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.parameter_status.push((name.into(), value.into()));
+        self
+    }
+}
 
 #[async_trait]
 pub trait QueryHook: Send + Sync {

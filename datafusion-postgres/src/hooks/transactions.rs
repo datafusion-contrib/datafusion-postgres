@@ -34,7 +34,7 @@ impl QueryHook for TransactionStatementHook {
             .transpose();
 
         if let Some(result) = resp {
-            return Some(result.map(|r| (r, None)));
+            return Some(result.map(HookOutput::new));
         }
 
         // Check if we're in a failed transaction and block non-transaction

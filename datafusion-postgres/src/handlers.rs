@@ -147,18 +147,19 @@ impl SimpleQueryHandler for DfSessionService {
                     .handle_simple_query(&statement, &self.session_context, client)
                     .await
                 {
-                    let (response, ps_change) = result?;
-                    if let Some((name, value)) = ps_change {
+                    let output = result?;
+                    for (name, value) in &output.parameter_status {
                         use futures::SinkExt;
                         use pgwire::messages::startup::ParameterStatus;
                         client
                             .feed(PgWireBackendMessage::ParameterStatus(ParameterStatus::new(
-                                name, value,
+                                name.clone(),
+                                value.clone(),
                             )))
                             .await
                             .map_err(PgWireError::from)?;
                     }
-                    results.push(response);
+                    results.push(output.response);
                     continue 'stmt;
                 }
             }
@@ -248,18 +249,19 @@ impl ExtendedQueryHandler for DfSessionService {
                         )
                         .await
                     {
-                        let (response, ps_change) = result?;
-                        if let Some((name, value)) = ps_change {
+                        let output = result?;
+                        for (name, value) in &output.parameter_status {
                             use futures::SinkExt;
                             use pgwire::messages::startup::ParameterStatus;
                             client
                                 .feed(PgWireBackendMessage::ParameterStatus(ParameterStatus::new(
-                                    name, value,
+                                    name.clone(),
+                                    value.clone(),
                                 )))
                                 .await
                                 .map_err(PgWireError::from)?;
                         }
-                        return Ok(response);
+                        return Ok(output.response);
                     }
                 }
             }
@@ -474,7 +476,7 @@ mod tests {
             _client: &mut (dyn ClientInfo + Sync + Send),
         ) -> Option<PgWireResult<HookOutput>> {
             if statement.to_string().contains("magic") {
-                Some(Ok((Response::EmptyQuery, None)))
+                Some(Ok(HookOutput::new(Response::EmptyQuery)))
             } else {
                 None
             }

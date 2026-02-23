@@ -16,7 +16,7 @@ use pgwire::types::format::FormatOptions;
 use postgres_types::Type;
 
 use crate::client;
-use crate::hooks::{HookOutput, ParameterStatusChange};
+use crate::hooks::HookOutput;
 use crate::QueryHook;
 
 #[derive(Debug)]
@@ -37,7 +37,7 @@ impl QueryHook for SetShowHook {
             }
             Statement::ShowVariable { .. } | Statement::ShowStatus { .. } => {
                 let result = try_respond_show_statements(client, statement, session_context).await;
-                result.map(|r| r.map(|resp| (resp, None)))
+                result.map(|r| r.map(HookOutput::new))
             }
             _ => None,
         }
@@ -95,7 +95,7 @@ impl QueryHook for SetShowHook {
             }
             Statement::ShowVariable { .. } | Statement::ShowStatus { .. } => {
                 let result = try_respond_show_statements(client, statement, session_context).await;
-                result.map(|r| r.map(|resp| (resp, None)))
+                result.map(|r| r.map(HookOutput::new))
             }
             _ => None,
         }
@@ -173,7 +173,7 @@ where
                 };
 
                 client::set_statement_timeout(client, timeout);
-                return Some(Ok((Response::Execution(Tag::new("SET")), None)));
+                return Some(Ok(HookOutput::new(Response::Execution(Tag::new("SET")))));
             } else if matches!(
                 var.as_str(),
                 "datestyle"
@@ -189,8 +189,11 @@ where
                 if let Expr::Value(value) = value {
                     let val_str = value.into_string().unwrap_or_else(|| "".to_string());
                     client.metadata_mut().insert(var.clone(), val_str);
-                    let ps = parameter_status_for_var(&var, &*client);
-                    return Some(Ok((Response::Execution(Tag::new("SET")), ps)));
+                    let mut output = HookOutput::new(Response::Execution(Tag::new("SET")));
+                    if let Some((name, value)) = parameter_status_for_var(&var, &*client) {
+                        output = output.with_parameter_status(name, value);
+                    }
+                    return Some(Ok(output));
                 }
             }
         }
@@ -209,10 +212,8 @@ where
                 .execution
                 .time_zone = Some(tz.to_string());
             let tz_value = client::get_timezone(client).unwrap_or("UTC").to_string();
-            return Some(Ok((
-                Response::Execution(Tag::new("SET")),
-                Some(("TimeZone".to_string(), tz_value)),
-            )));
+            return Some(Ok(HookOutput::new(Response::Execution(Tag::new("SET")))
+                .with_parameter_status("TimeZone", tz_value)));
         }
         _ => {}
     }
@@ -225,13 +226,13 @@ where
     }
 
     // Always return SET success
-    Some(Ok((Response::Execution(Tag::new("SET")), None)))
+    Some(Ok(HookOutput::new(Response::Execution(Tag::new("SET")))))
 }
 
 fn parameter_status_for_var(
     var: &str,
     client: &(impl ClientInfo + ?Sized),
-) -> ParameterStatusChange {
+) -> Option<(String, String)> {
     let display_name = match var {
         "datestyle" => "DateStyle",
         "intervalstyle" => "IntervalStyle",
@@ -368,7 +369,7 @@ mod tests {
             try_respond_set_statements(&mut client, &statement, &session_context).await;
 
         assert!(set_response.is_some());
-        assert!(set_response.unwrap().map(|(r, _)| r).is_ok());
+        assert!(set_response.unwrap().is_ok());
 
         // Verify the timeout was set in client metadata
         let timeout = client::get_statement_timeout(&client);
@@ -402,7 +403,7 @@ mod tests {
             try_respond_set_statements(&mut client, &statement, &session_context).await;
 
         assert!(set_response.is_some());
-        assert!(set_response.unwrap().map(|(r, _)| r).is_ok());
+        assert!(set_response.unwrap().is_ok());
 
         // Verify the value was set in client metadata
         let bytea_output = client.metadata().get("bytea_output").unwrap();
@@ -436,7 +437,7 @@ mod tests {
             try_respond_set_statements(&mut client, &statement, &session_context).await;
 
         assert!(set_response.is_some());
-        assert!(set_response.unwrap().map(|(r, _)| r).is_ok());
+        assert!(set_response.unwrap().is_ok());
 
         // Verify the value was set in client metadata
         let bytea_output = client.metadata().get("datestyle").unwrap();
@@ -468,7 +469,7 @@ mod tests {
             .unwrap();
         let resp = try_respond_set_statements(&mut client, &statement, &session_context).await;
         assert!(resp.is_some());
-        assert!(resp.unwrap().map(|(r, _)| r).is_ok());
+        assert!(resp.unwrap().is_ok());
 
         // Disable timeout with 0
         let statement = Parser::new(&PostgreSqlDialect {})
@@ -478,7 +479,7 @@ mod tests {
             .unwrap();
         let resp = try_respond_set_statements(&mut client, &statement, &session_context).await;
         assert!(resp.is_some());
-        assert!(resp.unwrap().map(|(r, _)| r).is_ok());
+        assert!(resp.unwrap().is_ok());
 
         let timeout = client::get_statement_timeout(&client);
         assert_eq!(timeout, None);
@@ -519,9 +520,13 @@ mod tests {
 
             let result =
                 try_respond_set_statements(&mut client, &statement, &session_context).await;
-            let (_, ps_change) = result.expect("Expected Some").expect("Expected Ok");
-            assert!(ps_change.is_some(), "Expected ParameterStatus for {sql}");
-            let (name, value) = ps_change.unwrap();
+            let output = result.expect("Expected Some").expect("Expected Ok");
+            assert_eq!(
+                output.parameter_status.len(),
+                1,
+                "Expected 1 ParameterStatus for {sql}"
+            );
+            let (name, value) = &output.parameter_status[0];
             assert_eq!(name, expected_key, "Wrong key for {sql}");
             assert_eq!(value, expected_value, "Wrong value for {sql}");
         }
@@ -539,9 +544,9 @@ mod tests {
             .unwrap();
 
         let result = try_respond_set_statements(&mut client, &statement, &session_context).await;
-        let (_, ps_change) = result.expect("Expected Some").expect("Expected Ok");
+        let output = result.expect("Expected Some").expect("Expected Ok");
         assert!(
-            ps_change.is_none(),
+            output.parameter_status.is_empty(),
             "statement_timeout should not produce ParameterStatus"
         );
     }
