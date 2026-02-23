@@ -138,6 +138,25 @@ impl SimpleQueryHandler for DfSessionService {
         'stmt: for statement in statements {
             let query = statement.to_string();
 
+            // [NEW] Handle PREPARE
+            if let sqlparser::ast::Statement::Prepare { name: _, data_types: _, statement } = &statement {
+                match self.session_context.state()
+                    .statement_to_plan(Statement::Statement(Box::new(*statement.clone())))
+                    .await
+                {
+                    Ok(_plan) => {
+                        // Store prepared statement in portal store
+                        // For now, we'll just track that it was prepared successfully
+                        // The actual storage will be handled when we have access to portal store
+                        results.push(Response::Execution(Tag::new("PREPARE")));
+                    }
+                    Err(e) => {
+                        return Err(PgWireError::ApiError(Box::new(e)));
+                    }
+                }
+                continue 'stmt;
+            }
+
             // Call query hooks with the parsed statement
             for hook in &self.query_hooks {
                 if let Some(result) = hook
@@ -522,5 +541,23 @@ mod tests {
         assert!(matches!(results[1], Response::Query(_)));
         assert!(matches!(results[2], Response::EmptyQuery));
         assert!(matches!(results[3], Response::Query(_)));
+    }
+
+    #[tokio::test]
+    async fn test_simple_prepare() {
+        let session_context = Arc::new(SessionContext::new());
+        let service = DfSessionService::new(session_context);
+        let mut client = MockClient::new();
+
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "PREPARE stmt AS SELECT 1",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("PREPARE")));
     }
 }
