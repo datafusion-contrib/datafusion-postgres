@@ -741,6 +741,162 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_deallocate_all() {
+        let session_context = Arc::new(SessionContext::new());
+        let service = DfSessionService::new(session_context);
+        let mut client = MockClient::new();
+
+        // PREPARE multiple statements
+        for stmt in &["stmt1", "stmt2", "stmt3"] {
+            let results = <DfSessionService as SimpleQueryHandler>::do_query(
+                &service,
+                &mut client,
+                &format!("PREPARE {stmt} AS SELECT 1"),
+            )
+            .await
+            .unwrap();
+            assert!(
+                matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("PREPARE")),
+                "Expected PREPARE response for {stmt}"
+            );
+        }
+
+        // Verify all statements are stored by executing them
+        for stmt in &["stmt1", "stmt2", "stmt3"] {
+            let results = <DfSessionService as SimpleQueryHandler>::do_query(
+                &service,
+                &mut client,
+                &format!("EXECUTE {stmt}"),
+            )
+            .await
+            .unwrap();
+            assert!(
+                matches!(results[0], Response::Query(_)),
+                "Expected Query response for EXECUTE {stmt} before DEALLOCATE ALL"
+            );
+        }
+
+        // Run DEALLOCATE ALL
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "DEALLOCATE ALL",
+        )
+        .await
+        .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(
+            matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("DEALLOCATE")),
+            "Expected DEALLOCATE response"
+        );
+
+        // Verify all statements are removed - EXECUTE on any should fail
+        for stmt in &["stmt1", "stmt2", "stmt3"] {
+            let err = <DfSessionService as SimpleQueryHandler>::do_query(
+                &service,
+                &mut client,
+                &format!("EXECUTE {stmt}"),
+            )
+            .await;
+            assert!(
+                err.is_err(),
+                "EXECUTE {stmt} after DEALLOCATE ALL should fail"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_deallocate_all_prepare_keyword() {
+        let session_context = Arc::new(SessionContext::new());
+        let service = DfSessionService::new(session_context);
+        let mut client = MockClient::new();
+
+        // PREPARE a statement
+        let _ = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "PREPARE test_stmt AS SELECT 99",
+        )
+        .await
+        .unwrap();
+
+        // DEALLOCATE PREPARE ALL (PostgreSQL also allows this form)
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "DEALLOCATE PREPARE ALL",
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("DEALLOCATE")),
+            "Expected DEALLOCATE response for DEALLOCATE PREPARE ALL"
+        );
+
+        // Statement should be gone
+        let err = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "EXECUTE test_stmt",
+        )
+        .await;
+        assert!(err.is_err(), "EXECUTE after DEALLOCATE PREPARE ALL should fail");
+    }
+
+    #[tokio::test]
+    async fn test_deallocate_specific_name_still_works() {
+        let session_context = Arc::new(SessionContext::new());
+        let service = DfSessionService::new(session_context);
+        let mut client = MockClient::new();
+
+        // PREPARE two statements
+        for stmt in &["keep_stmt", "remove_stmt"] {
+            let _ = <DfSessionService as SimpleQueryHandler>::do_query(
+                &service,
+                &mut client,
+                &format!("PREPARE {stmt} AS SELECT 1"),
+            )
+            .await
+            .unwrap();
+        }
+
+        // DEALLOCATE only one specific statement
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "DEALLOCATE remove_stmt",
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("DEALLOCATE")),
+            "Expected DEALLOCATE response"
+        );
+
+        // keep_stmt should still work
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "EXECUTE keep_stmt",
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(results[0], Response::Query(_)),
+            "keep_stmt should still be executable after removing only remove_stmt"
+        );
+
+        // remove_stmt should be gone
+        let err = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "EXECUTE remove_stmt",
+        )
+        .await;
+        assert!(err.is_err(), "EXECUTE remove_stmt after specific DEALLOCATE should fail");
+    }
+
+    #[tokio::test]
     async fn test_execute_with_text_parameter() {
         let session_context = Arc::new(SessionContext::new());
 

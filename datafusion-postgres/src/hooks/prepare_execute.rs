@@ -208,12 +208,15 @@ impl QueryHook for PrepareExecuteHook {
                 }
             }
 
-            // DEALLOCATE stmt
+            // DEALLOCATE { name | ALL }
             Statement::Deallocate { name, prepare: _ } => {
-                let stmt_name = name.to_string();
-
                 let mut stmts = self.prepared_statements.write().unwrap();
-                stmts.remove(&stmt_name);
+
+                if name.value.to_uppercase() == "ALL" {
+                    stmts.clear();
+                } else {
+                    stmts.remove(&name.to_string());
+                }
 
                 Some(Ok(Response::Execution(Tag::new("DEALLOCATE"))))
             }
