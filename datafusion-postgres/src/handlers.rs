@@ -19,6 +19,7 @@ use pgwire::api::{ClientInfo, ErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::types::format::FormatOptions;
 
+use crate::hooks::prepare_execute::PrepareExecuteHook;
 use crate::hooks::set_show::SetShowHook;
 use crate::hooks::transactions::TransactionStatementHook;
 use crate::hooks::QueryHook;
@@ -93,8 +94,11 @@ pub struct DfSessionService {
 
 impl DfSessionService {
     pub fn new(session_context: Arc<SessionContext>) -> DfSessionService {
-        let hooks: Vec<Arc<dyn QueryHook>> =
-            vec![Arc::new(SetShowHook), Arc::new(TransactionStatementHook)];
+        let hooks: Vec<Arc<dyn QueryHook>> = vec![
+            Arc::new(PrepareExecuteHook::new()),
+            Arc::new(SetShowHook),
+            Arc::new(TransactionStatementHook),
+        ];
         Self::new_with_hooks(session_context, hooks)
     }
 
@@ -137,25 +141,6 @@ impl SimpleQueryHandler for DfSessionService {
         let mut results = vec![];
         'stmt: for statement in statements {
             let query = statement.to_string();
-
-            // [NEW] Handle PREPARE
-            if let sqlparser::ast::Statement::Prepare { name: _, data_types: _, statement } = &statement {
-                match self.session_context.state()
-                    .statement_to_plan(Statement::Statement(Box::new(*statement.clone())))
-                    .await
-                {
-                    Ok(_plan) => {
-                        // Store prepared statement in portal store
-                        // For now, we'll just track that it was prepared successfully
-                        // The actual storage will be handled when we have access to portal store
-                        results.push(Response::Execution(Tag::new("PREPARE")));
-                    }
-                    Err(e) => {
-                        return Err(PgWireError::ApiError(Box::new(e)));
-                    }
-                }
-                continue 'stmt;
-            }
 
             // Call query hooks with the parsed statement
             for hook in &self.query_hooks {
@@ -559,5 +544,134 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("PREPARE")));
+    }
+
+    #[tokio::test]
+    async fn test_simple_execute_prepared() {
+        let session_context = Arc::new(SessionContext::new());
+        let service = DfSessionService::new(session_context);
+        let mut client = MockClient::new();
+
+        // PREPARE a statement first
+        let _ = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "PREPARE stmt AS SELECT 42 AS answer",
+        )
+        .await
+        .unwrap();
+
+        // EXECUTE the prepared statement
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "EXECUTE stmt",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], Response::Query(_)));
+    }
+
+    #[tokio::test]
+    async fn test_simple_deallocate() {
+        let session_context = Arc::new(SessionContext::new());
+        let service = DfSessionService::new(session_context);
+        let mut client = MockClient::new();
+
+        // PREPARE a statement
+        let _ = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "PREPARE stmt AS SELECT 1",
+        )
+        .await
+        .unwrap();
+
+        // DEALLOCATE it
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "DEALLOCATE stmt",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("DEALLOCATE")));
+    }
+
+    #[tokio::test]
+    async fn test_execute_nonexistent_statement() {
+        let session_context = Arc::new(SessionContext::new());
+        let service = DfSessionService::new(session_context);
+        let mut client = MockClient::new();
+
+        // Try to EXECUTE a statement that was never PREPARED
+        let result = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "EXECUTE nonexistent",
+        )
+        .await;
+
+        assert!(result.is_err(), "EXECUTE of nonexistent statement should fail");
+    }
+
+    #[tokio::test]
+    async fn test_prepare_execute_deallocate_workflow() {
+        let session_context = Arc::new(SessionContext::new());
+        let service = DfSessionService::new(session_context);
+        let mut client = MockClient::new();
+
+        // PREPARE
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "PREPARE workflow_stmt AS SELECT 100 AS value",
+        )
+        .await
+        .unwrap();
+        assert!(matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("PREPARE")));
+
+        // EXECUTE first time
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "EXECUTE workflow_stmt",
+        )
+        .await
+        .unwrap();
+        assert!(matches!(results[0], Response::Query(_)));
+
+        // EXECUTE second time (reuse)
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "EXECUTE workflow_stmt",
+        )
+        .await
+        .unwrap();
+        assert!(matches!(results[0], Response::Query(_)));
+
+        // DEALLOCATE
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "DEALLOCATE workflow_stmt",
+        )
+        .await
+        .unwrap();
+        assert!(matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("DEALLOCATE")));
+
+        // Verify EXECUTE after DEALLOCATE fails
+        let err = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "EXECUTE workflow_stmt",
+        )
+        .await;
+        assert!(err.is_err(), "EXECUTE after DEALLOCATE should fail");
     }
 }
