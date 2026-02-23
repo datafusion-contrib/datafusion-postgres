@@ -84,10 +84,6 @@ impl PrepareExecuteHook {
             prepared_statements: Arc::new(RwLock::new(HashMap::new())),
         }
     }
-
-    pub fn clone_statements(&self) -> PreparedStatements {
-        self.prepared_statements.clone()
-    }
 }
 
 impl Default for PrepareExecuteHook {
@@ -116,9 +112,9 @@ impl QueryHook for PrepareExecuteHook {
                 // Convert inner statement to LogicalPlan
                 let plan_result = session_context
                     .state()
-                    .statement_to_plan(datafusion::sql::parser::Statement::Statement(
-                        Box::new(*statement.clone()),
-                    ))
+                    .statement_to_plan(datafusion::sql::parser::Statement::Statement(Box::new(
+                        *statement.clone(),
+                    )))
                     .await;
 
                 match plan_result {
@@ -165,17 +161,15 @@ impl QueryHook for PrepareExecuteHook {
                 // Retrieve the prepared statement info
                 let info = {
                     let stmts = self.prepared_statements.read().unwrap();
-                    stmts.get(&stmt_name).map(|info| {
-                        (info.plan.clone(), info.parameter_types.clone())
-                    })
+                    stmts
+                        .get(&stmt_name)
+                        .map(|info| (info.plan.clone(), info.parameter_types.clone()))
                 };
 
                 match info {
                     Some((plan, declared_types)) => {
                         // Validate parameter count when types were explicitly declared
-                        if !declared_types.is_empty()
-                            && parameters.len() != declared_types.len()
-                        {
+                        if !declared_types.is_empty() && parameters.len() != declared_types.len() {
                             return Some(Err(PgWireError::UserError(Box::new(
                                 pgwire::error::ErrorInfo::new(
                                     "ERROR".to_string(),
@@ -190,17 +184,18 @@ impl QueryHook for PrepareExecuteHook {
                         }
 
                         // Build ParamValues from EXECUTE parameters
-                        let param_values_result: Result<ParamValues, PgWireError> =
-                            if parameters.is_empty() {
-                                Ok(ParamValues::List(vec![]))
-                            } else {
-                                let state = session_context.state();
-                                let empty_schema = DFSchema::empty();
-                                let exec_props = state.execution_props().clone();
-                                let simplify_ctx = SimplifyContext::new(&exec_props);
-                                let simplifier = ExprSimplifier::new(simplify_ctx);
+                        let param_values_result: Result<ParamValues, PgWireError> = if parameters
+                            .is_empty()
+                        {
+                            Ok(ParamValues::List(vec![]))
+                        } else {
+                            let state = session_context.state();
+                            let empty_schema = DFSchema::empty();
+                            let exec_props = state.execution_props().clone();
+                            let simplify_ctx = SimplifyContext::new(&exec_props);
+                            let simplifier = ExprSimplifier::new(simplify_ctx);
 
-                                let scalar_params: Result<Vec<ScalarAndMetadata>, PgWireError> =
+                            let scalar_params: Result<Vec<ScalarAndMetadata>, PgWireError> =
                                     parameters
                                         .iter()
                                         .enumerate()
@@ -278,8 +273,8 @@ impl QueryHook for PrepareExecuteHook {
                                         })
                                         .collect();
 
-                                scalar_params.map(ParamValues::List)
-                            };
+                            scalar_params.map(ParamValues::List)
+                        };
 
                         let param_values = match param_values_result {
                             Ok(pv) => pv,
@@ -396,7 +391,10 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_err(), "EXECUTE with wrong parameter count should fail");
+        assert!(
+            result.is_err(),
+            "EXECUTE with wrong parameter count should fail"
+        );
         let err_msg = format!("{:?}", result.unwrap_err());
         assert!(
             err_msg.contains("07001") || err_msg.contains("wrong number"),
@@ -433,7 +431,9 @@ mod tests {
         );
         let err_msg = format!("{:?}", result.unwrap_err());
         assert!(
-            err_msg.contains("22023") || err_msg.contains("invalid type") || err_msg.contains("invalid parameter"),
+            err_msg.contains("22023")
+                || err_msg.contains("invalid type")
+                || err_msg.contains("invalid parameter"),
             "Error should reference SQLSTATE 22023 or type mismatch: {}",
             err_msg
         );
