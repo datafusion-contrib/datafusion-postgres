@@ -16,6 +16,7 @@ use pgwire::types::format::FormatOptions;
 use postgres_types::Type;
 
 use crate::client;
+use crate::hooks::{HookOutput, ParameterStatusChange};
 use crate::QueryHook;
 
 #[derive(Debug)]
@@ -29,13 +30,14 @@ impl QueryHook for SetShowHook {
         statement: &Statement,
         session_context: &SessionContext,
         client: &mut (dyn ClientInfo + Send + Sync),
-    ) -> Option<PgWireResult<Response>> {
+    ) -> Option<PgWireResult<HookOutput>> {
         match statement {
             Statement::Set { .. } => {
                 try_respond_set_statements(client, statement, session_context).await
             }
             Statement::ShowVariable { .. } | Statement::ShowStatus { .. } => {
-                try_respond_show_statements(client, statement, session_context).await
+                let result = try_respond_show_statements(client, statement, session_context).await;
+                result.map(|r| r.map(|resp| (resp, None)))
             }
             _ => None,
         }
@@ -86,13 +88,14 @@ impl QueryHook for SetShowHook {
         _params: &ParamValues,
         session_context: &SessionContext,
         client: &mut (dyn ClientInfo + Send + Sync),
-    ) -> Option<PgWireResult<Response>> {
+    ) -> Option<PgWireResult<HookOutput>> {
         match statement {
             Statement::Set { .. } => {
                 try_respond_set_statements(client, statement, session_context).await
             }
             Statement::ShowVariable { .. } | Statement::ShowStatus { .. } => {
-                try_respond_show_statements(client, statement, session_context).await
+                let result = try_respond_show_statements(client, statement, session_context).await;
+                result.map(|r| r.map(|resp| (resp, None)))
             }
             _ => None,
         }
@@ -122,7 +125,7 @@ async fn try_respond_set_statements<C>(
     client: &mut C,
     statement: &Statement,
     session_context: &SessionContext,
-) -> Option<PgWireResult<Response>>
+) -> Option<PgWireResult<HookOutput>>
 where
     C: ClientInfo + Send + Sync + ?Sized,
 {
@@ -170,7 +173,7 @@ where
                 };
 
                 client::set_statement_timeout(client, timeout);
-                return Some(Ok(Response::Execution(Tag::new("SET"))));
+                return Some(Ok((Response::Execution(Tag::new("SET")), None)));
             } else if matches!(
                 var.as_str(),
                 "datestyle"
@@ -184,10 +187,10 @@ where
                 // postgres configuration variables
                 let value = values[0].clone();
                 if let Expr::Value(value) = value {
-                    client
-                        .metadata_mut()
-                        .insert(var, value.into_string().unwrap_or_else(|| "".to_string()));
-                    return Some(Ok(Response::Execution(Tag::new("SET"))));
+                    let val_str = value.into_string().unwrap_or_else(|| "".to_string());
+                    client.metadata_mut().insert(var.clone(), val_str);
+                    let ps = parameter_status_for_var(&var, &*client);
+                    return Some(Ok((Response::Execution(Tag::new("SET")), ps)));
                 }
             }
         }
@@ -205,7 +208,11 @@ where
                 .options_mut()
                 .execution
                 .time_zone = Some(tz.to_string());
-            return Some(Ok(Response::Execution(Tag::new("SET"))));
+            let tz_value = client::get_timezone(client).unwrap_or("UTC").to_string();
+            return Some(Ok((
+                Response::Execution(Tag::new("SET")),
+                Some(("TimeZone".to_string(), tz_value)),
+            )));
         }
         _ => {}
     }
@@ -218,7 +225,24 @@ where
     }
 
     // Always return SET success
-    Some(Ok(Response::Execution(Tag::new("SET"))))
+    Some(Ok((Response::Execution(Tag::new("SET")), None)))
+}
+
+fn parameter_status_for_var(
+    var: &str,
+    client: &(impl ClientInfo + ?Sized),
+) -> ParameterStatusChange {
+    let display_name = match var {
+        "datestyle" => "DateStyle",
+        "intervalstyle" => "IntervalStyle",
+        "bytea_output" => "bytea_output",
+        "application_name" => "application_name",
+        "extra_float_digits" => "extra_float_digits",
+        "search_path" => "search_path",
+        _ => return None,
+    };
+    let value = client.metadata().get(var)?.clone();
+    Some((display_name.to_string(), value))
 }
 
 async fn execute_set_statement(
@@ -237,40 +261,6 @@ async fn execute_set_statement(
         .execute_logical_plan(logical_plan)
         .await
         .map(|_| ())
-}
-
-pub fn parameter_status_key_for_set(
-    statement: &Statement,
-    client: &dyn ClientInfo,
-) -> Option<(String, String)> {
-    let Statement::Set(set_stmt) = statement else {
-        return None;
-    };
-    match set_stmt {
-        Set::SingleAssignment { variable, .. } => {
-            let var = variable.to_string().to_lowercase();
-            let display_name = match var.as_str() {
-                "datestyle" => Some("DateStyle"),
-                "intervalstyle" => Some("IntervalStyle"),
-                "bytea_output" => Some("bytea_output"),
-                "application_name" => Some("application_name"),
-                "extra_float_digits" => Some("extra_float_digits"),
-                "search_path" => Some("search_path"),
-                _ => None,
-            };
-            if let Some(display_name) = display_name {
-                let value = client.metadata().get(&var)?.clone();
-                Some((display_name.to_string(), value))
-            } else {
-                None
-            }
-        }
-        Set::SetTimeZone { .. } => {
-            let tz = client::get_timezone(client).unwrap_or("UTC").to_string();
-            Some(("TimeZone".to_string(), tz))
-        }
-        _ => None,
-    }
 }
 
 async fn try_respond_show_statements<C>(
@@ -378,7 +368,7 @@ mod tests {
             try_respond_set_statements(&mut client, &statement, &session_context).await;
 
         assert!(set_response.is_some());
-        assert!(set_response.unwrap().is_ok());
+        assert!(set_response.unwrap().map(|(r, _)| r).is_ok());
 
         // Verify the timeout was set in client metadata
         let timeout = client::get_statement_timeout(&client);
@@ -412,9 +402,9 @@ mod tests {
             try_respond_set_statements(&mut client, &statement, &session_context).await;
 
         assert!(set_response.is_some());
-        assert!(set_response.unwrap().is_ok());
+        assert!(set_response.unwrap().map(|(r, _)| r).is_ok());
 
-        // Verify the timeout was set in client metadata
+        // Verify the value was set in client metadata
         let bytea_output = client.metadata().get("bytea_output").unwrap();
         assert_eq!(bytea_output, "hex");
 
@@ -446,9 +436,9 @@ mod tests {
             try_respond_set_statements(&mut client, &statement, &session_context).await;
 
         assert!(set_response.is_some());
-        assert!(set_response.unwrap().is_ok());
+        assert!(set_response.unwrap().map(|(r, _)| r).is_ok());
 
-        // Verify the timeout was set in client metadata
+        // Verify the value was set in client metadata
         let bytea_output = client.metadata().get("datestyle").unwrap();
         assert_eq!(bytea_output, "ISO, DMY");
 
@@ -478,7 +468,7 @@ mod tests {
             .unwrap();
         let resp = try_respond_set_statements(&mut client, &statement, &session_context).await;
         assert!(resp.is_some());
-        assert!(resp.unwrap().is_ok());
+        assert!(resp.unwrap().map(|(r, _)| r).is_ok());
 
         // Disable timeout with 0
         let statement = Parser::new(&PostgreSqlDialect {})
@@ -488,14 +478,14 @@ mod tests {
             .unwrap();
         let resp = try_respond_set_statements(&mut client, &statement, &session_context).await;
         assert!(resp.is_some());
-        assert!(resp.unwrap().is_ok());
+        assert!(resp.unwrap().map(|(r, _)| r).is_ok());
 
         let timeout = client::get_statement_timeout(&client);
         assert_eq!(timeout, None);
     }
 
     #[tokio::test]
-    async fn test_parameter_status_key_for_all_set_vars() {
+    async fn test_parameter_status_returned_for_all_set_vars() {
         let test_cases = vec![
             ("set bytea_output = 'escape'", "bytea_output", "escape"),
             (
@@ -527,12 +517,11 @@ mod tests {
                 .parse_statement()
                 .unwrap();
 
-            let _response =
+            let result =
                 try_respond_set_statements(&mut client, &statement, &session_context).await;
-
-            let key_value = parameter_status_key_for_set(&statement, &client);
-            assert!(key_value.is_some(), "Expected ParameterStatus for {sql}");
-            let (name, value) = key_value.unwrap();
+            let (_, ps_change) = result.expect("Expected Some").expect("Expected Ok");
+            assert!(ps_change.is_some(), "Expected ParameterStatus for {sql}");
+            let (name, value) = ps_change.unwrap();
             assert_eq!(name, expected_key, "Wrong key for {sql}");
             assert_eq!(value, expected_value, "Wrong value for {sql}");
         }
@@ -549,11 +538,10 @@ mod tests {
             .parse_statement()
             .unwrap();
 
-        let _response = try_respond_set_statements(&mut client, &statement, &session_context).await;
-
-        let key_value = parameter_status_key_for_set(&statement, &client);
+        let result = try_respond_set_statements(&mut client, &statement, &session_context).await;
+        let (_, ps_change) = result.expect("Expected Some").expect("Expected Ok");
         assert!(
-            key_value.is_none(),
+            ps_change.is_none(),
             "statement_timeout should not produce ParameterStatus"
         );
     }

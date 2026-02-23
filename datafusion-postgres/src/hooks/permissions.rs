@@ -6,11 +6,11 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::Statement;
 use datafusion_pg_catalog::pg_catalog::context::{Permission, ResourceType};
-use pgwire::api::results::Response;
 use pgwire::api::ClientInfo;
 use pgwire::error::{PgWireError, PgWireResult};
 
 use crate::auth::AuthManager;
+use crate::hooks::HookOutput;
 use crate::QueryHook;
 
 #[derive(Debug)]
@@ -97,7 +97,7 @@ impl QueryHook for PermissionsHook {
         statement: &Statement,
         _session_context: &SessionContext,
         client: &mut (dyn ClientInfo + Send + Sync),
-    ) -> Option<PgWireResult<Response>> {
+    ) -> Option<PgWireResult<HookOutput>> {
         if Self::should_skip_permission_check(statement) {
             return None;
         }
@@ -126,7 +126,7 @@ impl QueryHook for PermissionsHook {
         _params: &ParamValues,
         _session_context: &SessionContext,
         client: &mut (dyn ClientInfo + Send + Sync),
-    ) -> Option<PgWireResult<Response>> {
+    ) -> Option<PgWireResult<HookOutput>> {
         if Self::should_skip_permission_check(statement) {
             return None;
         }

@@ -12,6 +12,12 @@ use pgwire::api::results::Response;
 use pgwire::api::ClientInfo;
 use pgwire::error::PgWireResult;
 
+/// Optional ParameterStatus (name, value) to send after a successful SET.
+pub type ParameterStatusChange = Option<(String, String)>;
+
+/// Response from a query hook: the protocol Response plus an optional ParameterStatus.
+pub type HookOutput = (Response, ParameterStatusChange);
+
 #[async_trait]
 pub trait QueryHook: Send + Sync {
     /// called in simple query handler to return response directly
@@ -20,7 +26,7 @@ pub trait QueryHook: Send + Sync {
         statement: &Statement,
         session_context: &SessionContext,
         client: &mut (dyn ClientInfo + Send + Sync),
-    ) -> Option<PgWireResult<Response>>;
+    ) -> Option<PgWireResult<HookOutput>>;
 
     /// called at extended query parse phase, for generating `LogicalPlan`from statement
     async fn handle_extended_parse_query(
@@ -38,5 +44,5 @@ pub trait QueryHook: Send + Sync {
         params: &ParamValues,
         session_context: &SessionContext,
         client: &mut (dyn ClientInfo + Send + Sync),
-    ) -> Option<PgWireResult<Response>>;
+    ) -> Option<PgWireResult<HookOutput>>;
 }

@@ -20,7 +20,7 @@ use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::PgWireBackendMessage;
 use pgwire::types::format::FormatOptions;
 
-use crate::hooks::set_show::{self, SetShowHook};
+use crate::hooks::set_show::SetShowHook;
 use crate::hooks::transactions::TransactionStatementHook;
 use crate::hooks::QueryHook;
 use crate::{client, planner};
@@ -147,21 +147,18 @@ impl SimpleQueryHandler for DfSessionService {
                     .handle_simple_query(&statement, &self.session_context, client)
                     .await
                 {
-                    if result.is_ok() {
-                        if let Some((name, value)) =
-                            set_show::parameter_status_key_for_set(&statement, client)
-                        {
-                            use futures::SinkExt;
-                            use pgwire::messages::startup::ParameterStatus;
-                            client
-                                .feed(PgWireBackendMessage::ParameterStatus(ParameterStatus::new(
-                                    name, value,
-                                )))
-                                .await
-                                .map_err(PgWireError::from)?;
-                        }
+                    let (response, ps_change) = result?;
+                    if let Some((name, value)) = ps_change {
+                        use futures::SinkExt;
+                        use pgwire::messages::startup::ParameterStatus;
+                        client
+                            .feed(PgWireBackendMessage::ParameterStatus(ParameterStatus::new(
+                                name, value,
+                            )))
+                            .await
+                            .map_err(PgWireError::from)?;
                     }
-                    results.push(result?);
+                    results.push(response);
                     continue 'stmt;
                 }
             }
@@ -251,21 +248,18 @@ impl ExtendedQueryHandler for DfSessionService {
                         )
                         .await
                     {
-                        if result.is_ok() {
-                            if let Some((name, value)) =
-                                set_show::parameter_status_key_for_set(statement, client)
-                            {
-                                use futures::SinkExt;
-                                use pgwire::messages::startup::ParameterStatus;
-                                client
-                                    .feed(PgWireBackendMessage::ParameterStatus(
-                                        ParameterStatus::new(name, value),
-                                    ))
-                                    .await
-                                    .map_err(PgWireError::from)?;
-                            }
+                        let (response, ps_change) = result?;
+                        if let Some((name, value)) = ps_change {
+                            use futures::SinkExt;
+                            use pgwire::messages::startup::ParameterStatus;
+                            client
+                                .feed(PgWireBackendMessage::ParameterStatus(ParameterStatus::new(
+                                    name, value,
+                                )))
+                                .await
+                                .map_err(PgWireError::from)?;
                         }
-                        return result;
+                        return Ok(response);
                     }
                 }
             }
@@ -467,6 +461,8 @@ mod tests {
     use super::*;
     use crate::testing::MockClient;
 
+    use crate::hooks::HookOutput;
+
     struct TestHook;
 
     #[async_trait]
@@ -476,9 +472,9 @@ mod tests {
             statement: &sqlparser::ast::Statement,
             _ctx: &SessionContext,
             _client: &mut (dyn ClientInfo + Sync + Send),
-        ) -> Option<PgWireResult<Response>> {
+        ) -> Option<PgWireResult<HookOutput>> {
             if statement.to_string().contains("magic") {
-                Some(Ok(Response::EmptyQuery))
+                Some(Ok((Response::EmptyQuery, None)))
             } else {
                 None
             }
@@ -500,7 +496,7 @@ mod tests {
             _params: &ParamValues,
             _session_context: &SessionContext,
             _client: &mut (dyn ClientInfo + Send + Sync),
-        ) -> Option<PgWireResult<Response>> {
+        ) -> Option<PgWireResult<HookOutput>> {
             None
         }
     }
