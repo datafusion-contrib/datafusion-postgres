@@ -674,4 +674,117 @@ mod tests {
         .await;
         assert!(err.is_err(), "EXECUTE after DEALLOCATE should fail");
     }
+
+    #[tokio::test]
+    async fn test_execute_with_integer_parameter() {
+        let session_context = Arc::new(SessionContext::new());
+
+        // Create a table with some data
+        session_context
+            .sql("CREATE TABLE test_params (id BIGINT, name VARCHAR)")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        session_context
+            .sql("INSERT INTO test_params VALUES (1, 'Alice'), (2, 'Bob'), (42, 'Carol')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let service = DfSessionService::new(session_context);
+        let mut client = MockClient::new();
+
+        // PREPARE a parameterized statement
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "PREPARE param_stmt (BIGINT) AS SELECT id, name FROM test_params WHERE id = $1",
+        )
+        .await
+        .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("PREPARE")));
+
+        // EXECUTE with integer parameter 42
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "EXECUTE param_stmt(42)",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            matches!(results[0], Response::Query(_)),
+            "Expected Query response for EXECUTE param_stmt(42)"
+        );
+
+        // EXECUTE with a different parameter (id = 1)
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "EXECUTE param_stmt(1)",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            matches!(results[0], Response::Query(_)),
+            "Expected Query response for EXECUTE param_stmt(1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_text_parameter() {
+        let session_context = Arc::new(SessionContext::new());
+
+        session_context
+            .sql("CREATE TABLE test_text (id BIGINT, name VARCHAR)")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        session_context
+            .sql("INSERT INTO test_text VALUES (1, 'Alice'), (2, 'Bob')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let service = DfSessionService::new(session_context);
+        let mut client = MockClient::new();
+
+        // PREPARE with a text parameter
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "PREPARE text_stmt AS SELECT id, name FROM test_text WHERE name = $1",
+        )
+        .await
+        .unwrap();
+        assert!(matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("PREPARE")));
+
+        // EXECUTE with text parameter 'Alice'
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "EXECUTE text_stmt('Alice')",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            matches!(results[0], Response::Query(_)),
+            "Expected Query response for EXECUTE text_stmt('Alice')"
+        );
+    }
 }
