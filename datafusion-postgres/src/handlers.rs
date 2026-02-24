@@ -814,7 +814,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepared_statements_are_session_scoped_between_clients() {
-        // Regression test for P1:
         // PREPARE/EXECUTE state must be isolated per client connection.
         let session_context = Arc::new(SessionContext::new());
         let service = DfSessionService::new(session_context);
@@ -865,7 +864,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_deallocate_all_is_session_scoped_between_clients() {
-        // Regression test for P1:
         // DEALLOCATE ALL from one client must not clear another client's statements.
         let session_context = Arc::new(SessionContext::new());
         let service = DfSessionService::new(session_context);
