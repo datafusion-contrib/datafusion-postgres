@@ -4,7 +4,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_pg_catalog::pg_catalog::setup_pg_catalog;
 use futures::Sink;
 use pgwire::{
-    api::{ClientInfo, ClientPortalStore, PgWireConnectionState, METADATA_USER},
+    api::{ClientInfo, ClientPortalStore, PgWireConnectionState, SessionExtensions, METADATA_USER},
     messages::{
         response::TransactionStatus, startup::SecretKey, PgWireBackendMessage, ProtocolVersion,
     },
@@ -26,10 +26,16 @@ pub fn setup_handlers() -> DfSessionService {
     DfSessionService::new(Arc::new(session_context))
 }
 
-#[derive(Debug, Default)]
 pub struct MockClient {
     metadata: HashMap<String, String>,
     portal_store: HashMap<String, String>,
+    session_extensions: SessionExtensions,
+}
+
+impl Default for MockClient {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MockClient {
@@ -40,6 +46,7 @@ impl MockClient {
         MockClient {
             metadata,
             portal_store: HashMap::default(),
+            session_extensions: SessionExtensions::new(),
         }
     }
 }
@@ -83,6 +90,10 @@ impl ClientInfo for MockClient {
 
     fn metadata_mut(&mut self) -> &mut HashMap<String, String> {
         &mut self.metadata
+    }
+
+    fn session_extensions(&self) -> &SessionExtensions {
+        &self.session_extensions
     }
 
     fn client_certificates<'a>(&self) -> Option<&[rustls_pki_types::CertificateDer<'a>]> {

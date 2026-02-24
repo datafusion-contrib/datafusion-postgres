@@ -95,7 +95,7 @@ pub struct DfSessionService {
 impl DfSessionService {
     pub fn new(session_context: Arc<SessionContext>) -> DfSessionService {
         let hooks: Vec<Arc<dyn QueryHook>> = vec![
-            Arc::new(PrepareExecuteHook::new()),
+            Arc::new(PrepareExecuteHook),
             Arc::new(SetShowHook),
             Arc::new(TransactionStatementHook),
         ];
@@ -437,11 +437,9 @@ mod tests {
 
     use datafusion::prelude::SessionContext;
     use futures::Sink;
-    use pgwire::api::store::{MemPortalStore, PortalStore};
     use pgwire::api::stmt::StoredStatement;
-    use pgwire::api::{
-        ClientInfo, ClientPortalStore, PgWireConnectionState, METADATA_USER,
-    };
+    use pgwire::api::store::{MemPortalStore, PortalStore};
+    use pgwire::api::{ClientInfo, ClientPortalStore, PgWireConnectionState, METADATA_USER};
     use pgwire::messages::extendedquery::Bind;
     use pgwire::messages::response::TransactionStatus;
     use pgwire::messages::startup::SecretKey;
@@ -461,6 +459,7 @@ mod tests {
     struct ExtendedMockClient {
         metadata: HashMap<String, String>,
         portal_store: MemPortalStore<<DfSessionService as ExtendedQueryHandler>::Statement>,
+        session_extensions: pgwire::api::SessionExtensions,
     }
 
     impl ExtendedMockClient {
@@ -470,6 +469,7 @@ mod tests {
             ExtendedMockClient {
                 metadata,
                 portal_store: MemPortalStore::new(),
+                session_extensions: pgwire::api::SessionExtensions::new(),
             }
         }
     }
@@ -515,9 +515,11 @@ mod tests {
             &mut self.metadata
         }
 
-        fn client_certificates<'a>(
-            &self,
-        ) -> Option<&[rustls_pki_types::CertificateDer<'a>]> {
+        fn session_extensions(&self) -> &pgwire::api::SessionExtensions {
+            &self.session_extensions
+        }
+
+        fn client_certificates<'a>(&self) -> Option<&[rustls_pki_types::CertificateDer<'a>]> {
             None
         }
 
@@ -527,8 +529,7 @@ mod tests {
     }
 
     impl ClientPortalStore for ExtendedMockClient {
-        type PortalStore =
-            MemPortalStore<<DfSessionService as ExtendedQueryHandler>::Statement>;
+        type PortalStore = MemPortalStore<<DfSessionService as ExtendedQueryHandler>::Statement>;
 
         fn portal_store(&self) -> &Self::PortalStore {
             &self.portal_store
@@ -728,7 +729,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(results.len(), 1);
-        assert!(matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("DEALLOCATE")));
+        assert!(
+            matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("DEALLOCATE"))
+        );
     }
 
     #[tokio::test]
@@ -745,7 +748,10 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_err(), "EXECUTE of nonexistent statement should fail");
+        assert!(
+            result.is_err(),
+            "EXECUTE of nonexistent statement should fail"
+        );
     }
 
     #[tokio::test]
@@ -792,7 +798,9 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("DEALLOCATE")));
+        assert!(
+            matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("DEALLOCATE"))
+        );
 
         // Verify EXECUTE after DEALLOCATE fails
         let err = <DfSessionService as SimpleQueryHandler>::do_query(
@@ -802,6 +810,99 @@ mod tests {
         )
         .await;
         assert!(err.is_err(), "EXECUTE after DEALLOCATE should fail");
+    }
+
+    #[tokio::test]
+    async fn test_prepared_statements_are_session_scoped_between_clients() {
+        // Regression test for P1:
+        // PREPARE/EXECUTE state must be isolated per client connection.
+        let session_context = Arc::new(SessionContext::new());
+        let service = DfSessionService::new(session_context);
+        let mut client_a = MockClient::new();
+        let mut client_b = MockClient::new();
+
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client_a,
+            "PREPARE isolated_stmt AS SELECT 1",
+        )
+        .await
+        .unwrap();
+        assert!(matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("PREPARE")));
+
+        let err = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client_b,
+            "EXECUTE isolated_stmt",
+        )
+        .await;
+        assert!(
+            err.is_err(),
+            "Client B should not be able to EXECUTE a statement prepared by client A"
+        );
+
+        let err_msg = format!("{:?}", err.unwrap_err());
+        assert!(
+            err_msg.contains("26000")
+                || err_msg.contains("isolated_stmt")
+                || err_msg.contains("does not exist"),
+            "Expected missing prepared statement error for cross-client EXECUTE: {}",
+            err_msg
+        );
+
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client_a,
+            "EXECUTE isolated_stmt",
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(results[0], Response::Query(_)),
+            "Client A should still be able to EXECUTE its own prepared statement"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_deallocate_all_is_session_scoped_between_clients() {
+        // Regression test for P1:
+        // DEALLOCATE ALL from one client must not clear another client's statements.
+        let session_context = Arc::new(SessionContext::new());
+        let service = DfSessionService::new(session_context);
+        let mut client_a = MockClient::new();
+        let mut client_b = MockClient::new();
+
+        let _ = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client_a,
+            "PREPARE keep_me AS SELECT 42",
+        )
+        .await
+        .unwrap();
+
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client_b,
+            "DEALLOCATE ALL",
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(results[0], Response::Execution(ref tag) if tag == &Tag::new("DEALLOCATE")),
+            "Client B DEALLOCATE ALL should succeed for its own session"
+        );
+
+        let results = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client_a,
+            "EXECUTE keep_me",
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(results[0], Response::Query(_)),
+            "Client A statement should survive Client B DEALLOCATE ALL"
+        );
     }
 
     #[tokio::test]
@@ -969,7 +1070,10 @@ mod tests {
             "EXECUTE test_stmt",
         )
         .await;
-        assert!(err.is_err(), "EXECUTE after DEALLOCATE PREPARE ALL should fail");
+        assert!(
+            err.is_err(),
+            "EXECUTE after DEALLOCATE PREPARE ALL should fail"
+        );
     }
 
     #[tokio::test]
@@ -1022,7 +1126,10 @@ mod tests {
             "EXECUTE remove_stmt",
         )
         .await;
-        assert!(err.is_err(), "EXECUTE remove_stmt after specific DEALLOCATE should fail");
+        assert!(
+            err.is_err(),
+            "EXECUTE remove_stmt after specific DEALLOCATE should fail"
+        );
     }
 
     #[tokio::test]
@@ -1117,20 +1224,19 @@ mod tests {
         let mut ext_client = ExtendedMockClient::new();
 
         let bind_message = Bind::new(
-            None,                      // portal name (unnamed)
+            None,                              // portal name (unnamed)
             Some("wire_sep_stmt".to_string()), // statement name to look up
-            vec![],                    // parameter format codes
-            vec![],                    // parameters
-            vec![],                    // result format codes
+            vec![],                            // parameter format codes
+            vec![],                            // parameters
+            vec![],                            // result format codes
         );
 
-        let bind_result =
-            <DfSessionService as ExtendedQueryHandler>::on_bind(
-                &service,
-                &mut ext_client,
-                bind_message,
-            )
-            .await;
+        let bind_result = <DfSessionService as ExtendedQueryHandler>::on_bind(
+            &service,
+            &mut ext_client,
+            bind_message,
+        )
+        .await;
 
         // Wire Bind cannot find a statement prepared via SQL PREPARE because
         // they live in separate storage namespaces.

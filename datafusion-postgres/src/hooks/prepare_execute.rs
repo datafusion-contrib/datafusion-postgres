@@ -20,8 +20,8 @@ struct PreparedStatementInfo {
     parameter_types: Vec<SqlDataType>,
 }
 
-/// Prepared statement storage: name -> PreparedStatementInfo
-type PreparedStatements = Arc<RwLock<HashMap<String, PreparedStatementInfo>>>;
+/// Per-session prepared statement storage, stored in `SessionExtensions`.
+type PreparedStatements = RwLock<HashMap<String, PreparedStatementInfo>>;
 
 /// Convert a sqlparser DataType to an Arrow DataType for parameter type validation.
 fn sql_type_to_arrow(sql_type: &SqlDataType) -> Option<ArrowDataType> {
@@ -73,22 +73,17 @@ fn types_compatible(expected: &ArrowDataType, actual: &ArrowDataType) -> bool {
     )
 }
 
-/// Hook for handling PREPARE, EXECUTE, DEALLOCATE statements
-pub struct PrepareExecuteHook {
-    prepared_statements: PreparedStatements,
-}
+/// Hook for handling PREPARE, EXECUTE, DEALLOCATE statements.
+///
+/// Prepared statement state is stored per-session via `SessionExtensions`,
+/// so each client connection has its own isolated set of prepared statements.
+pub struct PrepareExecuteHook;
 
 impl PrepareExecuteHook {
-    pub fn new() -> Self {
-        PrepareExecuteHook {
-            prepared_statements: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-}
-
-impl Default for PrepareExecuteHook {
-    fn default() -> Self {
-        Self::new()
+    fn statements(client: &(dyn ClientInfo + Send + Sync)) -> Arc<PreparedStatements> {
+        client
+            .session_extensions()
+            .get_or_insert_with(|| RwLock::new(HashMap::new()))
     }
 }
 
@@ -98,7 +93,7 @@ impl QueryHook for PrepareExecuteHook {
         &self,
         statement: &Statement,
         session_context: &SessionContext,
-        _client: &mut (dyn ClientInfo + Send + Sync),
+        client: &mut (dyn ClientInfo + Send + Sync),
     ) -> Option<PgWireResult<Response>> {
         match statement {
             // PREPARE stmt [(param_types)] AS inner_statement
@@ -119,7 +114,8 @@ impl QueryHook for PrepareExecuteHook {
 
                 match plan_result {
                     Ok(plan) => {
-                        let mut stmts = self.prepared_statements.write().unwrap();
+                        let store = Self::statements(client);
+                        let mut stmts = store.write().unwrap();
                         stmts.insert(
                             stmt_name,
                             PreparedStatementInfo {
@@ -160,7 +156,8 @@ impl QueryHook for PrepareExecuteHook {
 
                 // Retrieve the prepared statement info
                 let info = {
-                    let stmts = self.prepared_statements.read().unwrap();
+                    let store = Self::statements(client);
+                    let stmts = store.read().unwrap();
                     stmts
                         .get(&stmt_name)
                         .map(|info| (info.plan.clone(), info.parameter_types.clone()))
@@ -291,10 +288,9 @@ impl QueryHook for PrepareExecuteHook {
 
                         match df_result {
                             Ok(df) => {
-                                let metadata = std::collections::HashMap::new();
                                 let format_options = Arc::new(
                                     pgwire::types::format::FormatOptions::from_client_metadata(
-                                        &metadata,
+                                        client.metadata(),
                                     ),
                                 );
                                 let resp = arrow_pg::datatypes::df::encode_dataframe(
@@ -321,7 +317,8 @@ impl QueryHook for PrepareExecuteHook {
 
             // DEALLOCATE { name | ALL }
             Statement::Deallocate { name, prepare: _ } => {
-                let mut stmts = self.prepared_statements.write().unwrap();
+                let store = Self::statements(client);
+                let mut stmts = store.write().unwrap();
 
                 if name.value.to_uppercase() == "ALL" {
                     stmts.clear();
