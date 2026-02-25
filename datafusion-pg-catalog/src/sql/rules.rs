@@ -14,6 +14,7 @@ use datafusion::sql::sqlparser::ast::FunctionArgExpr;
 use datafusion::sql::sqlparser::ast::FunctionArgumentList;
 use datafusion::sql::sqlparser::ast::FunctionArguments;
 use datafusion::sql::sqlparser::ast::Ident;
+use datafusion::sql::sqlparser::ast::LimitClause;
 use datafusion::sql::sqlparser::ast::ObjectName;
 use datafusion::sql::sqlparser::ast::ObjectNamePart;
 use datafusion::sql::sqlparser::ast::OrderByKind;
@@ -30,7 +31,10 @@ use datafusion::sql::sqlparser::ast::UnaryOperator;
 use datafusion::sql::sqlparser::ast::Value;
 use datafusion::sql::sqlparser::ast::ValueWithSpan;
 use datafusion::sql::sqlparser::ast::VisitMut;
+use datafusion::sql::sqlparser::ast::Visitor;
 use datafusion::sql::sqlparser::ast::VisitorMut;
+use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
+use datafusion::sql::sqlparser::parser::Parser;
 
 pub trait SqlStatementRewriteRule: Send + Sync + Debug {
     fn rewrite(&self, s: Statement) -> Statement;
@@ -379,6 +383,165 @@ impl SqlStatementRewriteRule for RemoveUnsupportedTypes {
         };
         let _ = statement.visit(&mut visitor);
         statement
+    }
+}
+
+/// Rewrite regclass::oid cast to subquery
+///
+/// This rewrites patterns like `$1::regclass::oid` to
+/// `(SELECT oid FROM pg_catalog.pg_class WHERE relname = $1)`
+#[derive(Debug)]
+pub struct RewriteRegclassCastToSubquery(Box<Query>);
+
+impl Default for RewriteRegclassCastToSubquery {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RewriteRegclassCastToSubquery {
+    pub fn new() -> Self {
+        let sql = "SELECT c.oid
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p
+WHERE n.nspname = COALESCE(
+    CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END,
+    current_schema()
+)
+AND c.relname = p.parts[-1]";
+        let dialect = PostgreSqlDialect {};
+        let query = Parser::parse_sql(&dialect, sql)
+            .map(|mut stmts| {
+                let stmt = stmts.remove(0);
+                if let Statement::Query(query) = stmt {
+                    query
+                } else {
+                    unreachable!()
+                }
+            })
+            .expect("Failed to parse prepared query");
+        Self(query)
+    }
+}
+
+struct RewriteRegclassCastToSubqueryVisitor(Box<Query>);
+
+impl RewriteRegclassCastToSubqueryVisitor {
+    pub fn new(query: Box<Query>) -> Self {
+        Self(query)
+    }
+
+    fn create_subquery(&self, expr: &Expr) -> Expr {
+        struct PlaceholderReplacer(Expr);
+
+        impl VisitorMut for PlaceholderReplacer {
+            type Break = ();
+
+            fn pre_visit_expr(&mut self, e: &mut Expr) -> ControlFlow<Self::Break> {
+                if let Expr::Value(ValueWithSpan {
+                    value: Value::Placeholder(_placeholder),
+                    ..
+                }) = e
+                {
+                    *e = self.0.clone();
+                }
+                ControlFlow::Continue(())
+            }
+        }
+
+        let mut query = self.0.clone();
+        let mut replacer = PlaceholderReplacer(expr.clone());
+        let _ = query.visit(&mut replacer);
+        Expr::Subquery(query)
+    }
+
+    fn is_regclass_to_oid_cast(&self, expr: &Expr) -> bool {
+        if let Expr::Cast {
+            kind,
+            data_type,
+            expr: inner_expr,
+            format: _,
+        } = expr
+        {
+            if *kind == CastKind::DoubleColon {
+                let dt_lower = data_type.to_string().to_lowercase();
+                if dt_lower == "oid" || dt_lower == "pg_catalog.oid" {
+                    return self.is_regclass_cast(inner_expr);
+                }
+            }
+        }
+        false
+    }
+
+    fn is_regclass_cast(&self, expr: &Expr) -> bool {
+        if let Expr::Cast {
+            kind,
+            data_type,
+            expr: _,
+            format: _,
+        } = expr
+        {
+            if *kind == CastKind::DoubleColon {
+                let dt_lower = data_type.to_string().to_lowercase();
+                return dt_lower == "regclass" || dt_lower == "pg_catalog.regclass";
+            }
+        }
+        false
+    }
+
+    fn extract_inner_expr(&self, expr: &Expr) -> Option<Expr> {
+        if let Expr::Cast {
+            kind,
+            data_type,
+            expr: inner_expr,
+            format: _,
+        } = expr
+        {
+            if *kind == CastKind::DoubleColon {
+                let dt_lower = data_type.to_string().to_lowercase();
+                if dt_lower == "oid" || dt_lower == "pg_catalog.oid" {
+                    if let Expr::Cast {
+                        kind: inner_kind,
+                        data_type: inner_data_type,
+                        expr: inner_inner_expr,
+                        format: _,
+                    } = inner_expr.as_ref()
+                    {
+                        if *inner_kind == CastKind::DoubleColon {
+                            let inner_dt_lower = inner_data_type.to_string().to_lowercase();
+                            if inner_dt_lower == "regclass"
+                                || inner_dt_lower == "pg_catalog.regclass"
+                            {
+                                return Some((**inner_inner_expr).clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+impl VisitorMut for RewriteRegclassCastToSubqueryVisitor {
+    type Break = ();
+
+    fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
+        if self.is_regclass_to_oid_cast(expr) {
+            if let Some(inner_expr) = self.extract_inner_expr(expr) {
+                *expr = self.create_subquery(&inner_expr);
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+impl SqlStatementRewriteRule for RewriteRegclassCastToSubquery {
+    fn rewrite(&self, mut s: Statement) -> Statement {
+        let mut visitor = RewriteRegclassCastToSubqueryVisitor::new(self.0.clone());
+        let _ = s.visit(&mut visitor);
+        s
     }
 }
 
@@ -776,11 +939,83 @@ impl SqlStatementRewriteRule for FixCollate {
     }
 }
 
-/// Datafusion doesn't support subquery on projection
+/// A processor to replace unsupported subquery from projection with NULL.
+///
+/// It will also add `LIMIT 1` to supported subquery to ensure it returns scalar
+/// value.
 #[derive(Debug)]
 pub struct RemoveSubqueryFromProjection;
 
 struct RemoveSubqueryFromProjectionVisitor;
+
+impl RemoveSubqueryFromProjectionVisitor {
+    fn has_correlation(&self, query: &Query) -> bool {
+        if let SetExpr::Select(select) = &*query.body {
+            let table_aliases: HashSet<String> = select
+                .from
+                .iter()
+                .flat_map(|twj| {
+                    let mut aliases = HashSet::new();
+                    Self::collect_table_aliases_from_table_factor(&twj.relation, &mut aliases);
+                    for join in &twj.joins {
+                        Self::collect_table_aliases_from_table_factor(&join.relation, &mut aliases);
+                    }
+                    aliases
+                })
+                .collect();
+
+            let mut has_correlation = false;
+            let mut visitor = CorrelationCheckVisitor(&mut has_correlation, &table_aliases);
+            let _ = datafusion::logical_expr::sqlparser::ast::Visit::visit(query, &mut visitor);
+            has_correlation
+        } else {
+            false
+        }
+    }
+
+    fn has_limit(&self, query: &Query) -> bool {
+        query.limit_clause.is_some() || query.fetch.is_some()
+    }
+
+    fn collect_table_aliases_from_table_factor(
+        table_factor: &TableFactor,
+        aliases: &mut HashSet<String>,
+    ) {
+        if let TableFactor::Table {
+            alias: Some(alias), ..
+        } = table_factor
+        {
+            aliases.insert(alias.name.value.clone());
+        }
+    }
+}
+
+struct CorrelationCheckVisitor<'a>(&'a mut bool, &'a HashSet<String>);
+
+impl Visitor for CorrelationCheckVisitor<'_> {
+    type Break = ();
+
+    fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<Self::Break> {
+        match expr {
+            Expr::Value(ValueWithSpan {
+                value: Value::Placeholder(_placeholder),
+                ..
+            }) => {
+                *self.0 = true;
+            }
+            Expr::CompoundIdentifier(idents) => {
+                if !idents.is_empty() {
+                    let table_name = &idents[0].value;
+                    if !self.1.contains(table_name) {
+                        *self.0 = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        ControlFlow::Continue(())
+    }
+}
 
 impl VisitorMut for RemoveSubqueryFromProjectionVisitor {
     type Break = ();
@@ -790,13 +1025,33 @@ impl VisitorMut for RemoveSubqueryFromProjectionVisitor {
             for projection in &mut select.projection {
                 match projection {
                     SelectItem::UnnamedExpr(expr) => {
-                        if let Expr::Subquery(_) = expr {
-                            *expr = Expr::Value(Value::Null.with_empty_span());
+                        if let Expr::Subquery(subquery) = expr {
+                            if self.has_correlation(subquery) {
+                                *expr = Expr::Value(Value::Null.with_empty_span());
+                            } else if !self.has_limit(subquery) {
+                                subquery.limit_clause = Some(LimitClause::LimitOffset {
+                                    limit: Some(Expr::Value(
+                                        Value::Number("1".to_string(), false).with_empty_span(),
+                                    )),
+                                    offset: None,
+                                    limit_by: vec![],
+                                });
+                            }
                         }
                     }
                     SelectItem::ExprWithAlias { expr, .. } => {
-                        if let Expr::Subquery(_) = expr {
-                            *expr = Expr::Value(Value::Null.with_empty_span());
+                        if let Expr::Subquery(subquery) = expr {
+                            if self.has_correlation(subquery) {
+                                *expr = Expr::Value(Value::Null.with_empty_span());
+                            } else if !self.has_limit(subquery) {
+                                subquery.limit_clause = Some(LimitClause::LimitOffset {
+                                    limit: Some(Expr::Value(
+                                        Value::Number("1".to_string(), false).with_empty_span(),
+                                    )),
+                                    offset: None,
+                                    limit_by: vec![],
+                                });
+                            }
                         }
                     }
                     _ => {}
@@ -998,6 +1253,36 @@ mod tests {
     }
 
     #[test]
+    fn test_rewrite_regclass_cast_to_subquery() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RewriteRegclassCastToSubquery::new())];
+
+        assert_rewrite!(
+            &rules,
+            "SELECT $1::regclass::oid",
+            "SELECT (SELECT c.oid FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) AS p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT $1::pg_catalog.regclass::oid",
+            "SELECT (SELECT c.oid FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) AS p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT $1::pg_catalog.regclass::pg_catalog.oid",
+            "SELECT (SELECT c.oid FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) AS p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT * FROM pg_catalog.pg_class WHERE oid = 't'::pg_catalog.regclass::pg_catalog.oid",
+            "SELECT * FROM pg_catalog.pg_class WHERE oid = (SELECT c.oid FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident('t'::TEXT) AS parts) AS p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
+        );
+    }
+
+    #[test]
     fn test_any_to_array_contains() {
         let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
             vec![Arc::new(RewriteArrayAnyAllOperation)];
@@ -1116,6 +1401,57 @@ mod tests {
         assert_rewrite!(&rules,
             "SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), (SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true) FROM pg_catalog.pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef), a.attnotnull, (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type t WHERE c.oid = a.attcollation AND t.oid = a.atttypid AND a.attcollation <> t.typcollation LIMIT 1) AS attcollation, a.attidentity, a.attgenerated FROM pg_catalog.pg_attribute a WHERE a.attrelid = '16384' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;",
             "SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), NULL, a.attnotnull, NULL AS attcollation, a.attidentity, a.attgenerated FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = '16384' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum");
+    }
+
+    #[test]
+    fn test_keep_simple_aggregated_subquery() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RemoveSubqueryFromProjection)];
+
+        assert_rewrite!(&rules,
+            "SELECT id, (SELECT COUNT(*) FROM pg_catalog.pg_attribute) AS attr_count FROM pg_catalog.pg_class",
+            "SELECT id, (SELECT COUNT(*) FROM pg_catalog.pg_attribute LIMIT 1) AS attr_count FROM pg_catalog.pg_class"
+        );
+    }
+
+    #[test]
+    fn test_remove_correlated_subquery() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RemoveSubqueryFromProjection)];
+
+        assert_rewrite!(&rules,
+            "SELECT a.attname, (SELECT COUNT(*) FROM pg_catalog.pg_attribute WHERE attrelid = a.oid) AS count FROM pg_catalog.pg_attribute a",
+            "SELECT a.attname, NULL AS count FROM pg_catalog.pg_attribute AS a"
+        );
+    }
+
+    #[test]
+    fn test_remove_non_aggregated_subquery() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RemoveSubqueryFromProjection)];
+
+        assert_rewrite!(&rules,
+            "SELECT id, (SELECT attname FROM pg_catalog.pg_attribute LIMIT 1) AS first_attr FROM pg_catalog.pg_class",
+            "SELECT id, (SELECT attname FROM pg_catalog.pg_attribute LIMIT 1) AS first_attr FROM pg_catalog.pg_class"
+        );
+    }
+
+    #[test]
+    fn test_keep_simple_scalar_subquery() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RemoveSubqueryFromProjection)];
+
+        assert_rewrite!(
+            &rules,
+            "SELECT (SELECT 1) AS constant",
+            "SELECT (SELECT 1 LIMIT 1) AS constant"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT (SELECT 'value') AS str_val",
+            "SELECT (SELECT 'value' LIMIT 1) AS str_val"
+        );
     }
 
     #[test]

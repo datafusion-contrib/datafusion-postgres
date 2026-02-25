@@ -1,6 +1,7 @@
 use std::iter;
 use std::sync::Arc;
 
+use arrow_schema::IntervalUnit;
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use datafusion::arrow::datatypes::{DataType, Date32Type, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -8,6 +9,7 @@ use datafusion::common::ParamValues;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use futures::{stream, StreamExt};
+use pg_interval::Interval;
 use pgwire::api::portal::{Format, Portal};
 use pgwire::api::results::QueryResponse;
 use pgwire::api::Type;
@@ -163,7 +165,6 @@ where
             }
             Type::TIME => {
                 let value = portal.parameter::<NaiveTime>(i, &pg_type)?;
-                dbg!(&value);
 
                 let ns = value.map(|t| {
                     t.num_seconds_from_midnight() as i64 * 1_000_000_000 + t.nanosecond() as i64
@@ -206,9 +207,14 @@ where
                 deserialized_params.push(ScalarValue::Utf8(value));
             }
             Type::INTERVAL => {
-                let value = portal.parameter::<String>(i, &pg_type)?;
-                // Store interval as string for now (DataFusion has limited interval support)
-                deserialized_params.push(ScalarValue::Utf8(value));
+                let value = portal.parameter::<Interval>(i, &pg_type)?;
+                let scalar_value = if let Some(i) = value {
+                    ScalarValue::new_interval_mdn(i.months, i.days, i.microseconds * 1_000i64)
+                } else {
+                    ScalarValue::IntervalMonthDayNano(None)
+                };
+
+                deserialized_params.push(scalar_value);
             }
             // Array types support
             Type::BOOL_ARRAY => {
@@ -279,6 +285,28 @@ where
                 deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
                     &scalar_values,
                     &DataType::Utf8,
+                )));
+            }
+            Type::INTERVAL_ARRAY => {
+                let value = portal.parameter::<Vec<Option<Interval>>>(i, &pg_type)?;
+                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
+                    v.into_iter()
+                        .map(|i| {
+                            if let Some(i) = i {
+                                ScalarValue::new_interval_mdn(
+                                    i.months,
+                                    i.days,
+                                    i.microseconds * 1_000i64,
+                                )
+                            } else {
+                                ScalarValue::IntervalMonthDayNano(None)
+                            }
+                        })
+                        .collect()
+                });
+                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
+                    &scalar_values,
+                    &DataType::Interval(IntervalUnit::MonthDayNano),
                 )));
             }
             // Advanced types

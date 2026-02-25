@@ -174,6 +174,8 @@ impl StructEncoder {
 }
 
 impl Encoder for StructEncoder {
+    type Item = BytesMut;
+
     fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
     where
         T: ToSql + ToSqlText + Sized,
@@ -225,5 +227,9 @@ impl Encoder for StructEncoder {
         }
         self.curr_col += 1;
         Ok(())
+    }
+
+    fn take_row(&mut self) -> Self::Item {
+        std::mem::take(&mut self.row_buffer)
     }
 }

@@ -8,8 +8,10 @@ use chrono::{NaiveDate, NaiveDateTime};
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::{array::*, datatypes::*};
 use pg_interval::Interval as PgInterval;
-use pgwire::api::results::{DataRowEncoder, FieldInfo};
+use pgwire::api::results::{CopyEncoder, DataRowEncoder, FieldInfo};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use pgwire::messages::copy::CopyData;
+use pgwire::messages::data::DataRow;
 use pgwire::types::ToSqlText;
 use postgres_types::ToSql;
 use rust_decimal::Decimal;
@@ -22,12 +24,18 @@ use crate::list_encoder::encode_list;
 use crate::struct_encoder::encode_struct;
 
 pub trait Encoder {
+    type Item;
+
     fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
     where
         T: ToSql + ToSqlText + Sized;
+
+    fn take_row(&mut self) -> Self::Item;
 }
 
 impl Encoder for DataRowEncoder {
+    type Item = DataRow;
+
     fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
     where
         T: ToSql + ToSqlText + Sized,
@@ -38,6 +46,25 @@ impl Encoder for DataRowEncoder {
             pg_field.format(),
             pg_field.format_options(),
         )
+    }
+
+    fn take_row(&mut self) -> Self::Item {
+        self.take_row()
+    }
+}
+
+impl Encoder for CopyEncoder {
+    type Item = CopyData;
+
+    fn encode_field<T>(&mut self, value: &T, _pg_field: &FieldInfo) -> PgWireResult<()>
+    where
+        T: ToSql + ToSqlText + Sized,
+    {
+        self.encode_field(value)
+    }
+
+    fn take_row(&mut self) -> Self::Item {
+        self.take_copy()
     }
 }
 
@@ -71,6 +98,10 @@ get_primitive_value!(get_u8_value, UInt8Type, u8);
 get_primitive_value!(get_u16_value, UInt16Type, u16);
 get_primitive_value!(get_u32_value, UInt32Type, u32);
 get_primitive_value!(get_u64_value, UInt64Type, u64);
+
+fn get_u64_as_decimal_value(arr: &Arc<dyn Array>, idx: usize) -> Option<Decimal> {
+    get_u64_value(arr, idx).map(Decimal::from)
+}
 get_primitive_value!(get_f32_value, Float32Type, f32);
 get_primitive_value!(get_f64_value, Float64Type, f64);
 
@@ -260,15 +291,15 @@ pub fn encode_value<T: Encoder>(
         DataType::Int32 => encoder.encode_field(&get_i32_value(arr, idx), pg_field)?,
         DataType::Int64 => encoder.encode_field(&get_i64_value(arr, idx), pg_field)?,
         DataType::UInt8 => {
-            encoder.encode_field(&(get_u8_value(arr, idx).map(|x| x as i8)), pg_field)?
+            encoder.encode_field(&(get_u8_value(arr, idx).map(|x| x as i16)), pg_field)?
         }
         DataType::UInt16 => {
-            encoder.encode_field(&(get_u16_value(arr, idx).map(|x| x as i16)), pg_field)?
+            encoder.encode_field(&(get_u16_value(arr, idx).map(|x| x as i32)), pg_field)?
         }
-        DataType::UInt32 => encoder.encode_field(&get_u32_value(arr, idx), pg_field)?,
-        DataType::UInt64 => {
-            encoder.encode_field(&(get_u64_value(arr, idx).map(|x| x as i64)), pg_field)?
+        DataType::UInt32 => {
+            encoder.encode_field(&get_u32_value(arr, idx).map(|x| x as i64), pg_field)?
         }
+        DataType::UInt64 => encoder.encode_field(&get_u64_as_decimal_value(arr, idx), pg_field)?,
         DataType::Float32 => encoder.encode_field(&get_f32_value(arr, idx), pg_field)?,
         DataType::Float64 => encoder.encode_field(&get_f64_value(arr, idx), pg_field)?,
         DataType::Decimal128(_, s) => {
@@ -518,6 +549,8 @@ mod tests {
         }
 
         impl Encoder for MockEncoder {
+            type Item = String;
+
             fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
             where
                 T: ToSql + ToSqlText + Sized,
@@ -528,6 +561,10 @@ mod tests {
                 let string = String::from_utf8(bytes.to_vec());
                 self.encoded_value = string.unwrap();
                 Ok(())
+            }
+
+            fn take_row(&mut self) -> Self::Item {
+                std::mem::take(&mut self.encoded_value)
             }
         }
 
