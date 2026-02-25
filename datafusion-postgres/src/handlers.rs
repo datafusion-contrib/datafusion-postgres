@@ -22,7 +22,7 @@ use pgwire::types::format::FormatOptions;
 
 use crate::hooks::set_show::SetShowHook;
 use crate::hooks::transactions::TransactionStatementHook;
-use crate::hooks::QueryHook;
+use crate::hooks::{PgHookClient, QueryHook};
 use crate::{client, planner};
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
@@ -124,8 +124,7 @@ impl SimpleQueryHandler for DfSessionService {
         C::Error: std::fmt::Debug,
         PgWireError: From<<C as futures::Sink<PgWireBackendMessage>>::Error>,
     {
-        log::debug!("Received query: {query}"); // Log the query for debugging
-
+        log::debug!("Received query: {query}");
         let statements = self
             .parser
             .sql_parser
@@ -143,23 +142,12 @@ impl SimpleQueryHandler for DfSessionService {
 
             // Call query hooks with the parsed statement
             for hook in &self.query_hooks {
+                let mut hook_client = PgHookClient::new(client);
                 if let Some(result) = hook
-                    .handle_simple_query(&statement, &self.session_context, client)
+                    .handle_simple_query(&statement, &self.session_context, &mut hook_client)
                     .await
                 {
-                    let output = result?;
-                    for (name, value) in &output.parameter_status {
-                        use futures::SinkExt;
-                        use pgwire::messages::startup::ParameterStatus;
-                        client
-                            .feed(PgWireBackendMessage::ParameterStatus(ParameterStatus::new(
-                                name.clone(),
-                                value.clone(),
-                            )))
-                            .await
-                            .map_err(PgWireError::from)?;
-                    }
-                    results.push(output.response);
+                    results.push(result?);
                     continue 'stmt;
                 }
             }
@@ -226,8 +214,7 @@ impl ExtendedQueryHandler for DfSessionService {
         PgWireError: From<<C as futures::Sink<PgWireBackendMessage>>::Error>,
     {
         let query = &portal.statement.statement.0;
-        log::debug!("Received execute extended query: {query}"); // Log for debugging
-
+        log::debug!("Received execute extended query: {query}");
         // Check query hooks first
         if !self.query_hooks.is_empty() {
             if let (_, Some((statement, plan))) = &portal.statement.statement {
@@ -239,29 +226,18 @@ impl ExtendedQueryHandler for DfSessionService {
                     df::deserialize_parameters(portal, &ordered_param_types(&param_types))?;
 
                 for hook in &self.query_hooks {
+                    let mut hook_client = PgHookClient::new(client);
                     if let Some(result) = hook
                         .handle_extended_query(
                             statement,
                             plan,
                             &param_values,
                             &self.session_context,
-                            client,
+                            &mut hook_client,
                         )
                         .await
                     {
-                        let output = result?;
-                        for (name, value) in &output.parameter_status {
-                            use futures::SinkExt;
-                            use pgwire::messages::startup::ParameterStatus;
-                            client
-                                .feed(PgWireBackendMessage::ParameterStatus(ParameterStatus::new(
-                                    name.clone(),
-                                    value.clone(),
-                                )))
-                                .await
-                                .map_err(PgWireError::from)?;
-                        }
-                        return Ok(output.response);
+                        return result;
                     }
                 }
             }
@@ -272,13 +248,12 @@ impl ExtendedQueryHandler for DfSessionService {
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
             let param_values =
-                df::deserialize_parameters(portal, &ordered_param_types(&param_types))?; // Fixed: Use &param_types
+                df::deserialize_parameters(portal, &ordered_param_types(&param_types))?;
 
             let plan = plan
                 .clone()
                 .replace_params_with_values(&param_values)
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?; // Fixed: Use
-                                                                   // &param_values
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
             let optimised = self
                 .session_context
                 .state()
@@ -374,8 +349,7 @@ impl QueryParser for Parser {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        log::debug!("Received parse extended query: {sql}"); // Log for debugging
-
+        log::debug!("Received parse extended query: {sql}");
         let mut statements = self
             .sql_parser
             .parse(sql)
@@ -413,7 +387,6 @@ impl QueryParser for Parser {
 
             let mut param_types = Vec::with_capacity(params.len());
             for param_type in ordered_param_types(&params).iter() {
-                // Fixed: Use &params
                 if let Some(datatype) = param_type {
                     let pgtype = into_pg_type(datatype)?;
                     param_types.push(pgtype);
@@ -463,7 +436,7 @@ mod tests {
     use super::*;
     use crate::testing::MockClient;
 
-    use crate::hooks::HookOutput;
+    use crate::hooks::HookClient;
 
     struct TestHook;
 
@@ -473,10 +446,10 @@ mod tests {
             &self,
             statement: &sqlparser::ast::Statement,
             _ctx: &SessionContext,
-            _client: &mut (dyn ClientInfo + Sync + Send),
-        ) -> Option<PgWireResult<HookOutput>> {
+            _client: &mut dyn HookClient,
+        ) -> Option<PgWireResult<Response>> {
             if statement.to_string().contains("magic") {
-                Some(Ok(HookOutput::new(Response::EmptyQuery)))
+                Some(Ok(Response::EmptyQuery))
             } else {
                 None
             }
@@ -497,8 +470,8 @@ mod tests {
             _logical_plan: &LogicalPlan,
             _params: &ParamValues,
             _session_context: &SessionContext,
-            _client: &mut (dyn ClientInfo + Send + Sync),
-        ) -> Option<PgWireResult<HookOutput>> {
+            _client: &mut dyn HookClient,
+        ) -> Option<PgWireResult<Response>> {
             None
         }
     }

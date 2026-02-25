@@ -5,13 +5,15 @@ use datafusion::common::ParamValues;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::Statement;
-use datafusion_pg_catalog::pg_catalog::context::{Permission, ResourceType};
+use pgwire::api::results::Response;
 use pgwire::api::ClientInfo;
 use pgwire::error::{PgWireError, PgWireResult};
 
 use crate::auth::AuthManager;
-use crate::hooks::HookOutput;
+use crate::hooks::HookClient;
 use crate::QueryHook;
+
+use datafusion_pg_catalog::pg_catalog::context::{Permission, ResourceType};
 
 #[derive(Debug)]
 pub struct PermissionsHook {
@@ -96,8 +98,8 @@ impl QueryHook for PermissionsHook {
         &self,
         statement: &Statement,
         _session_context: &SessionContext,
-        client: &mut (dyn ClientInfo + Send + Sync),
-    ) -> Option<PgWireResult<HookOutput>> {
+        client: &mut dyn HookClient,
+    ) -> Option<PgWireResult<Response>> {
         if Self::should_skip_permission_check(statement) {
             return None;
         }
@@ -125,8 +127,8 @@ impl QueryHook for PermissionsHook {
         _logical_plan: &LogicalPlan,
         _params: &ParamValues,
         _session_context: &SessionContext,
-        client: &mut (dyn ClientInfo + Send + Sync),
-    ) -> Option<PgWireResult<HookOutput>> {
+        client: &mut dyn HookClient,
+    ) -> Option<PgWireResult<Response>> {
         if Self::should_skip_permission_check(statement) {
             return None;
         }

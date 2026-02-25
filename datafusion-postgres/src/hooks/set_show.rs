@@ -16,7 +16,7 @@ use pgwire::types::format::FormatOptions;
 use postgres_types::Type;
 
 use crate::client;
-use crate::hooks::HookOutput;
+use crate::hooks::HookClient;
 use crate::QueryHook;
 
 #[derive(Debug)]
@@ -29,15 +29,14 @@ impl QueryHook for SetShowHook {
         &self,
         statement: &Statement,
         session_context: &SessionContext,
-        client: &mut (dyn ClientInfo + Send + Sync),
-    ) -> Option<PgWireResult<HookOutput>> {
+        client: &mut dyn HookClient,
+    ) -> Option<PgWireResult<Response>> {
         match statement {
             Statement::Set { .. } => {
                 try_respond_set_statements(client, statement, session_context).await
             }
             Statement::ShowVariable { .. } | Statement::ShowStatus { .. } => {
-                let result = try_respond_show_statements(client, statement, session_context).await;
-                result.map(|r| r.map(HookOutput::new))
+                try_respond_show_statements(client, statement, session_context).await
             }
             _ => None,
         }
@@ -87,15 +86,14 @@ impl QueryHook for SetShowHook {
         _logical_plan: &LogicalPlan,
         _params: &ParamValues,
         session_context: &SessionContext,
-        client: &mut (dyn ClientInfo + Send + Sync),
-    ) -> Option<PgWireResult<HookOutput>> {
+        client: &mut dyn HookClient,
+    ) -> Option<PgWireResult<Response>> {
         match statement {
             Statement::Set { .. } => {
                 try_respond_set_statements(client, statement, session_context).await
             }
             Statement::ShowVariable { .. } | Statement::ShowStatus { .. } => {
-                let result = try_respond_show_statements(client, statement, session_context).await;
-                result.map(|r| r.map(HookOutput::new))
+                try_respond_show_statements(client, statement, session_context).await
             }
             _ => None,
         }
@@ -121,14 +119,11 @@ fn mock_show_response(name: &str, value: &str) -> PgWireResult<QueryResponse> {
     Ok(QueryResponse::new(Arc::new(fields), Box::pin(row_stream)))
 }
 
-async fn try_respond_set_statements<C>(
-    client: &mut C,
+async fn try_respond_set_statements(
+    client: &mut dyn HookClient,
     statement: &Statement,
     session_context: &SessionContext,
-) -> Option<PgWireResult<HookOutput>>
-where
-    C: ClientInfo + Send + Sync + ?Sized,
-{
+) -> Option<PgWireResult<Response>> {
     let Statement::Set(set_statement) = statement else {
         return None;
     };
@@ -173,7 +168,7 @@ where
                 };
 
                 client::set_statement_timeout(client, timeout);
-                return Some(Ok(HookOutput::new(Response::Execution(Tag::new("SET")))));
+                return Some(Ok(Response::Execution(Tag::new("SET"))));
             } else if matches!(
                 var.as_str(),
                 "datestyle"
@@ -189,11 +184,12 @@ where
                 if let Expr::Value(value) = value {
                     let val_str = value.into_string().unwrap_or_else(|| "".to_string());
                     client.metadata_mut().insert(var.clone(), val_str);
-                    let mut output = HookOutput::new(Response::Execution(Tag::new("SET")));
                     if let Some((name, value)) = parameter_status_for_var(&var, &*client) {
-                        output = output.with_parameter_status(name, value);
+                        if let Err(e) = client.send_parameter_status(&name, &value).await {
+                            return Some(Err(e));
+                        }
                     }
-                    return Some(Ok(output));
+                    return Some(Ok(Response::Execution(Tag::new("SET"))));
                 }
             }
         }
@@ -212,8 +208,10 @@ where
                 .execution
                 .time_zone = Some(tz.to_string());
             let tz_value = client::get_timezone(client).unwrap_or("UTC").to_string();
-            return Some(Ok(HookOutput::new(Response::Execution(Tag::new("SET")))
-                .with_parameter_status("TimeZone", tz_value)));
+            if let Err(e) = client.send_parameter_status("TimeZone", &tz_value).await {
+                return Some(Err(e));
+            }
+            return Some(Ok(Response::Execution(Tag::new("SET"))));
         }
         _ => {}
     }
@@ -226,7 +224,7 @@ where
     }
 
     // Always return SET success
-    Some(Ok(HookOutput::new(Response::Execution(Tag::new("SET")))))
+    Some(Ok(Response::Execution(Tag::new("SET"))))
 }
 
 fn parameter_status_for_var(
@@ -264,14 +262,11 @@ async fn execute_set_statement(
         .map(|_| ())
 }
 
-async fn try_respond_show_statements<C>(
-    client: &C,
+async fn try_respond_show_statements(
+    client: &dyn HookClient,
     statement: &Statement,
     session_context: &SessionContext,
-) -> Option<PgWireResult<Response>>
-where
-    C: ClientInfo + ?Sized,
-{
+) -> Option<PgWireResult<Response>> {
     let Statement::ShowVariable { variable } = statement else {
         return None;
     };
@@ -393,7 +388,7 @@ mod tests {
         let session_context = SessionContext::new();
         let mut client = MockClient::new();
 
-        // Test setting timeout to 5000ms
+        // Test setting bytea_output to hex
         let statement = Parser::new(&PostgreSqlDialect {})
             .try_with_sql("set bytea_output = 'hex'")
             .unwrap()
@@ -409,7 +404,7 @@ mod tests {
         let bytea_output = client.metadata().get("bytea_output").unwrap();
         assert_eq!(bytea_output, "hex");
 
-        // Test SHOW statement_timeout
+        // Test SHOW bytea_output
         let statement = Parser::new(&PostgreSqlDialect {})
             .try_with_sql("show bytea_output")
             .unwrap()
@@ -427,7 +422,7 @@ mod tests {
         let session_context = SessionContext::new();
         let mut client = MockClient::new();
 
-        // Test setting timeout to 5000ms
+        // Test setting dateStyle
         let statement = Parser::new(&PostgreSqlDialect {})
             .try_with_sql("set dateStyle = 'ISO, DMY'")
             .unwrap()
@@ -443,7 +438,7 @@ mod tests {
         let bytea_output = client.metadata().get("datestyle").unwrap();
         assert_eq!(bytea_output, "ISO, DMY");
 
-        // Test SHOW statement_timeout
+        // Test SHOW dateStyle
         let statement = Parser::new(&PostgreSqlDialect {})
             .try_with_sql("show dateStyle")
             .unwrap()
@@ -486,7 +481,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_parameter_status_returned_for_all_set_vars() {
+    async fn test_parameter_status_sent_for_all_set_vars() {
+        use pgwire::messages::PgWireBackendMessage;
+
         let test_cases = vec![
             ("set bytea_output = 'escape'", "bytea_output", "escape"),
             (
@@ -520,20 +517,28 @@ mod tests {
 
             let result =
                 try_respond_set_statements(&mut client, &statement, &session_context).await;
-            let output = result.expect("Expected Some").expect("Expected Ok");
-            assert_eq!(
-                output.parameter_status.len(),
-                1,
-                "Expected 1 ParameterStatus for {sql}"
-            );
-            let (name, value) = &output.parameter_status[0];
-            assert_eq!(name, expected_key, "Wrong key for {sql}");
-            assert_eq!(value, expected_value, "Wrong value for {sql}");
+            assert!(result.is_some(), "Expected Some for {sql}");
+            assert!(result.unwrap().is_ok(), "Expected Ok for {sql}");
+
+            let ps_msgs: Vec<_> = client
+                .sent_messages()
+                .iter()
+                .filter_map(|m| match m {
+                    PgWireBackendMessage::ParameterStatus(ps) => Some(ps),
+                    _ => None,
+                })
+                .collect();
+
+            assert_eq!(ps_msgs.len(), 1, "Expected 1 ParameterStatus for {sql}");
+            assert_eq!(ps_msgs[0].name, expected_key, "Wrong key for {sql}");
+            assert_eq!(ps_msgs[0].value, expected_value, "Wrong value for {sql}");
         }
     }
 
     #[tokio::test]
     async fn test_no_parameter_status_for_statement_timeout() {
+        use pgwire::messages::PgWireBackendMessage;
+
         let session_context = SessionContext::new();
         let mut client = MockClient::new();
 
@@ -544,11 +549,15 @@ mod tests {
             .unwrap();
 
         let result = try_respond_set_statements(&mut client, &statement, &session_context).await;
-        let output = result.expect("Expected Some").expect("Expected Ok");
-        assert!(
-            output.parameter_status.is_empty(),
-            "statement_timeout should not produce ParameterStatus"
-        );
+        assert!(result.is_some());
+        assert!(result.unwrap().is_ok());
+
+        let has_ps = client
+            .sent_messages()
+            .iter()
+            .any(|m| matches!(m, PgWireBackendMessage::ParameterStatus(_)));
+
+        assert!(!has_ps, "statement_timeout should not send ParameterStatus");
     }
 
     #[tokio::test]

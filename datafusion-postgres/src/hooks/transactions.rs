@@ -10,7 +10,7 @@ use pgwire::api::ClientInfo;
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::response::TransactionStatus;
 
-use crate::hooks::HookOutput;
+use crate::hooks::HookClient;
 use crate::QueryHook;
 
 /// Hook for processing transaction related statements
@@ -27,14 +27,14 @@ impl QueryHook for TransactionStatementHook {
         &self,
         statement: &Statement,
         _session_context: &SessionContext,
-        client: &mut (dyn ClientInfo + Send + Sync),
-    ) -> Option<PgWireResult<HookOutput>> {
+        client: &mut dyn HookClient,
+    ) -> Option<PgWireResult<Response>> {
         let resp = try_respond_transaction_statements(client, statement)
             .await
             .transpose();
 
         if let Some(result) = resp {
-            return Some(result.map(HookOutput::new));
+            return Some(result);
         }
 
         // Check if we're in a failed transaction and block non-transaction
@@ -83,8 +83,8 @@ impl QueryHook for TransactionStatementHook {
         _logical_plan: &LogicalPlan,
         _params: &ParamValues,
         session_context: &SessionContext,
-        client: &mut (dyn ClientInfo + Send + Sync),
-    ) -> Option<PgWireResult<HookOutput>> {
+        client: &mut dyn HookClient,
+    ) -> Option<PgWireResult<Response>> {
         self.handle_simple_query(statement, session_context, client)
             .await
     }
