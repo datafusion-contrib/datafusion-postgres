@@ -1,20 +1,15 @@
 use std::{collections::HashMap, sync::Arc};
 
-use async_trait::async_trait;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_pg_catalog::pg_catalog::setup_pg_catalog;
 use futures::Sink;
 use pgwire::{
     api::{ClientInfo, ClientPortalStore, PgWireConnectionState, METADATA_USER},
-    error::PgWireResult,
     messages::{
-        response::TransactionStatus,
-        startup::{ParameterStatus, SecretKey},
-        PgWireBackendMessage, ProtocolVersion,
+        response::TransactionStatus, startup::SecretKey, PgWireBackendMessage, ProtocolVersion,
     },
 };
 
-use crate::hooks::HookClient;
 use crate::{auth::AuthManager, DfSessionService};
 
 pub fn setup_handlers() -> DfSessionService {
@@ -109,18 +104,6 @@ impl ClientPortalStore for MockClient {
     type PortalStore = HashMap<String, String>;
     fn portal_store(&self) -> &Self::PortalStore {
         &self.portal_store
-    }
-}
-
-#[async_trait]
-impl HookClient for MockClient {
-    async fn send_parameter_status(&mut self, name: &str, value: &str) -> PgWireResult<()> {
-        self.sent_messages
-            .push(PgWireBackendMessage::ParameterStatus(ParameterStatus::new(
-                name.to_string(),
-                value.to_string(),
-            )));
-        Ok(())
     }
 }
 

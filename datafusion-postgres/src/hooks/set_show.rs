@@ -12,6 +12,8 @@ use pgwire::api::auth::DefaultServerParameterProvider;
 use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse, Response, Tag};
 use pgwire::api::ClientInfo;
 use pgwire::error::{PgWireError, PgWireResult};
+use pgwire::messages::startup::ParameterStatus;
+use pgwire::messages::PgWireBackendMessage;
 use pgwire::types::format::FormatOptions;
 use postgres_types::Type;
 
@@ -185,7 +187,12 @@ async fn try_respond_set_statements(
                     let val_str = value.into_string().unwrap_or_else(|| "".to_string());
                     client.metadata_mut().insert(var.clone(), val_str);
                     if let Some((name, value)) = parameter_status_for_var(&var, &*client) {
-                        if let Err(e) = client.send_parameter_status(&name, &value).await {
+                        if let Err(e) = client
+                            .send_message(PgWireBackendMessage::ParameterStatus(
+                                ParameterStatus::new(name, value),
+                            ))
+                            .await
+                        {
                             return Some(Err(e));
                         }
                     }
@@ -208,7 +215,13 @@ async fn try_respond_set_statements(
                 .execution
                 .time_zone = Some(tz.to_string());
             let tz_value = client::get_timezone(client).unwrap_or("UTC").to_string();
-            if let Err(e) = client.send_parameter_status("TimeZone", &tz_value).await {
+            if let Err(e) = client
+                .send_message(PgWireBackendMessage::ParameterStatus(ParameterStatus::new(
+                    "TimeZone".to_string(),
+                    tz_value,
+                )))
+                .await
+            {
                 return Some(Err(e));
             }
             return Some(Ok(Response::Execution(Tag::new("SET"))));

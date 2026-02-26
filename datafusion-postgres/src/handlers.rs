@@ -22,7 +22,7 @@ use pgwire::types::format::FormatOptions;
 
 use crate::hooks::set_show::SetShowHook;
 use crate::hooks::transactions::TransactionStatementHook;
-use crate::hooks::{PgHookClient, QueryHook};
+use crate::hooks::QueryHook;
 use crate::{client, planner};
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
@@ -142,9 +142,8 @@ impl SimpleQueryHandler for DfSessionService {
 
             // Call query hooks with the parsed statement
             for hook in &self.query_hooks {
-                let mut hook_client = PgHookClient::new(client);
                 if let Some(result) = hook
-                    .handle_simple_query(&statement, &self.session_context, &mut hook_client)
+                    .handle_simple_query(&statement, &self.session_context, client)
                     .await
                 {
                     results.push(result?);
@@ -226,14 +225,13 @@ impl ExtendedQueryHandler for DfSessionService {
                     df::deserialize_parameters(portal, &ordered_param_types(&param_types))?;
 
                 for hook in &self.query_hooks {
-                    let mut hook_client = PgHookClient::new(client);
                     if let Some(result) = hook
                         .handle_extended_query(
                             statement,
                             plan,
                             &param_values,
                             &self.session_context,
-                            &mut hook_client,
+                            client,
                         )
                         .await
                     {
