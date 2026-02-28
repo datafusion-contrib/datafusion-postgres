@@ -462,6 +462,7 @@ impl RewriteRegclassCastToSubqueryVisitor {
             data_type,
             expr: inner_expr,
             format: _,
+            ..
         } = expr
         {
             if *kind == CastKind::DoubleColon {
@@ -480,6 +481,7 @@ impl RewriteRegclassCastToSubqueryVisitor {
             data_type,
             expr: _,
             format: _,
+            ..
         } = expr
         {
             if *kind == CastKind::DoubleColon {
@@ -496,6 +498,7 @@ impl RewriteRegclassCastToSubqueryVisitor {
             data_type,
             expr: inner_expr,
             format: _,
+            ..
         } = expr
         {
             if *kind == CastKind::DoubleColon {
@@ -506,6 +509,7 @@ impl RewriteRegclassCastToSubqueryVisitor {
                         data_type: inner_data_type,
                         expr: inner_inner_expr,
                         format: _,
+                        ..
                     } = inner_expr.as_ref()
                     {
                         if *inner_kind == CastKind::DoubleColon {
