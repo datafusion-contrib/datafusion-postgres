@@ -20,6 +20,7 @@ include = [
 [dependencies]
 async-trait = "0.1"
 datafusion = { workspace = true, features = ["sql"] }
+arrow-pg = { path = "../arrow-pg", version = "0.12.2", default-features = false, features = ["datafusion"] }
 futures.workspace = true
 log = "0.4"
 postgres-types.workspace = true
