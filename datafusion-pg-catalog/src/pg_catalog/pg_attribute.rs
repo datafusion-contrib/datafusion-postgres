@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    ArrayRef, BooleanArray, Int16Array, Int32Array, RecordBatch, StringArray, UInt32Array,
+    ArrayRef, BooleanArray, Int16Array, Int32Array, RecordBatch, StringArray,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::error::Result;
@@ -36,7 +36,7 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("attrelid", DataType::Int32, false), // OID of the relation this column belongs to
             Field::new("attname", DataType::Utf8, false),   // Column name
-            Field::new("atttypid", DataType::UInt32, false), // OID of the column data type
+            Field::new("atttypid", DataType::Int32, false), // OID of the column data type
             Field::new("attstattarget", DataType::Int32, false), // Statistics target
             Field::new("attlen", DataType::Int16, false),   // Length of the type
             Field::new("attnum", DataType::Int16, false), // Column number (positive for regular columns)
@@ -141,7 +141,7 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
 
                                     attrelids.push(table_oid as i32);
                                     attnames.push(field.name().clone());
-                                    atttypids.push(pg_type_oid);
+                                    atttypids.push(pg_type_oid as i32);
                                     attstattargets.push(-1); // Default statistics target
                                     attlens.push(type_len);
                                     attnums.push(attnum);
@@ -179,7 +179,7 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(Int32Array::from(attrelids)),
             Arc::new(StringArray::from(attnames)),
-            Arc::new(UInt32Array::from(atttypids)),
+            Arc::new(Int32Array::from(atttypids)),
             Arc::new(Int32Array::from(attstattargets)),
             Arc::new(Int16Array::from(attlens)),
             Arc::new(Int16Array::from(attnums)),
