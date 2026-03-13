@@ -1600,6 +1600,7 @@ dependencies = [
 name = "datafusion-pg-catalog"
 version = "0.15.1"
 dependencies = [
+ "arrow-pg",
  "async-trait",
  "criterion",
  "datafusion",
