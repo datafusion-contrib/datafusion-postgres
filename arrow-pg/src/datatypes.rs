@@ -24,7 +24,7 @@ pub fn into_pg_type(arrow_type: &DataType) -> PgWireResult<Type> {
     let datatype = match arrow_type {
         DataType::Null => Type::UNKNOWN,
         DataType::Boolean => Type::BOOL,
-        DataType::Int8 => Type::CHAR,
+        DataType::Int8 => Type::INT2,
         DataType::Int16 | DataType::UInt8 => Type::INT2,
         DataType::Int32 | DataType::UInt16 => Type::INT4,
         DataType::Int64 | DataType::UInt32 => Type::INT8,
@@ -53,7 +53,7 @@ pub fn into_pg_type(arrow_type: &DataType) -> PgWireResult<Type> {
         | DataType::ListView(field)
         | DataType::LargeListView(field) => match field.data_type() {
             DataType::Boolean => Type::BOOL_ARRAY,
-            DataType::Int8 => Type::CHAR_ARRAY,
+            DataType::Int8 => Type::INT2_ARRAY,
             DataType::Int16 | DataType::UInt8 => Type::INT2_ARRAY,
             DataType::Int32 | DataType::UInt16 => Type::INT4_ARRAY,
             DataType::Int64 | DataType::UInt32 => Type::INT8_ARRAY,
