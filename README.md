@@ -74,21 +74,11 @@ let server_options = ServerOptions::new()
 serve(session_context, &server_options).await
 ```
 
-### Security Features
-
-The server automatically includes:
-
-- User authentication (default postgres superuser)
-- Role-based access control with predefined roles:
-  - readonly: SELECT permissions
-  - readwrite: SELECT, INSERT, UPDATE, DELETE permissions
-  - dbadmin: Full administrative permissions
-- SSL/TLS encryption when certificates are provided
-- Query-level permission checking
-
 ### The CLI `datafusion-postgres-cli`
 
-Command-line tool to serve JSON/CSV/Arrow/Parquet/Avro files as PostgreSQL-compatible tables.
+Command-line tool to serve JSON/CSV/Arrow/Parquet/Avro files as
+PostgreSQL-compatible tables. This is like a `SimpleHTTPServer` for hosting data
+files, but with Postgres protocol and datafusion query engine.
 
 ```
 datafusion-postgres-cli 0.6.1
@@ -114,7 +104,7 @@ OPTIONS:
         --tls-key <tls-key>              Path to TLS private key file for SSL/TLS encryption
 ```
 
-#### 🔒 Security Options
+#### Security Options
 
 ```bash
 # Run with SSL/TLS encryption
@@ -127,7 +117,7 @@ datafusion-postgres-cli \
 datafusion-postgres-cli --csv data:sample.csv
 ```
 
-## 📋 Example Usage
+## Example Usage
 
 ### Basic Example
 
@@ -144,8 +134,6 @@ Listening on 127.0.0.1:5432 (unencrypted)
 ```
 
 ### Connect with psql
-
-> **🔐 Authentication**: The default setup allows connections without authentication for development. For secure deployments, use `DfAuthSource` with standard pgwire authentication handlers (cleartext, MD5, or SCRAM). See `auth.rs` for implementation examples.
 
 ```bash
 psql -h 127.0.0.1 -p 5432 -U postgres
@@ -179,7 +167,7 @@ postgres=> COMMIT;
 COMMIT
 ```
 
-### 🔐 Production Setup with SSL/TLS
+### SSL/TLS
 
 ```bash
 # Generate SSL certificates
@@ -198,6 +186,13 @@ Loaded delhiclimate.csv as table climate
 TLS enabled using cert: server.crt and key: server.key
 Listening on 127.0.0.1:5432 with TLS encryption
 ```
+
+## PostGIS/Geodatafusion
+
+With [geodatafusion](https://github.com/datafusion-contrib/geodatafusion), we
+can also simulate PostGIS interface (UDF and datatypes) with
+datafusion-postgres. To enable this feature, turn on the feature flag `postgis`
+for `datafusion-postgres`.
 
 ## Community
 
