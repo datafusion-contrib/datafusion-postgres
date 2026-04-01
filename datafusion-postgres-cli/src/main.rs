@@ -3,7 +3,7 @@ use std::fs;
 use std::sync::Arc;
 
 use datafusion::execution::options::{
-    ArrowReadOptions, AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
+    ArrowReadOptions, AvroReadOptions, CsvReadOptions, JsonReadOptions, ParquetReadOptions,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_postgres::auth::AuthManager;
@@ -139,7 +139,7 @@ async fn setup_session_context(
     // Register JSON tables
     for (table_name, table_path) in opts.json_tables.iter().map(|s| parse_table_def(s.as_ref())) {
         session_context
-            .register_json(table_name, table_path, NdJsonReadOptions::default())
+            .register_json(table_name, table_path, JsonReadOptions::default())
             .await
             .map_err(|e| format!("Failed to register JSON table '{table_name}': {e}"))?;
         info!("Loaded {table_path} as table {table_name}");
