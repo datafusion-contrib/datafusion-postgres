@@ -408,7 +408,7 @@ impl QueryParser for Parser {
             let schema = plan.schema();
             let fields = arrow_schema_to_pg_fields(
                 schema.as_arrow(),
-                column_format.unwrap_or(&Format::UnifiedBinary),
+                column_format.unwrap_or(&Format::UnifiedText),
                 None,
             )?;
 
