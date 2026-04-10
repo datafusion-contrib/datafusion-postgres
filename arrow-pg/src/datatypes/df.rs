@@ -13,7 +13,7 @@ use pg_interval::Interval;
 use pgwire::api::portal::{Format, Portal};
 use pgwire::api::results::QueryResponse;
 use pgwire::api::Type;
-use pgwire::error::{PgWireError, PgWireResult};
+use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::messages::data::DataRow;
 use pgwire::types::format::FormatOptions;
 use rust_decimal::prelude::ToPrimitive;
@@ -49,6 +49,166 @@ pub async fn encode_dataframe(
         })
         .flatten();
     Ok(QueryResponse::new(fields, pg_row_stream))
+}
+
+fn invalid_parameter_error(msg: impl Into<String>) -> PgWireError {
+    PgWireError::UserError(Box::new(ErrorInfo::new(
+        "ERROR".to_owned(),
+        "22023".to_owned(),
+        msg.into(),
+    )))
+}
+
+fn coerce_int_value(value: Option<i64>, target: &DataType) -> PgWireResult<ScalarValue> {
+    match target {
+        DataType::Int8 => Ok(ScalarValue::Int8(value.map(|n| n as i8))),
+        DataType::Int16 => Ok(ScalarValue::Int16(value.map(|n| n as i16))),
+        DataType::Int32 => Ok(ScalarValue::Int32(value.map(|n| n as i32))),
+        DataType::Int64 => Ok(ScalarValue::Int64(value)),
+        DataType::UInt8 => Ok(ScalarValue::UInt8(value.map(|n| n as u8))),
+        DataType::UInt16 => Ok(ScalarValue::UInt16(value.map(|n| n as u16))),
+        DataType::UInt32 => Ok(ScalarValue::UInt32(value.map(|n| n as u32))),
+        DataType::UInt64 => Ok(ScalarValue::UInt64(value.map(|n| n as u64))),
+        DataType::Float32 => Ok(ScalarValue::Float32(value.map(|n| n as f32))),
+        DataType::Float64 => Ok(ScalarValue::Float64(value.map(|n| n as f64))),
+        DataType::Timestamp(TimeUnit::Second, _) => Ok(ScalarValue::TimestampSecond(value, None)),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => Ok(ScalarValue::TimestampMillisecond(
+            value.map(|n| n * 1000),
+            None,
+        )),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Ok(ScalarValue::TimestampMicrosecond(
+            value.map(|n| n * 1_000_000),
+            None,
+        )),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => Ok(ScalarValue::TimestampNanosecond(
+            value.map(|n| n * 1_000_000_000),
+            None,
+        )),
+        _ => Err(invalid_parameter_error(format!(
+            "Cannot coerce integer value to {:?}",
+            target
+        ))),
+    }
+}
+
+fn coerce_float_value(value: Option<f64>, target: &DataType) -> PgWireResult<ScalarValue> {
+    match target {
+        DataType::Int8 => Ok(ScalarValue::Int8(value.map(|n| n as i8))),
+        DataType::Int16 => Ok(ScalarValue::Int16(value.map(|n| n as i16))),
+        DataType::Int32 => Ok(ScalarValue::Int32(value.map(|n| n as i32))),
+        DataType::Int64 => Ok(ScalarValue::Int64(value.map(|n| n as i64))),
+        DataType::UInt8 => Ok(ScalarValue::UInt8(value.map(|n| n as u8))),
+        DataType::UInt16 => Ok(ScalarValue::UInt16(value.map(|n| n as u16))),
+        DataType::UInt32 => Ok(ScalarValue::UInt32(value.map(|n| n as u32))),
+        DataType::UInt64 => Ok(ScalarValue::UInt64(value.map(|n| n as u64))),
+        DataType::Float32 => Ok(ScalarValue::Float32(value.map(|n| n as f32))),
+        DataType::Float64 => Ok(ScalarValue::Float64(value)),
+        _ => Err(invalid_parameter_error(format!(
+            "Cannot coerce float value to {:?}",
+            target
+        ))),
+    }
+}
+
+fn coerce_timestamp_value(
+    value: Option<NaiveDateTime>,
+    target: &DataType,
+) -> PgWireResult<ScalarValue> {
+    match target {
+        DataType::Timestamp(TimeUnit::Second, _) => Ok(ScalarValue::TimestampSecond(
+            value.map(|t| t.and_utc().timestamp()),
+            None,
+        )),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => Ok(ScalarValue::TimestampMillisecond(
+            value.map(|t| t.and_utc().timestamp_millis()),
+            None,
+        )),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Ok(ScalarValue::TimestampMicrosecond(
+            value.map(|t| t.and_utc().timestamp_micros()),
+            None,
+        )),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => Ok(ScalarValue::TimestampNanosecond(
+            value.and_then(|t| t.and_utc().timestamp_nanos_opt()),
+            None,
+        )),
+        _ => Err(invalid_parameter_error(format!(
+            "Cannot coerce TIMESTAMP to {:?}",
+            target
+        ))),
+    }
+}
+
+fn coerce_timestamptz_value(
+    value: Option<DateTime<FixedOffset>>,
+    target: &DataType,
+) -> PgWireResult<ScalarValue> {
+    match target {
+        DataType::Timestamp(unit, tz) => {
+            let tz = tz.clone();
+            match unit {
+                TimeUnit::Second => Ok(ScalarValue::TimestampSecond(
+                    value.map(|t| t.timestamp()),
+                    tz,
+                )),
+                TimeUnit::Millisecond => Ok(ScalarValue::TimestampMillisecond(
+                    value.map(|t| t.timestamp_millis()),
+                    tz,
+                )),
+                TimeUnit::Microsecond => Ok(ScalarValue::TimestampMicrosecond(
+                    value.map(|t| t.timestamp_micros()),
+                    tz,
+                )),
+                TimeUnit::Nanosecond => Ok(ScalarValue::TimestampNanosecond(
+                    value.and_then(|t| t.timestamp_nanos_opt()),
+                    tz,
+                )),
+            }
+        }
+        _ => Err(invalid_parameter_error(format!(
+            "Cannot coerce TIMESTAMPTZ to {:?}",
+            target
+        ))),
+    }
+}
+
+fn coerce_interval_value(value: Option<Interval>, target: &DataType) -> PgWireResult<ScalarValue> {
+    match target {
+        DataType::Interval(IntervalUnit::YearMonth) => Ok(match value {
+            Some(i) => {
+                if i.days != 0 || i.microseconds != 0 {
+                    return Err(invalid_parameter_error(
+                        "Cannot coerce INTERVAL with days or time components to YearMonth interval",
+                    ));
+                }
+                ScalarValue::IntervalYearMonth(Some(i.months))
+            }
+            None => ScalarValue::IntervalYearMonth(None),
+        }),
+        DataType::Interval(IntervalUnit::DayTime) => Ok(match value {
+            Some(i) => {
+                if i.months != 0 {
+                    return Err(invalid_parameter_error(
+                        "Cannot coerce INTERVAL with months component to DayTime interval",
+                    ));
+                }
+                if i.microseconds % 1000 != 0 {
+                    return Err(invalid_parameter_error(
+                        "Cannot coerce INTERVAL with sub-millisecond precision to DayTime interval",
+                    ));
+                }
+                ScalarValue::new_interval_dt(i.days, (i.microseconds / 1000) as i32)
+            }
+            None => ScalarValue::IntervalDayTime(None),
+        }),
+        DataType::Interval(IntervalUnit::MonthDayNano) | DataType::Duration(_) => Ok(match value {
+            Some(i) => ScalarValue::new_interval_mdn(i.months, i.days, i.microseconds * 1_000i64),
+            None => ScalarValue::IntervalMonthDayNano(None),
+        }),
+        _ => Err(invalid_parameter_error(format!(
+            "Cannot coerce INTERVAL to {:?}",
+            target
+        ))),
+    }
 }
 
 /// Deserialize client provided parameter data.
@@ -90,9 +250,10 @@ where
                 .and_then(|f| f.clone()),
             inferenced_type,
         )?;
+        // enumerate all supported parameter types and deserialize the
+        // type to ScalarValue, with data coercion when server-inferred
+        // types are available
         match pg_type {
-            // enumerate all supported parameter types and deserialize the
-            // type to ScalarValue
             Type::BOOL => {
                 let value = portal.parameter::<bool>(i, &pg_type)?;
                 deserialized_params.push(ScalarValue::Boolean(value));
@@ -103,19 +264,49 @@ where
             }
             Type::INT2 => {
                 let value = portal.parameter::<i16>(i, &pg_type)?;
-                deserialized_params.push(ScalarValue::Int16(value));
+                match inferenced_type {
+                    Some(target) => {
+                        deserialized_params
+                            .push(coerce_int_value(value.map(|n| n as i64), target)?);
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::Int16(value));
+                    }
+                }
             }
             Type::INT4 => {
                 let value = portal.parameter::<i32>(i, &pg_type)?;
-                deserialized_params.push(ScalarValue::Int32(value));
+                match inferenced_type {
+                    Some(target) => {
+                        deserialized_params
+                            .push(coerce_int_value(value.map(|n| n as i64), target)?);
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::Int32(value));
+                    }
+                }
             }
             Type::INT8 => {
                 let value = portal.parameter::<i64>(i, &pg_type)?;
-                deserialized_params.push(ScalarValue::Int64(value));
+                match inferenced_type {
+                    Some(target) => {
+                        deserialized_params.push(coerce_int_value(value, target)?);
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::Int64(value));
+                    }
+                }
             }
             Type::TEXT | Type::VARCHAR => {
                 let value = portal.parameter::<String>(i, &pg_type)?;
-                deserialized_params.push(ScalarValue::Utf8(value));
+                match inferenced_type {
+                    Some(DataType::LargeUtf8) => {
+                        deserialized_params.push(ScalarValue::LargeUtf8(value));
+                    }
+                    _ => {
+                        deserialized_params.push(ScalarValue::Utf8(value));
+                    }
+                }
             }
             Type::BYTEA => {
                 let value = portal.parameter::<Vec<u8>>(i, &pg_type)?;
@@ -124,39 +315,113 @@ where
 
             Type::FLOAT4 => {
                 let value = portal.parameter::<f32>(i, &pg_type)?;
-                deserialized_params.push(ScalarValue::Float32(value));
+                match inferenced_type {
+                    Some(target) => {
+                        deserialized_params
+                            .push(coerce_float_value(value.map(|n| n as f64), target)?);
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::Float32(value));
+                    }
+                }
             }
             Type::FLOAT8 => {
                 let value = portal.parameter::<f64>(i, &pg_type)?;
-                deserialized_params.push(ScalarValue::Float64(value));
+                match inferenced_type {
+                    Some(target) => {
+                        deserialized_params.push(coerce_float_value(value, target)?);
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::Float64(value));
+                    }
+                }
             }
             Type::NUMERIC => {
-                let value = match portal.parameter::<Decimal>(i, &pg_type)? {
-                    None => ScalarValue::Decimal128(None, 0, 0),
-                    Some(value) => {
-                        let precision = match value.mantissa() {
-                            0 => 1,
-                            m => (m.abs() as f64).log10().floor() as u8 + 1,
-                        };
-                        let scale = value.scale() as i8;
-                        ScalarValue::Decimal128(value.to_i128(), precision, scale)
+                let value = portal.parameter::<Decimal>(i, &pg_type)?;
+                match inferenced_type {
+                    Some(DataType::Decimal128(p, s)) => {
+                        deserialized_params.push(ScalarValue::Decimal128(
+                            value.map(|mut n| {
+                                n.rescale(*s as u32);
+                                n.mantissa()
+                            }),
+                            *p,
+                            *s,
+                        ));
                     }
-                };
-                deserialized_params.push(value);
+                    Some(DataType::UInt64) => {
+                        deserialized_params
+                            .push(ScalarValue::UInt64(value.and_then(|n| n.to_u64())));
+                    }
+                    Some(DataType::UInt32) => {
+                        deserialized_params
+                            .push(ScalarValue::UInt32(value.and_then(|n| n.to_u32())));
+                    }
+                    Some(DataType::Int64) => {
+                        deserialized_params
+                            .push(ScalarValue::Int64(value.and_then(|n| n.to_i64())));
+                    }
+                    Some(DataType::Int32) => {
+                        deserialized_params
+                            .push(ScalarValue::Int32(value.and_then(|n| n.to_i32())));
+                    }
+                    Some(DataType::Float64) => {
+                        deserialized_params
+                            .push(ScalarValue::Float64(value.and_then(|n| n.to_f64())));
+                    }
+                    Some(DataType::Float32) => {
+                        deserialized_params
+                            .push(ScalarValue::Float32(value.and_then(|n| n.to_f32())));
+                    }
+                    Some(target) => {
+                        return Err(invalid_parameter_error(format!(
+                            "Cannot coerce NUMERIC to {:?}",
+                            target
+                        )));
+                    }
+                    None => {
+                        let scalar = match value {
+                            None => ScalarValue::Decimal128(None, 0, 0),
+                            Some(v) => {
+                                let precision = match v.mantissa() {
+                                    0 => 1,
+                                    m => (m.abs() as f64).log10().floor() as u8 + 1,
+                                };
+                                let scale = v.scale() as i8;
+                                ScalarValue::Decimal128(Some(v.mantissa()), precision, scale)
+                            }
+                        };
+                        deserialized_params.push(scalar);
+                    }
+                }
             }
             Type::TIMESTAMP => {
                 let value = portal.parameter::<NaiveDateTime>(i, &pg_type)?;
-                deserialized_params.push(ScalarValue::TimestampMicrosecond(
-                    value.map(|t| t.and_utc().timestamp_micros()),
-                    None,
-                ));
+                match inferenced_type {
+                    Some(target) => {
+                        deserialized_params.push(coerce_timestamp_value(value, target)?);
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::TimestampMicrosecond(
+                            value.map(|t| t.and_utc().timestamp_micros()),
+                            None,
+                        ));
+                    }
+                }
             }
             Type::TIMESTAMPTZ => {
                 let value = portal.parameter::<DateTime<FixedOffset>>(i, &pg_type)?;
-                deserialized_params.push(ScalarValue::TimestampMicrosecond(
-                    value.map(|t| t.timestamp_micros()),
-                    value.map(|t| t.offset().to_string().into()),
-                ));
+                match inferenced_type {
+                    Some(target) => {
+                        deserialized_params.push(coerce_timestamptz_value(value, target)?);
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::TimestampMicrosecond(
+                            value.map(|t| t.timestamp_micros()),
+                            None,
+                        ));
+                    }
+                }
             }
             Type::DATE => {
                 let value = portal.parameter::<NaiveDate>(i, &pg_type)?;
@@ -183,15 +448,7 @@ where
                     Some(DataType::Time32(TimeUnit::Second)) => {
                         ScalarValue::Time32Second(ns.map(|ns| (ns / 1_000_000_000) as _))
                     }
-                    _ => {
-                        return Err(PgWireError::ApiError(
-                            format!(
-                                "Unable to deserialise time parameter type {:?} to type {:?}",
-                                value, inferenced_type
-                            )
-                            .into(),
-                        ))
-                    }
+                    _ => ScalarValue::Time64Nanosecond(ns),
                 };
 
                 deserialized_params.push(scalar_value);
@@ -208,106 +465,309 @@ where
             }
             Type::INTERVAL => {
                 let value = portal.parameter::<Interval>(i, &pg_type)?;
-                let scalar_value = if let Some(i) = value {
-                    ScalarValue::new_interval_mdn(i.months, i.days, i.microseconds * 1_000i64)
-                } else {
-                    ScalarValue::IntervalMonthDayNano(None)
-                };
+                match inferenced_type {
+                    Some(target) => {
+                        deserialized_params.push(coerce_interval_value(value, target)?);
+                    }
+                    None => {
+                        let scalar_value = if let Some(i) = value {
+                            ScalarValue::new_interval_mdn(
+                                i.months,
+                                i.days,
+                                i.microseconds * 1_000i64,
+                            )
+                        } else {
+                            ScalarValue::IntervalMonthDayNano(None)
+                        };
 
-                deserialized_params.push(scalar_value);
+                        deserialized_params.push(scalar_value);
+                    }
+                }
             }
             // Array types support
             Type::BOOL_ARRAY => {
                 let value = portal.parameter::<Vec<Option<bool>>>(i, &pg_type)?;
-                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
-                    v.into_iter().map(ScalarValue::Boolean).collect()
-                });
-                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
-                    &scalar_values,
-                    &DataType::Boolean,
-                )));
+                match value {
+                    Some(values) => {
+                        let scalar_values: Vec<ScalarValue> =
+                            values.into_iter().map(ScalarValue::Boolean).collect();
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(&scalar_values, &DataType::Boolean),
+                        ));
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(
+                            DataType::Boolean,
+                            true,
+                            1,
+                        ));
+                    }
+                }
             }
             Type::INT2_ARRAY => {
                 let value = portal.parameter::<Vec<Option<i16>>>(i, &pg_type)?;
-                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
-                    v.into_iter().map(ScalarValue::Int16).collect()
-                });
-                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
-                    &scalar_values,
-                    &DataType::Int16,
-                )));
+                match value {
+                    Some(values) => {
+                        let scalar_values: Vec<ScalarValue> =
+                            values.into_iter().map(ScalarValue::Int16).collect();
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(&scalar_values, &DataType::Int16),
+                        ));
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(
+                            DataType::Int16,
+                            true,
+                            1,
+                        ));
+                    }
+                }
             }
             Type::INT4_ARRAY => {
                 let value = portal.parameter::<Vec<Option<i32>>>(i, &pg_type)?;
-                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
-                    v.into_iter().map(ScalarValue::Int32).collect()
-                });
-                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
-                    &scalar_values,
-                    &DataType::Int32,
-                )));
+                match value {
+                    Some(values) => {
+                        let scalar_values: Vec<ScalarValue> =
+                            values.into_iter().map(ScalarValue::Int32).collect();
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(&scalar_values, &DataType::Int32),
+                        ));
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(
+                            DataType::Int32,
+                            true,
+                            1,
+                        ));
+                    }
+                }
             }
             Type::INT8_ARRAY => {
                 let value = portal.parameter::<Vec<Option<i64>>>(i, &pg_type)?;
-                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
-                    v.into_iter().map(ScalarValue::Int64).collect()
-                });
-                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
-                    &scalar_values,
-                    &DataType::Int64,
-                )));
+                match value {
+                    Some(values) => {
+                        let scalar_values: Vec<ScalarValue> =
+                            values.into_iter().map(ScalarValue::Int64).collect();
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(&scalar_values, &DataType::Int64),
+                        ));
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(
+                            DataType::Int64,
+                            true,
+                            1,
+                        ));
+                    }
+                }
             }
             Type::FLOAT4_ARRAY => {
                 let value = portal.parameter::<Vec<Option<f32>>>(i, &pg_type)?;
-                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
-                    v.into_iter().map(ScalarValue::Float32).collect()
-                });
-                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
-                    &scalar_values,
-                    &DataType::Float32,
-                )));
+                match value {
+                    Some(values) => {
+                        let scalar_values: Vec<ScalarValue> =
+                            values.into_iter().map(ScalarValue::Float32).collect();
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(&scalar_values, &DataType::Float32),
+                        ));
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(
+                            DataType::Float32,
+                            true,
+                            1,
+                        ));
+                    }
+                }
             }
             Type::FLOAT8_ARRAY => {
                 let value = portal.parameter::<Vec<Option<f64>>>(i, &pg_type)?;
-                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
-                    v.into_iter().map(ScalarValue::Float64).collect()
-                });
-                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
-                    &scalar_values,
-                    &DataType::Float64,
-                )));
+                match value {
+                    Some(values) => {
+                        let scalar_values: Vec<ScalarValue> =
+                            values.into_iter().map(ScalarValue::Float64).collect();
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(&scalar_values, &DataType::Float64),
+                        ));
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(
+                            DataType::Float64,
+                            true,
+                            1,
+                        ));
+                    }
+                }
             }
             Type::TEXT_ARRAY | Type::VARCHAR_ARRAY => {
                 let value = portal.parameter::<Vec<Option<String>>>(i, &pg_type)?;
-                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
-                    v.into_iter().map(ScalarValue::Utf8).collect()
-                });
-                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
-                    &scalar_values,
-                    &DataType::Utf8,
-                )));
+                match value {
+                    Some(values) => {
+                        let scalar_values: Vec<ScalarValue> =
+                            values.into_iter().map(ScalarValue::Utf8).collect();
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(&scalar_values, &DataType::Utf8),
+                        ));
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(
+                            DataType::Utf8,
+                            true,
+                            1,
+                        ));
+                    }
+                }
             }
             Type::INTERVAL_ARRAY => {
                 let value = portal.parameter::<Vec<Option<Interval>>>(i, &pg_type)?;
-                let scalar_values: Vec<ScalarValue> = value.map_or(Vec::new(), |v| {
-                    v.into_iter()
-                        .map(|i| {
-                            if let Some(i) = i {
-                                ScalarValue::new_interval_mdn(
-                                    i.months,
-                                    i.days,
-                                    i.microseconds * 1_000i64,
-                                )
-                            } else {
-                                ScalarValue::IntervalMonthDayNano(None)
+                match value {
+                    Some(values) => {
+                        let scalar_values: Vec<ScalarValue> = values
+                            .into_iter()
+                            .map(|i| {
+                                if let Some(i) = i {
+                                    ScalarValue::new_interval_mdn(
+                                        i.months,
+                                        i.days,
+                                        i.microseconds * 1_000i64,
+                                    )
+                                } else {
+                                    ScalarValue::IntervalMonthDayNano(None)
+                                }
+                            })
+                            .collect();
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(
+                                &scalar_values,
+                                &DataType::Interval(IntervalUnit::MonthDayNano),
+                            ),
+                        ));
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(
+                            DataType::Interval(IntervalUnit::MonthDayNano),
+                            true,
+                            1,
+                        ));
+                    }
+                }
+            }
+            Type::NUMERIC_ARRAY => {
+                let value = portal.parameter::<Vec<Option<Decimal>>>(i, &pg_type)?;
+                match value {
+                    Some(values) => match inferenced_type {
+                        Some(DataType::List(field)) => match field.data_type() {
+                            DataType::Decimal128(p, s) => {
+                                let scalar_values: Vec<ScalarValue> = values
+                                    .into_iter()
+                                    .map(|n| {
+                                        ScalarValue::Decimal128(
+                                            n.map(|mut n| {
+                                                n.rescale(*s as u32);
+                                                n.mantissa()
+                                            }),
+                                            *p,
+                                            *s,
+                                        )
+                                    })
+                                    .collect();
+                                deserialized_params.push(ScalarValue::List(
+                                    ScalarValue::new_list_nullable(
+                                        &scalar_values,
+                                        &DataType::Decimal128(*p, *s),
+                                    ),
+                                ));
                             }
-                        })
-                        .collect()
-                });
-                deserialized_params.push(ScalarValue::List(ScalarValue::new_list_nullable(
-                    &scalar_values,
-                    &DataType::Interval(IntervalUnit::MonthDayNano),
-                )));
+                            DataType::UInt64 => {
+                                let scalar_values: Vec<ScalarValue> = values
+                                    .into_iter()
+                                    .map(|n| ScalarValue::UInt64(n.and_then(|n| n.to_u64())))
+                                    .collect();
+                                deserialized_params.push(ScalarValue::List(
+                                    ScalarValue::new_list_nullable(
+                                        &scalar_values,
+                                        &DataType::UInt64,
+                                    ),
+                                ));
+                            }
+                            DataType::Float64 => {
+                                let scalar_values: Vec<ScalarValue> = values
+                                    .into_iter()
+                                    .map(|n| ScalarValue::Float64(n.and_then(|n| n.to_f64())))
+                                    .collect();
+                                deserialized_params.push(ScalarValue::List(
+                                    ScalarValue::new_list_nullable(
+                                        &scalar_values,
+                                        &DataType::Float64,
+                                    ),
+                                ));
+                            }
+                            DataType::Float32 => {
+                                let scalar_values: Vec<ScalarValue> = values
+                                    .into_iter()
+                                    .map(|n| ScalarValue::Float32(n.and_then(|n| n.to_f32())))
+                                    .collect();
+                                deserialized_params.push(ScalarValue::List(
+                                    ScalarValue::new_list_nullable(
+                                        &scalar_values,
+                                        &DataType::Float32,
+                                    ),
+                                ));
+                            }
+                            other => {
+                                let scalar_values: Vec<ScalarValue> = values
+                                    .into_iter()
+                                    .map(|n| {
+                                        ScalarValue::Decimal128(
+                                            n.map(|mut n| {
+                                                n.rescale(0);
+                                                n.mantissa()
+                                            }),
+                                            38,
+                                            0,
+                                        )
+                                    })
+                                    .collect();
+                                deserialized_params.push(ScalarValue::List(
+                                    ScalarValue::new_list_nullable(&scalar_values, other),
+                                ));
+                            }
+                        },
+                        _ => {
+                            let scalar_values: Vec<ScalarValue> = values
+                                .into_iter()
+                                .map(|n| match n {
+                                    None => ScalarValue::Decimal128(None, 0, 0),
+                                    Some(v) => {
+                                        let precision = match v.mantissa() {
+                                            0 => 1,
+                                            m => (m.abs() as f64).log10().floor() as u8 + 1,
+                                        };
+                                        let scale = v.scale() as i8;
+                                        ScalarValue::Decimal128(
+                                            Some(v.mantissa()),
+                                            precision,
+                                            scale,
+                                        )
+                                    }
+                                })
+                                .collect();
+                            deserialized_params.push(ScalarValue::List(
+                                ScalarValue::new_list_nullable(
+                                    &scalar_values,
+                                    &DataType::Decimal128(38, 0),
+                                ),
+                            ));
+                        }
+                    },
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(
+                            DataType::Decimal128(38, 0),
+                            true,
+                            1,
+                        ));
+                    }
+                }
             }
             // Advanced types
             Type::MONEY => {
