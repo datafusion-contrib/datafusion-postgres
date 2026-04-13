@@ -174,9 +174,7 @@ fn coerce_float_value(value: Option<f64>, target: &DataType) -> PgWireResult<Sca
                 .transpose()?,
         )),
         DataType::Int64 => Ok(ScalarValue::Int64(
-            value
-                .map(|n| checked_float_to_int(n, target))
-                .transpose()?,
+            value.map(|n| checked_float_to_int(n, target)).transpose()?,
         )),
         DataType::UInt8 => Ok(ScalarValue::UInt8(
             value
@@ -1483,7 +1481,11 @@ mod tests {
     fn test_interval_coerce_to_year_month_with_days_error() {
         let interval = Interval::new(3, 1, 0);
         let portal = make_portal(&interval, Type::INTERVAL);
-        assert!(deserialize_parameters(&portal, &[Some(&DataType::Interval(IntervalUnit::YearMonth))]).is_err());
+        assert!(deserialize_parameters(
+            &portal,
+            &[Some(&DataType::Interval(IntervalUnit::YearMonth))]
+        )
+        .is_err());
     }
 
     #[test]
@@ -1500,14 +1502,22 @@ mod tests {
     fn test_interval_coerce_to_day_time_with_months_error() {
         let interval = Interval::new(1, 5, 3_000_000);
         let portal = make_portal(&interval, Type::INTERVAL);
-        assert!(deserialize_parameters(&portal, &[Some(&DataType::Interval(IntervalUnit::DayTime))]).is_err());
+        assert!(deserialize_parameters(
+            &portal,
+            &[Some(&DataType::Interval(IntervalUnit::DayTime))]
+        )
+        .is_err());
     }
 
     #[test]
     fn test_interval_coerce_to_day_time_sub_millis_error() {
         let interval = Interval::new(0, 5, 500);
         let portal = make_portal(&interval, Type::INTERVAL);
-        assert!(deserialize_parameters(&portal, &[Some(&DataType::Interval(IntervalUnit::DayTime))]).is_err());
+        assert!(deserialize_parameters(
+            &portal,
+            &[Some(&DataType::Interval(IntervalUnit::DayTime))]
+        )
+        .is_err());
     }
 
     #[test]
