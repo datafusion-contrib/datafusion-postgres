@@ -66,50 +66,36 @@ fn out_of_range_error(source: &str, value: i64, target: &DataType) -> PgWireErro
     ))
 }
 
-fn checked_int_cast<T>(value: i64, source: &str, target: &DataType) -> PgWireResult<T>
+fn checked_int_cast<T>(value: i64, target: &DataType) -> PgWireResult<T>
 where
     T: TryFrom<i64>,
 {
-    T::try_from(value).map_err(|_| out_of_range_error(source, value, target))
+    T::try_from(value).map_err(|_| out_of_range_error("INT", value, target))
 }
 
 fn coerce_int_value(value: Option<i64>, target: &DataType) -> PgWireResult<ScalarValue> {
     match target {
         DataType::Int8 => Ok(ScalarValue::Int8(
-            value
-                .map(|n| checked_int_cast::<i8>(n, "INT", target))
-                .transpose()?,
+            value.map(|n| checked_int_cast(n, target)).transpose()?,
         )),
         DataType::Int16 => Ok(ScalarValue::Int16(
-            value
-                .map(|n| checked_int_cast::<i16>(n, "INT", target))
-                .transpose()?,
+            value.map(|n| checked_int_cast(n, target)).transpose()?,
         )),
         DataType::Int32 => Ok(ScalarValue::Int32(
-            value
-                .map(|n| checked_int_cast::<i32>(n, "INT", target))
-                .transpose()?,
+            value.map(|n| checked_int_cast(n, target)).transpose()?,
         )),
         DataType::Int64 => Ok(ScalarValue::Int64(value)),
         DataType::UInt8 => Ok(ScalarValue::UInt8(
-            value
-                .map(|n| checked_int_cast::<u8>(n, "INT", target))
-                .transpose()?,
+            value.map(|n| checked_int_cast(n, target)).transpose()?,
         )),
         DataType::UInt16 => Ok(ScalarValue::UInt16(
-            value
-                .map(|n| checked_int_cast::<u16>(n, "INT", target))
-                .transpose()?,
+            value.map(|n| checked_int_cast(n, target)).transpose()?,
         )),
         DataType::UInt32 => Ok(ScalarValue::UInt32(
-            value
-                .map(|n| checked_int_cast::<u32>(n, "INT", target))
-                .transpose()?,
+            value.map(|n| checked_int_cast(n, target)).transpose()?,
         )),
         DataType::UInt64 => Ok(ScalarValue::UInt64(
-            value
-                .map(|n| checked_int_cast::<u64>(n, "INT", target))
-                .transpose()?,
+            value.map(|n| checked_int_cast(n, target)).transpose()?,
         )),
         DataType::Float32 => Ok(ScalarValue::Float32(value.map(|n| n as f32))),
         DataType::Float64 => Ok(ScalarValue::Float64(value.map(|n| n as f64))),
@@ -133,7 +119,10 @@ fn coerce_int_value(value: Option<i64>, target: &DataType) -> PgWireResult<Scala
     }
 }
 
-fn checked_float_to_int(value: f64, target: &DataType) -> PgWireResult<i64> {
+fn checked_float_cast<T>(value: f64, target: &DataType) -> PgWireResult<T>
+where
+    T: TryFrom<i64>,
+{
     if !value.is_finite() {
         return Err(invalid_parameter_error(format!(
             "FLOAT value {} is out of range for {:?}",
@@ -144,69 +133,34 @@ fn checked_float_to_int(value: f64, target: &DataType) -> PgWireResult<i64> {
     if (n as f64 - value).abs() > f64::EPSILON {
         return Err(out_of_range_error("FLOAT", n, target));
     }
-    Ok(n)
+    T::try_from(n).map_err(|_| out_of_range_error("FLOAT", n, target))
 }
 
 fn coerce_float_value(value: Option<f64>, target: &DataType) -> PgWireResult<ScalarValue> {
     match target {
         DataType::Int8 => Ok(ScalarValue::Int8(
-            value
-                .map(|n| {
-                    checked_float_to_int(n, target)
-                        .and_then(|v| checked_int_cast::<i8>(v, "FLOAT", target))
-                })
-                .transpose()?,
+            value.map(|n| checked_float_cast(n, target)).transpose()?,
         )),
         DataType::Int16 => Ok(ScalarValue::Int16(
-            value
-                .map(|n| {
-                    checked_float_to_int(n, target)
-                        .and_then(|v| checked_int_cast::<i16>(v, "FLOAT", target))
-                })
-                .transpose()?,
+            value.map(|n| checked_float_cast(n, target)).transpose()?,
         )),
         DataType::Int32 => Ok(ScalarValue::Int32(
-            value
-                .map(|n| {
-                    checked_float_to_int(n, target)
-                        .and_then(|v| checked_int_cast::<i32>(v, "FLOAT", target))
-                })
-                .transpose()?,
+            value.map(|n| checked_float_cast(n, target)).transpose()?,
         )),
         DataType::Int64 => Ok(ScalarValue::Int64(
-            value.map(|n| checked_float_to_int(n, target)).transpose()?,
+            value.map(|n| checked_float_cast(n, target)).transpose()?,
         )),
         DataType::UInt8 => Ok(ScalarValue::UInt8(
-            value
-                .map(|n| {
-                    checked_float_to_int(n, target)
-                        .and_then(|v| checked_int_cast::<u8>(v, "FLOAT", target))
-                })
-                .transpose()?,
+            value.map(|n| checked_float_cast(n, target)).transpose()?,
         )),
         DataType::UInt16 => Ok(ScalarValue::UInt16(
-            value
-                .map(|n| {
-                    checked_float_to_int(n, target)
-                        .and_then(|v| checked_int_cast::<u16>(v, "FLOAT", target))
-                })
-                .transpose()?,
+            value.map(|n| checked_float_cast(n, target)).transpose()?,
         )),
         DataType::UInt32 => Ok(ScalarValue::UInt32(
-            value
-                .map(|n| {
-                    checked_float_to_int(n, target)
-                        .and_then(|v| checked_int_cast::<u32>(v, "FLOAT", target))
-                })
-                .transpose()?,
+            value.map(|n| checked_float_cast(n, target)).transpose()?,
         )),
         DataType::UInt64 => Ok(ScalarValue::UInt64(
-            value
-                .map(|n| {
-                    checked_float_to_int(n, target)
-                        .and_then(|v| checked_int_cast::<u64>(v, "FLOAT", target))
-                })
-                .transpose()?,
+            value.map(|n| checked_float_cast(n, target)).transpose()?,
         )),
         DataType::Float32 => Ok(ScalarValue::Float32(value.map(|n| n as f32))),
         DataType::Float64 => Ok(ScalarValue::Float64(value)),
