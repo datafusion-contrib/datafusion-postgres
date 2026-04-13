@@ -59,16 +59,58 @@ fn invalid_parameter_error(msg: impl Into<String>) -> PgWireError {
     )))
 }
 
+fn out_of_range_error(source: &str, value: i64, target: &DataType) -> PgWireError {
+    invalid_parameter_error(format!(
+        "{} value {} is out of range for {:?}",
+        source, value, target
+    ))
+}
+
+fn checked_int_cast<T>(value: i64, source: &str, target: &DataType) -> PgWireResult<T>
+where
+    T: TryFrom<i64>,
+{
+    T::try_from(value).map_err(|_| out_of_range_error(source, value, target))
+}
+
 fn coerce_int_value(value: Option<i64>, target: &DataType) -> PgWireResult<ScalarValue> {
     match target {
-        DataType::Int8 => Ok(ScalarValue::Int8(value.map(|n| n as i8))),
-        DataType::Int16 => Ok(ScalarValue::Int16(value.map(|n| n as i16))),
-        DataType::Int32 => Ok(ScalarValue::Int32(value.map(|n| n as i32))),
+        DataType::Int8 => Ok(ScalarValue::Int8(
+            value
+                .map(|n| checked_int_cast::<i8>(n, "INT", target))
+                .transpose()?,
+        )),
+        DataType::Int16 => Ok(ScalarValue::Int16(
+            value
+                .map(|n| checked_int_cast::<i16>(n, "INT", target))
+                .transpose()?,
+        )),
+        DataType::Int32 => Ok(ScalarValue::Int32(
+            value
+                .map(|n| checked_int_cast::<i32>(n, "INT", target))
+                .transpose()?,
+        )),
         DataType::Int64 => Ok(ScalarValue::Int64(value)),
-        DataType::UInt8 => Ok(ScalarValue::UInt8(value.map(|n| n as u8))),
-        DataType::UInt16 => Ok(ScalarValue::UInt16(value.map(|n| n as u16))),
-        DataType::UInt32 => Ok(ScalarValue::UInt32(value.map(|n| n as u32))),
-        DataType::UInt64 => Ok(ScalarValue::UInt64(value.map(|n| n as u64))),
+        DataType::UInt8 => Ok(ScalarValue::UInt8(
+            value
+                .map(|n| checked_int_cast::<u8>(n, "INT", target))
+                .transpose()?,
+        )),
+        DataType::UInt16 => Ok(ScalarValue::UInt16(
+            value
+                .map(|n| checked_int_cast::<u16>(n, "INT", target))
+                .transpose()?,
+        )),
+        DataType::UInt32 => Ok(ScalarValue::UInt32(
+            value
+                .map(|n| checked_int_cast::<u32>(n, "INT", target))
+                .transpose()?,
+        )),
+        DataType::UInt64 => Ok(ScalarValue::UInt64(
+            value
+                .map(|n| checked_int_cast::<u64>(n, "INT", target))
+                .transpose()?,
+        )),
         DataType::Float32 => Ok(ScalarValue::Float32(value.map(|n| n as f32))),
         DataType::Float64 => Ok(ScalarValue::Float64(value.map(|n| n as f64))),
         DataType::Timestamp(TimeUnit::Second, _) => Ok(ScalarValue::TimestampSecond(value, None)),
@@ -91,16 +133,83 @@ fn coerce_int_value(value: Option<i64>, target: &DataType) -> PgWireResult<Scala
     }
 }
 
+fn checked_float_to_int(value: f64, target: &DataType) -> PgWireResult<i64> {
+    if !value.is_finite() {
+        return Err(invalid_parameter_error(format!(
+            "FLOAT value {} is out of range for {:?}",
+            value, target
+        )));
+    }
+    let n = value as i64;
+    if (n as f64 - value).abs() > f64::EPSILON {
+        return Err(out_of_range_error("FLOAT", n, target));
+    }
+    Ok(n)
+}
+
 fn coerce_float_value(value: Option<f64>, target: &DataType) -> PgWireResult<ScalarValue> {
     match target {
-        DataType::Int8 => Ok(ScalarValue::Int8(value.map(|n| n as i8))),
-        DataType::Int16 => Ok(ScalarValue::Int16(value.map(|n| n as i16))),
-        DataType::Int32 => Ok(ScalarValue::Int32(value.map(|n| n as i32))),
-        DataType::Int64 => Ok(ScalarValue::Int64(value.map(|n| n as i64))),
-        DataType::UInt8 => Ok(ScalarValue::UInt8(value.map(|n| n as u8))),
-        DataType::UInt16 => Ok(ScalarValue::UInt16(value.map(|n| n as u16))),
-        DataType::UInt32 => Ok(ScalarValue::UInt32(value.map(|n| n as u32))),
-        DataType::UInt64 => Ok(ScalarValue::UInt64(value.map(|n| n as u64))),
+        DataType::Int8 => Ok(ScalarValue::Int8(
+            value
+                .map(|n| {
+                    checked_float_to_int(n, target)
+                        .and_then(|v| checked_int_cast::<i8>(v, "FLOAT", target))
+                })
+                .transpose()?,
+        )),
+        DataType::Int16 => Ok(ScalarValue::Int16(
+            value
+                .map(|n| {
+                    checked_float_to_int(n, target)
+                        .and_then(|v| checked_int_cast::<i16>(v, "FLOAT", target))
+                })
+                .transpose()?,
+        )),
+        DataType::Int32 => Ok(ScalarValue::Int32(
+            value
+                .map(|n| {
+                    checked_float_to_int(n, target)
+                        .and_then(|v| checked_int_cast::<i32>(v, "FLOAT", target))
+                })
+                .transpose()?,
+        )),
+        DataType::Int64 => Ok(ScalarValue::Int64(
+            value
+                .map(|n| checked_float_to_int(n, target))
+                .transpose()?,
+        )),
+        DataType::UInt8 => Ok(ScalarValue::UInt8(
+            value
+                .map(|n| {
+                    checked_float_to_int(n, target)
+                        .and_then(|v| checked_int_cast::<u8>(v, "FLOAT", target))
+                })
+                .transpose()?,
+        )),
+        DataType::UInt16 => Ok(ScalarValue::UInt16(
+            value
+                .map(|n| {
+                    checked_float_to_int(n, target)
+                        .and_then(|v| checked_int_cast::<u16>(v, "FLOAT", target))
+                })
+                .transpose()?,
+        )),
+        DataType::UInt32 => Ok(ScalarValue::UInt32(
+            value
+                .map(|n| {
+                    checked_float_to_int(n, target)
+                        .and_then(|v| checked_int_cast::<u32>(v, "FLOAT", target))
+                })
+                .transpose()?,
+        )),
+        DataType::UInt64 => Ok(ScalarValue::UInt64(
+            value
+                .map(|n| {
+                    checked_float_to_int(n, target)
+                        .and_then(|v| checked_int_cast::<u64>(v, "FLOAT", target))
+                })
+                .transpose()?,
+        )),
         DataType::Float32 => Ok(ScalarValue::Float32(value.map(|n| n as f32))),
         DataType::Float64 => Ok(ScalarValue::Float64(value)),
         _ => Err(invalid_parameter_error(format!(
@@ -823,58 +932,633 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::datatypes::DataType;
-    use bytes::Bytes;
-    use datafusion::{common::ParamValues, scalar::ScalarValue};
+    use bytes::{Bytes, BytesMut};
+    use chrono::{FixedOffset, NaiveDate, NaiveTime, TimeZone};
+    use datafusion::{
+        arrow::datatypes::{IntervalUnit, TimeUnit},
+        common::ParamValues,
+        scalar::ScalarValue,
+    };
+    use pg_interval::Interval;
     use pgwire::{
         api::{portal::Portal, stmt::StoredStatement},
         messages::{data::FORMAT_CODE_BINARY, extendedquery::Bind},
     };
-    use postgres_types::Type;
+    use postgres_types::{ToSql, Type};
+    use rust_decimal::Decimal;
 
     use crate::datatypes::df::deserialize_parameters;
 
-    #[test]
-    fn test_deserialise_time_params() {
-        let postgres_types = vec![Some(Type::TIME)];
+    fn encode_param<T: ToSql + Sync>(value: &T, pg_type: &Type) -> Bytes {
+        let mut buf = BytesMut::new();
+        value.to_sql(pg_type, &mut buf).unwrap();
+        buf.freeze()
+    }
 
-        let us: i64 = 1_000_000; // 1 second
-
+    fn make_portal<T: ToSql + Sync>(value: &T, pg_type: Type) -> Portal<&'static str> {
+        let data = encode_param(value, &pg_type);
         let bind = Bind::new(
             None,
             None,
             vec![FORMAT_CODE_BINARY],
-            vec![Some(Bytes::from(i64::to_be_bytes(us).to_vec()))],
+            vec![Some(data)],
             vec![],
         );
+        let stmt = StoredStatement::new("id".into(), "s", vec![Some(pg_type)]);
+        Portal::try_new(&bind, Arc::new(stmt)).unwrap()
+    }
 
-        let stmt = StoredStatement::new("statement_id".into(), "statement", postgres_types);
-        let portal = Portal::try_new(&bind, Arc::new(stmt)).unwrap();
+    fn make_null_portal(pg_type: Type) -> Portal<&'static str> {
+        let bind = Bind::new(None, None, vec![FORMAT_CODE_BINARY], vec![None], vec![]);
+        let stmt = StoredStatement::new("id".into(), "s", vec![Some(pg_type)]);
+        Portal::try_new(&bind, Arc::new(stmt)).unwrap()
+    }
+
+    fn get_scalar(result: ParamValues) -> ScalarValue {
+        let ParamValues::List(list) = result else {
+            panic!("expected list");
+        };
+        assert_eq!(list.len(), 1);
+        list.into_iter().next().unwrap().value().clone()
+    }
+
+    fn get_result(portal: &Portal<&'static str>, inferred: Option<&DataType>) -> ScalarValue {
+        let result = deserialize_parameters(portal, &[inferred]).unwrap();
+        get_scalar(result)
+    }
+
+    // -- Basic types --
+
+    #[test]
+    fn test_bool() {
+        let portal = make_portal(&true, Type::BOOL);
+        assert_eq!(get_result(&portal, None), ScalarValue::Boolean(Some(true)));
+
+        let portal = make_null_portal(Type::BOOL);
+        assert_eq!(get_result(&portal, None), ScalarValue::Boolean(None));
+    }
+
+    #[test]
+    fn test_char() {
+        let portal = make_portal(&42i8, Type::CHAR);
+        assert_eq!(get_result(&portal, None), ScalarValue::Int8(Some(42)));
+    }
+
+    #[test]
+    fn test_text_varchar() {
+        for pg_type in [Type::TEXT, Type::VARCHAR] {
+            let portal = make_portal(&"hello".to_string(), pg_type.clone());
+            assert_eq!(
+                get_result(&portal, None),
+                ScalarValue::Utf8(Some("hello".to_string()))
+            );
+        }
+    }
+
+    #[test]
+    fn test_text_large_utf8() {
+        let portal = make_portal(&"hello".to_string(), Type::TEXT);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::LargeUtf8)),
+            ScalarValue::LargeUtf8(Some("hello".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_bytea() {
+        let portal = make_portal(&vec![1u8, 2, 3], Type::BYTEA);
+        assert_eq!(
+            get_result(&portal, None),
+            ScalarValue::Binary(Some(vec![1, 2, 3]))
+        );
+    }
+
+    // -- INT2 coercion --
+
+    #[test]
+    fn test_int2_direct() {
+        let portal = make_portal(&42i16, Type::INT2);
+        assert_eq!(get_result(&portal, None), ScalarValue::Int16(Some(42)));
+    }
+
+    #[test]
+    fn test_int2_coerce_to_int32() {
+        let portal = make_portal(&100i16, Type::INT2);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Int32)),
+            ScalarValue::Int32(Some(100))
+        );
+    }
+
+    #[test]
+    fn test_int2_coerce_to_int64() {
+        let portal = make_portal(&100i16, Type::INT2);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Int64)),
+            ScalarValue::Int64(Some(100))
+        );
+    }
+
+    #[test]
+    fn test_int2_coerce_to_float64() {
+        let portal = make_portal(&100i16, Type::INT2);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Float64)),
+            ScalarValue::Float64(Some(100.0))
+        );
+    }
+
+    #[test]
+    fn test_int2_coerce_to_uint32() {
+        let portal = make_portal(&100i16, Type::INT2);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::UInt32)),
+            ScalarValue::UInt32(Some(100))
+        );
+    }
+
+    #[test]
+    fn test_int2_null_coercion() {
+        let portal = make_null_portal(Type::INT2);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Int64)),
+            ScalarValue::Int64(None)
+        );
+    }
+
+    // -- INT4 coercion --
+
+    #[test]
+    fn test_int4_coerce_to_int8() {
+        let portal = make_portal(&42i32, Type::INT4);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Int8)),
+            ScalarValue::Int8(Some(42))
+        );
+    }
+
+    #[test]
+    fn test_int4_coerce_to_int64() {
+        let portal = make_portal(&100i32, Type::INT4);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Int64)),
+            ScalarValue::Int64(Some(100))
+        );
+    }
+
+    #[test]
+    fn test_int4_coerce_to_uint64() {
+        let portal = make_portal(&100i32, Type::INT4);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::UInt64)),
+            ScalarValue::UInt64(Some(100))
+        );
+    }
+
+    #[test]
+    fn test_int4_coerce_out_of_range() {
+        let portal = make_portal(&300i32, Type::INT4);
+        assert!(deserialize_parameters(&portal, &[Some(&DataType::Int8)]).is_err());
+    }
+
+    #[test]
+    fn test_int4_coerce_negative_to_unsigned() {
+        let portal = make_portal(&(-1i32), Type::INT4);
+        assert!(deserialize_parameters(&portal, &[Some(&DataType::UInt64)]).is_err());
+    }
+
+    // -- INT8 coercion --
+
+    #[test]
+    fn test_int8_direct() {
+        let portal = make_portal(&42i64, Type::INT8);
+        assert_eq!(get_result(&portal, None), ScalarValue::Int64(Some(42)));
+    }
+
+    #[test]
+    fn test_int8_coerce_to_int16() {
+        let portal = make_portal(&100i64, Type::INT8);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Int16)),
+            ScalarValue::Int16(Some(100))
+        );
+    }
+
+    #[test]
+    fn test_int8_coerce_to_uint32() {
+        let portal = make_portal(&100i64, Type::INT8);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::UInt32)),
+            ScalarValue::UInt32(Some(100))
+        );
+    }
+
+    #[test]
+    fn test_int8_coerce_out_of_range() {
+        let portal = make_portal(&100000i64, Type::INT8);
+        assert!(deserialize_parameters(&portal, &[Some(&DataType::Int8)]).is_err());
+    }
+
+    // -- FLOAT4 coercion --
+
+    #[test]
+    fn test_float4_direct() {
+        let portal = make_portal(&3.14f32, Type::FLOAT4);
+        assert_eq!(
+            get_result(&portal, None),
+            ScalarValue::Float32(Some(3.14f32))
+        );
+    }
+
+    #[test]
+    fn test_float4_coerce_to_float64() {
+        let portal = make_portal(&3.14f32, Type::FLOAT4);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Float64)),
+            ScalarValue::Float64(Some(3.14f32 as f64))
+        );
+    }
+
+    #[test]
+    fn test_float4_coerce_to_int32() {
+        let portal = make_portal(&42.0f32, Type::FLOAT4);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Int32)),
+            ScalarValue::Int32(Some(42))
+        );
+    }
+
+    // -- FLOAT8 coercion --
+
+    #[test]
+    fn test_float8_direct() {
+        let portal = make_portal(&3.14f64, Type::FLOAT8);
+        assert_eq!(get_result(&portal, None), ScalarValue::Float64(Some(3.14)));
+    }
+
+    #[test]
+    fn test_float8_coerce_to_float32() {
+        let portal = make_portal(&3.14f64, Type::FLOAT8);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Float32)),
+            ScalarValue::Float32(Some(3.14f64 as f32))
+        );
+    }
+
+    #[test]
+    fn test_float8_coerce_to_int64() {
+        let portal = make_portal(&42.0f64, Type::FLOAT8);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Int64)),
+            ScalarValue::Int64(Some(42))
+        );
+    }
+
+    #[test]
+    fn test_float8_coerce_fractional_to_int_error() {
+        let portal = make_portal(&3.14f64, Type::FLOAT8);
+        assert!(deserialize_parameters(&portal, &[Some(&DataType::Int64)]).is_err());
+    }
+
+    // -- NUMERIC coercion --
+
+    #[test]
+    fn test_numeric_direct() {
+        let portal = make_portal(&Decimal::new(123, 1), Type::NUMERIC);
+        let result = get_result(&portal, None);
+        match result {
+            ScalarValue::Decimal128(Some(v), p, s) => {
+                assert_eq!(v, 123);
+                assert_eq!(s, 1);
+                assert!(p > 0);
+            }
+            other => panic!("expected Decimal128, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_numeric_coerce_to_decimal128_with_rescale() {
+        // Decimal::new(123, 1) = 12.3, rescale to scale 3 => 12.300 => mantissa 12300
+        let portal = make_portal(&Decimal::new(123, 1), Type::NUMERIC);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Decimal128(10, 3))),
+            ScalarValue::Decimal128(Some(12300), 10, 3)
+        );
+    }
+
+    #[test]
+    fn test_numeric_coerce_to_uint64() {
+        let portal = make_portal(&Decimal::from(42u64), Type::NUMERIC);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::UInt64)),
+            ScalarValue::UInt64(Some(42))
+        );
+    }
+
+    #[test]
+    fn test_numeric_coerce_to_float64() {
+        let portal = make_portal(&Decimal::new(314, 2), Type::NUMERIC);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Float64)),
+            ScalarValue::Float64(Some(3.14))
+        );
+    }
+
+    #[test]
+    fn test_numeric_coerce_to_int32() {
+        let portal = make_portal(&Decimal::from(42i32), Type::NUMERIC);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Int32)),
+            ScalarValue::Int32(Some(42))
+        );
+    }
+
+    #[test]
+    fn test_numeric_null() {
+        let portal = make_null_portal(Type::NUMERIC);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Decimal128(10, 2))),
+            ScalarValue::Decimal128(None, 10, 2)
+        );
+    }
+
+    // -- TIMESTAMP coercion --
+
+    #[test]
+    fn test_timestamp_direct() {
+        let ts = chrono::DateTime::from_timestamp(1700000000, 0)
+            .unwrap()
+            .naive_utc();
+        let portal = make_portal(&ts, Type::TIMESTAMP);
+        assert_eq!(
+            get_result(&portal, None),
+            ScalarValue::TimestampMicrosecond(Some(ts.and_utc().timestamp_micros()), None)
+        );
+    }
+
+    #[test]
+    fn test_timestamp_coerce_to_seconds() {
+        let ts = chrono::DateTime::from_timestamp(1700000000, 0)
+            .unwrap()
+            .naive_utc();
+        let portal = make_portal(&ts, Type::TIMESTAMP);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Timestamp(TimeUnit::Second, None))),
+            ScalarValue::TimestampSecond(Some(1700000000), None)
+        );
+    }
+
+    #[test]
+    fn test_timestamp_coerce_to_milliseconds() {
+        let ts = chrono::DateTime::from_timestamp(1700000000, 0)
+            .unwrap()
+            .naive_utc();
+        let portal = make_portal(&ts, Type::TIMESTAMP);
+        assert_eq!(
+            get_result(
+                &portal,
+                Some(&DataType::Timestamp(TimeUnit::Millisecond, None))
+            ),
+            ScalarValue::TimestampMillisecond(Some(1700000000000), None)
+        );
+    }
+
+    #[test]
+    fn test_timestamp_coerce_to_nanoseconds() {
+        let ts = chrono::DateTime::from_timestamp(1700000000, 0)
+            .unwrap()
+            .naive_utc();
+        let portal = make_portal(&ts, Type::TIMESTAMP);
+        assert_eq!(
+            get_result(
+                &portal,
+                Some(&DataType::Timestamp(TimeUnit::Nanosecond, None))
+            ),
+            ScalarValue::TimestampNanosecond(
+                Some(ts.and_utc().timestamp_nanos_opt().unwrap()),
+                None
+            )
+        );
+    }
+
+    // -- TIMESTAMPTZ coercion --
+
+    #[test]
+    fn test_timestamptz_direct() {
+        let ts = FixedOffset::east_opt(3600).unwrap().from_utc_datetime(
+            &chrono::DateTime::from_timestamp(1700000000, 0)
+                .unwrap()
+                .naive_utc(),
+        );
+        let portal = make_portal(&ts, Type::TIMESTAMPTZ);
+        assert_eq!(
+            get_result(&portal, None),
+            ScalarValue::TimestampMicrosecond(Some(ts.timestamp_micros()), None)
+        );
+    }
+
+    #[test]
+    fn test_timestamptz_coerce_to_seconds() {
+        let ts = FixedOffset::east_opt(3600).unwrap().from_utc_datetime(
+            &chrono::DateTime::from_timestamp(1700000000, 0)
+                .unwrap()
+                .naive_utc(),
+        );
+        let portal = make_portal(&ts, Type::TIMESTAMPTZ);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Timestamp(TimeUnit::Second, None))),
+            ScalarValue::TimestampSecond(Some(1700000000), None)
+        );
+    }
+
+    #[test]
+    fn test_timestamptz_coerce_to_nanoseconds() {
+        let ts = FixedOffset::east_opt(3600).unwrap().from_utc_datetime(
+            &chrono::DateTime::from_timestamp(1700000000, 0)
+                .unwrap()
+                .naive_utc(),
+        );
+        let portal = make_portal(&ts, Type::TIMESTAMPTZ);
+        assert_eq!(
+            get_result(
+                &portal,
+                Some(&DataType::Timestamp(TimeUnit::Nanosecond, None))
+            ),
+            ScalarValue::TimestampNanosecond(Some(ts.timestamp_nanos_opt().unwrap()), None)
+        );
+    }
+
+    // -- DATE --
+
+    #[test]
+    fn test_date() {
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let portal = make_portal(&date, Type::DATE);
+        assert_eq!(
+            get_result(&portal, None),
+            ScalarValue::Date32(Some(
+                datafusion::arrow::datatypes::Date32Type::from_naive_date(date)
+            ))
+        );
+    }
+
+    // -- TIME with all unit coercions --
+
+    #[test]
+    fn test_deserialise_time_params() {
+        let portal = make_portal(
+            &NaiveTime::from_num_seconds_from_midnight_opt(1, 0).unwrap(),
+            Type::TIME,
+        );
 
         for (arrow_type, expected) in [
             (
-                DataType::Time32(arrow::datatypes::TimeUnit::Second),
+                DataType::Time32(TimeUnit::Second),
                 ScalarValue::Time32Second(Some(1)),
             ),
             (
-                DataType::Time32(arrow::datatypes::TimeUnit::Millisecond),
+                DataType::Time32(TimeUnit::Millisecond),
                 ScalarValue::Time32Millisecond(Some(1000)),
             ),
             (
-                DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
+                DataType::Time64(TimeUnit::Microsecond),
                 ScalarValue::Time64Microsecond(Some(1000000)),
             ),
             (
-                DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
+                DataType::Time64(TimeUnit::Nanosecond),
                 ScalarValue::Time64Nanosecond(Some(1000000000)),
             ),
         ] {
-            let result = deserialize_parameters(&portal, &[Some(&arrow_type)]).unwrap();
-            let ParamValues::List(list) = result else {
-                panic!("expected list");
-            };
-
-            assert_eq!(list.len(), 1);
-            assert_eq!(list[0].value(), &expected)
+            assert_eq!(get_result(&portal, Some(&arrow_type)), expected);
         }
+    }
+
+    #[test]
+    fn test_time_default_nanosecond() {
+        let time = NaiveTime::from_num_seconds_from_midnight_opt(1, 0).unwrap();
+        let portal = make_portal(&time, Type::TIME);
+        // No inferred type: should default to Time64Nanosecond
+        assert_eq!(
+            get_result(&portal, None),
+            ScalarValue::Time64Nanosecond(Some(1_000_000_000))
+        );
+    }
+
+    // -- INTERVAL coercion --
+
+    #[test]
+    fn test_interval_direct() {
+        let interval = Interval::new(1, 2, 3_000_000);
+        let portal = make_portal(&interval, Type::INTERVAL);
+        assert_eq!(
+            get_result(&portal, None),
+            ScalarValue::new_interval_mdn(1, 2, 3_000_000_000i64)
+        );
+    }
+
+    #[test]
+    fn test_interval_coerce_to_month_day_nano() {
+        let interval = Interval::new(1, 2, 3_000_000);
+        let portal = make_portal(&interval, Type::INTERVAL);
+        assert_eq!(
+            get_result(
+                &portal,
+                Some(&DataType::Interval(IntervalUnit::MonthDayNano))
+            ),
+            ScalarValue::new_interval_mdn(1, 2, 3_000_000_000i64)
+        );
+    }
+
+    #[test]
+    fn test_interval_coerce_to_year_month() {
+        let interval = Interval::new(3, 0, 0);
+        let portal = make_portal(&interval, Type::INTERVAL);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Interval(IntervalUnit::YearMonth))),
+            ScalarValue::IntervalYearMonth(Some(3))
+        );
+    }
+
+    #[test]
+    fn test_interval_coerce_to_year_month_with_days_error() {
+        let interval = Interval::new(3, 1, 0);
+        let portal = make_portal(&interval, Type::INTERVAL);
+        assert!(deserialize_parameters(&portal, &[Some(&DataType::Interval(IntervalUnit::YearMonth))]).is_err());
+    }
+
+    #[test]
+    fn test_interval_coerce_to_day_time() {
+        let interval = Interval::new(0, 5, 3_000_000);
+        let portal = make_portal(&interval, Type::INTERVAL);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Interval(IntervalUnit::DayTime))),
+            ScalarValue::new_interval_dt(5, 3000)
+        );
+    }
+
+    #[test]
+    fn test_interval_coerce_to_day_time_with_months_error() {
+        let interval = Interval::new(1, 5, 3_000_000);
+        let portal = make_portal(&interval, Type::INTERVAL);
+        assert!(deserialize_parameters(&portal, &[Some(&DataType::Interval(IntervalUnit::DayTime))]).is_err());
+    }
+
+    #[test]
+    fn test_interval_coerce_to_day_time_sub_millis_error() {
+        let interval = Interval::new(0, 5, 500);
+        let portal = make_portal(&interval, Type::INTERVAL);
+        assert!(deserialize_parameters(&portal, &[Some(&DataType::Interval(IntervalUnit::DayTime))]).is_err());
+    }
+
+    #[test]
+    fn test_interval_null() {
+        let portal = make_null_portal(Type::INTERVAL);
+        assert_eq!(
+            get_result(&portal, None),
+            ScalarValue::IntervalMonthDayNano(None)
+        );
+    }
+
+    // -- UUID, JSON --
+    // These types don't have FromSql<String> support in pgwire, so they
+    // fall through to the `_` wildcard branch which calls
+    // `portal.parameter::<String>()`. Testing them requires a postgres
+    // round-trip, so we skip unit tests for these.
+
+    // -- Advanced types (MONEY, INET, MACADDR) --
+    // Same as above: pgwire's FromSql<String> doesn't accept MONEY/INET/MACADDR.
+
+    // -- Null parameters --
+
+    #[test]
+    fn test_null_int4() {
+        let portal = make_null_portal(Type::INT4);
+        assert_eq!(
+            get_result(&portal, Some(&DataType::Int32)),
+            ScalarValue::Int32(None)
+        );
+    }
+
+    #[test]
+    fn test_null_timestamp() {
+        let portal = make_null_portal(Type::TIMESTAMP);
+        assert_eq!(
+            get_result(
+                &portal,
+                Some(&DataType::Timestamp(TimeUnit::Millisecond, None))
+            ),
+            ScalarValue::TimestampMillisecond(None, None)
+        );
+    }
+
+    // -- Fallback: unknown type as string --
+
+    #[test]
+    fn test_unknown_type_string() {
+        let portal = make_portal(&"hello".to_string(), Type::NAME);
+        assert_eq!(
+            get_result(&portal, None),
+            ScalarValue::Utf8(Some("hello".to_string()))
+        );
     }
 }
