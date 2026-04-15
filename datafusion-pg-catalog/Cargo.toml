@@ -24,7 +24,7 @@ arrow-pg = { path = "../arrow-pg", version = "0.13.0", default-features = false,
 futures.workspace = true
 log = "0.4"
 postgres-types.workspace = true
-tokio = { version = "1.51", features = ["sync"] }
+tokio = { version = "1.52", features = ["sync"] }
 
 [dev-dependencies]
 env_logger = "0.11"
