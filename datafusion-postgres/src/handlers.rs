@@ -405,14 +405,18 @@ impl QueryParser for Parser {
         column_format: Option<&Format>,
     ) -> PgWireResult<Vec<FieldInfo>> {
         if let (_, Some((_, plan))) = stmt {
-            let schema = plan.schema();
-            let fields = arrow_schema_to_pg_fields(
-                schema.as_arrow(),
-                column_format.unwrap_or(&Format::UnifiedText),
-                None,
-            )?;
+            if !matches!(plan, LogicalPlan::Ddl(_) | LogicalPlan::Dml(_)) {
+                let schema = plan.schema();
+                let fields = arrow_schema_to_pg_fields(
+                    schema.as_arrow(),
+                    column_format.unwrap_or(&Format::UnifiedText),
+                    None,
+                )?;
 
-            Ok(fields)
+                Ok(fields)
+            } else {
+                Ok(vec![])
+            }
         } else {
             Ok(vec![])
         }
