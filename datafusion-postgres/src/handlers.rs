@@ -11,11 +11,12 @@ use datafusion::sql::sqlparser;
 use log::info;
 use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::auth::StartupHandler;
+use pgwire::api::cancel::{CancelHandler, DefaultCancelHandler};
 use pgwire::api::portal::{Format, Portal};
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
 use pgwire::api::results::{FieldInfo, Response, Tag};
 use pgwire::api::stmt::QueryParser;
-use pgwire::api::{ClientInfo, ErrorHandler, PgWireServerHandlers, Type};
+use pgwire::api::{ClientInfo, ConnectionManager, ErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::PgWireBackendMessage;
 use pgwire::types::format::FormatOptions;
@@ -29,19 +30,34 @@ use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
 use datafusion_pg_catalog::sql::PostgresCompatibilityParser;
 
 /// Simple startup handler that does no authentication
-pub struct SimpleStartupHandler;
+pub struct SimpleStartupHandler {
+    connection_manager: Arc<ConnectionManager>,
+}
 
 #[async_trait::async_trait]
-impl NoopStartupHandler for SimpleStartupHandler {}
+impl NoopStartupHandler for SimpleStartupHandler {
+    fn connection_manager(&self) -> Option<Arc<ConnectionManager>> {
+        Some(self.connection_manager.clone())
+    }
+}
 
 pub struct HandlerFactory {
     pub session_service: Arc<DfSessionService>,
+    cancel_handler: Arc<DefaultCancelHandler>,
+    startup_handler: Arc<SimpleStartupHandler>,
 }
 
 impl HandlerFactory {
     pub fn new(session_context: Arc<SessionContext>) -> Self {
         let session_service = Arc::new(DfSessionService::new(session_context));
-        HandlerFactory { session_service }
+        let connection_manager = Arc::new(ConnectionManager::new());
+        HandlerFactory {
+            session_service,
+            cancel_handler: Arc::new(DefaultCancelHandler::new(connection_manager.clone())),
+            startup_handler: Arc::new(SimpleStartupHandler {
+                connection_manager: connection_manager.clone(),
+            }),
+        }
     }
 
     pub fn new_with_hooks(
@@ -52,7 +68,14 @@ impl HandlerFactory {
             session_context,
             query_hooks,
         ));
-        HandlerFactory { session_service }
+        let connection_manager = Arc::new(ConnectionManager::new());
+        HandlerFactory {
+            session_service,
+            cancel_handler: Arc::new(DefaultCancelHandler::new(connection_manager.clone())),
+            startup_handler: Arc::new(SimpleStartupHandler {
+                connection_manager: connection_manager.clone(),
+            }),
+        }
     }
 }
 
@@ -66,11 +89,15 @@ impl PgWireServerHandlers for HandlerFactory {
     }
 
     fn startup_handler(&self) -> Arc<impl StartupHandler> {
-        Arc::new(SimpleStartupHandler)
+        self.startup_handler.clone()
     }
 
     fn error_handler(&self) -> Arc<impl ErrorHandler> {
         Arc::new(LoggingErrorHandler)
+    }
+
+    fn cancel_handler(&self) -> Arc<impl CancelHandler> {
+        self.cancel_handler.clone()
     }
 }
 

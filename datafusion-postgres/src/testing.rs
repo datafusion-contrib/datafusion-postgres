@@ -4,7 +4,10 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_pg_catalog::pg_catalog::setup_pg_catalog;
 use futures::Sink;
 use pgwire::{
-    api::{ClientInfo, ClientPortalStore, PgWireConnectionState, METADATA_USER},
+    api::{
+        store::MemPortalStore, ClientInfo, ClientPortalStore, PgWireConnectionState,
+        SessionExtensions, METADATA_USER,
+    },
     messages::{
         response::TransactionStatus, startup::SecretKey, PgWireBackendMessage, ProtocolVersion,
     },
@@ -29,8 +32,9 @@ pub fn setup_handlers() -> DfSessionService {
 #[derive(Debug, Default)]
 pub struct MockClient {
     metadata: HashMap<String, String>,
-    portal_store: HashMap<String, String>,
+    portal_store: MemPortalStore<String>,
     pub sent_messages: Vec<PgWireBackendMessage>,
+    session_extensions: SessionExtensions,
 }
 
 impl MockClient {
@@ -40,8 +44,9 @@ impl MockClient {
 
         MockClient {
             metadata,
-            portal_store: HashMap::default(),
+            portal_store: MemPortalStore::new(),
             sent_messages: Vec::new(),
+            session_extensions: SessionExtensions::new(),
         }
     }
 
@@ -98,10 +103,14 @@ impl ClientInfo for MockClient {
     fn sni_server_name(&self) -> Option<&str> {
         None
     }
+
+    fn session_extensions(&self) -> &pgwire::api::SessionExtensions {
+        &self.session_extensions
+    }
 }
 
 impl ClientPortalStore for MockClient {
-    type PortalStore = HashMap<String, String>;
+    type PortalStore = MemPortalStore<String>;
     fn portal_store(&self) -> &Self::PortalStore {
         &self.portal_store
     }
