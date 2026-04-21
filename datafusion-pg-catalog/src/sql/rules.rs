@@ -269,16 +269,15 @@ impl ResolveUnqualifiedIdentifer {
         projection_aliases: &HashSet<String>,
     ) {
         match expr {
-            Expr::Identifier(ident) => {
-                // If the identifier is not a table alias itself and not already aliased in projection, rewrite it.
+            // If the identifier is not a table alias itself and not already aliased in projection, rewrite it.
+            Expr::Identifier(ident)
                 if !table_aliases.contains(&ident.value)
-                    && !projection_aliases.contains(&ident.value)
-                {
-                    *expr = Expr::CompoundIdentifier(vec![
-                        Ident::new(wildcard_alias.to_string()),
-                        ident.clone(),
-                    ]);
-                }
+                    && !projection_aliases.contains(&ident.value) =>
+            {
+                *expr = Expr::CompoundIdentifier(vec![
+                    Ident::new(wildcard_alias.to_string()),
+                    ident.clone(),
+                ]);
             }
             Expr::BinaryOp { left, right, .. } => {
                 Self::rewrite_expr(left, wildcard_alias, table_aliases, projection_aliases);
@@ -347,27 +346,23 @@ impl VisitorMut for RemoveUnsupportedTypesVisitor<'_> {
                 data_type,
                 value,
                 uses_odbc_syntax: _,
-            }) => {
-                if self
-                    .unsupported_types
-                    .contains(data_type.to_string().to_lowercase().as_str())
-                {
-                    *expr =
-                        Expr::Value(Value::SingleQuotedString(value.to_string()).with_empty_span());
-                }
+            }) if self
+                .unsupported_types
+                .contains(data_type.to_string().to_lowercase().as_str()) =>
+            {
+                *expr = Expr::Value(Value::SingleQuotedString(value.to_string()).with_empty_span());
             }
             Expr::Cast {
                 data_type,
                 expr: value,
                 ..
-            } => {
-                if self
-                    .unsupported_types
-                    .contains(data_type.to_string().to_lowercase().as_str())
-                {
-                    *expr = *value.clone();
-                }
+            } if self
+                .unsupported_types
+                .contains(data_type.to_string().to_lowercase().as_str()) =>
+            {
+                *expr = *value.clone();
             }
+
             // Add more match arms for other expression types (e.g., `Function`, `InList`) as needed.
             _ => {}
         }
@@ -1007,12 +1002,10 @@ impl Visitor for CorrelationCheckVisitor<'_> {
             }) => {
                 *self.0 = true;
             }
-            Expr::CompoundIdentifier(idents) => {
-                if !idents.is_empty() {
-                    let table_name = &idents[0].value;
-                    if !self.1.contains(table_name) {
-                        *self.0 = true;
-                    }
+            Expr::CompoundIdentifier(idents) if !idents.is_empty() => {
+                let table_name = &idents[0].value;
+                if !self.1.contains(table_name) {
+                    *self.0 = true;
                 }
             }
             _ => {}
