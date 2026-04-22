@@ -9,8 +9,8 @@ use datafusion::prelude::*;
 use datafusion::sql::parser::Statement;
 use datafusion::sql::sqlparser;
 use log::info;
-use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::auth::StartupHandler;
+use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::cancel::{CancelHandler, DefaultCancelHandler};
 use pgwire::api::portal::{Format, Portal};
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
@@ -21,9 +21,9 @@ use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::PgWireBackendMessage;
 use pgwire::types::format::FormatOptions;
 
+use crate::hooks::QueryHook;
 use crate::hooks::set_show::SetShowHook;
 use crate::hooks::transactions::TransactionStatementHook;
-use crate::hooks::QueryHook;
 use crate::{client, planner};
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
@@ -242,28 +242,28 @@ impl ExtendedQueryHandler for DfSessionService {
         let query = &portal.statement.statement.0;
         log::debug!("Received execute extended query: {query}");
         // Check query hooks first
-        if !self.query_hooks.is_empty() {
-            if let (_, Some((statement, plan))) = &portal.statement.statement {
-                // TODO: in the case where query hooks all return None, we do the param handling again later.
-                let param_types = planner::get_inferred_parameter_types(plan)
-                    .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+        if !self.query_hooks.is_empty()
+            && let (_, Some((statement, plan))) = &portal.statement.statement
+        {
+            // TODO: in the case where query hooks all return None, we do the param handling again later.
+            let param_types = planner::get_inferred_parameter_types(plan)
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-                let param_values: ParamValues =
-                    df::deserialize_parameters(portal, &ordered_param_types(&param_types))?;
+            let param_values: ParamValues =
+                df::deserialize_parameters(portal, &ordered_param_types(&param_types))?;
 
-                for hook in &self.query_hooks {
-                    if let Some(result) = hook
-                        .handle_extended_query(
-                            statement,
-                            plan,
-                            &param_values,
-                            &self.session_context,
-                            client,
-                        )
-                        .await
-                    {
-                        return result;
-                    }
+            for hook in &self.query_hooks {
+                if let Some(result) = hook
+                    .handle_extended_query(
+                        statement,
+                        plan,
+                        &param_values,
+                        &self.session_context,
+                        client,
+                    )
+                    .await
+                {
+                    return result;
                 }
             }
         }

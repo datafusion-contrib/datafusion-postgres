@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use datafusion::arrow::array::{
     ArrayRef, BooleanArray, Float64Array, Int16Array, Int32Array, RecordBatch, StringArray,
@@ -14,7 +14,7 @@ use datafusion::physical_plan::streaming::PartitionStream;
 use postgres_types::Oid;
 use tokio::sync::RwLock;
 
-use crate::pg_catalog::catalog_info::{table_type_to_string, CatalogInfo};
+use crate::pg_catalog::catalog_info::{CatalogInfo, table_type_to_string};
 
 use super::OidCacheKey;
 

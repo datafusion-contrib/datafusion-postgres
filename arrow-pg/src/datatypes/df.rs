@@ -8,16 +8,16 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::ParamValues;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use pg_interval::Interval;
+use pgwire::api::Type;
 use pgwire::api::portal::{Format, Portal};
 use pgwire::api::results::QueryResponse;
-use pgwire::api::Type;
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::messages::data::DataRow;
 use pgwire::types::format::FormatOptions;
-use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 
 use super::{arrow_schema_to_pg_fields, encode_recordbatch, into_pg_type};
 
@@ -1435,11 +1435,13 @@ mod tests {
     fn test_interval_coerce_to_year_month_with_days_error() {
         let interval = Interval::new(3, 1, 0);
         let portal = make_portal(&interval, Type::INTERVAL);
-        assert!(deserialize_parameters(
-            &portal,
-            &[Some(&DataType::Interval(IntervalUnit::YearMonth))]
-        )
-        .is_err());
+        assert!(
+            deserialize_parameters(
+                &portal,
+                &[Some(&DataType::Interval(IntervalUnit::YearMonth))]
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1456,22 +1458,20 @@ mod tests {
     fn test_interval_coerce_to_day_time_with_months_error() {
         let interval = Interval::new(1, 5, 3_000_000);
         let portal = make_portal(&interval, Type::INTERVAL);
-        assert!(deserialize_parameters(
-            &portal,
-            &[Some(&DataType::Interval(IntervalUnit::DayTime))]
-        )
-        .is_err());
+        assert!(
+            deserialize_parameters(&portal, &[Some(&DataType::Interval(IntervalUnit::DayTime))])
+                .is_err()
+        );
     }
 
     #[test]
     fn test_interval_coerce_to_day_time_sub_millis_error() {
         let interval = Interval::new(0, 5, 500);
         let portal = make_portal(&interval, Type::INTERVAL);
-        assert!(deserialize_parameters(
-            &portal,
-            &[Some(&DataType::Interval(IntervalUnit::DayTime))]
-        )
-        .is_err());
+        assert!(
+            deserialize_parameters(&portal, &[Some(&DataType::Interval(IntervalUnit::DayTime))])
+                .is_err()
+        );
     }
 
     #[test]

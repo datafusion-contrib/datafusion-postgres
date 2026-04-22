@@ -19,8 +19,8 @@ use rustls_pemfile::{certs, pkcs8_private_keys};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
-use tokio_rustls::rustls::{self, ServerConfig};
 use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::{self, ServerConfig};
 
 use handlers::HandlerFactory;
 pub use handlers::{DfSessionService, Parser};
@@ -170,7 +170,9 @@ pub async fn serve_with_handlers(
                         match semaphore.try_acquire() {
                             Ok(permit) => Some(permit),
                             Err(_) => {
-                                warn!("Connection rejected from {addr}: max connections ({max_conn_count}) reached");
+                                warn!(
+                                    "Connection rejected from {addr}: max connections ({max_conn_count}) reached"
+                                );
                                 return;
                             }
                         }

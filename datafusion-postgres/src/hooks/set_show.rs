@@ -8,18 +8,18 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::{Expr, Set, Statement};
 use log::{info, warn};
+use pgwire::api::ClientInfo;
 use pgwire::api::auth::DefaultServerParameterProvider;
 use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse, Response, Tag};
-use pgwire::api::ClientInfo;
 use pgwire::error::{PgWireError, PgWireResult};
-use pgwire::messages::startup::ParameterStatus;
 use pgwire::messages::PgWireBackendMessage;
+use pgwire::messages::startup::ParameterStatus;
 use pgwire::types::format::FormatOptions;
 use postgres_types::Type;
 
+use crate::QueryHook;
 use crate::client;
 use crate::hooks::HookClient;
-use crate::QueryHook;
 
 #[derive(Debug)]
 pub struct SetShowHook;
@@ -186,15 +186,14 @@ async fn try_respond_set_statements(
                 if let Expr::Value(value) = value {
                     let val_str = value.into_string().unwrap_or_else(|| "".to_string());
                     client.metadata_mut().insert(var.clone(), val_str);
-                    if let Some((name, value)) = parameter_status_for_var(&var, &*client) {
-                        if let Err(e) = client
+                    if let Some((name, value)) = parameter_status_for_var(&var, &*client)
+                        && let Err(e) = client
                             .send_message(PgWireBackendMessage::ParameterStatus(
                                 ParameterStatus::new(name, value),
                             ))
                             .await
-                        {
-                            return Some(Err(e));
-                        }
+                    {
+                        return Some(Err(e));
                     }
                     return Some(Ok(Response::Execution(Tag::new("SET"))));
                 }

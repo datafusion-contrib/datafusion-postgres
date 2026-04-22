@@ -6,8 +6,8 @@ use datafusion::{
         datatypes::{DataType, Int32Type},
     },
     common::{
-        cast::{as_int32_array, as_int64_array},
         DataFusionError,
+        cast::{as_int32_array, as_int64_array},
     },
     logical_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
@@ -27,7 +27,7 @@ pub(crate) fn format_type_impl(args: &[ColumnarValue]) -> Result<ColumnarValue, 
             return Err(DataFusionError::Internal(format!(
                 "Unexpected oid type in format_type: {}",
                 args[0].data_type()
-            )))
+            )));
         }
     };
 
@@ -41,7 +41,7 @@ pub(crate) fn format_type_impl(args: &[ColumnarValue]) -> Result<ColumnarValue, 
             return Err(DataFusionError::Internal(format!(
                 "Unexpected oid type in format_type: {}",
                 args[1].data_type()
-            )))
+            )));
         }
     };
 

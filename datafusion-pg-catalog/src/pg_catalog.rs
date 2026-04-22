@@ -1,11 +1,11 @@
 use std::collections::HashMap;
-use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{
-    as_boolean_array, ArrayRef, AsArray, BooleanBuilder, Int32Builder, RecordBatch, StringArray,
-    StringBuilder,
+    ArrayRef, AsArray, BooleanBuilder, Int32Builder, RecordBatch, StringArray, StringBuilder,
+    as_boolean_array,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
 use datafusion::arrow::ipc::reader::FileReader;
@@ -18,7 +18,7 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion::physical_plan::streaming::PartitionStream;
-use datafusion::prelude::{create_udf, Expr, SessionContext};
+use datafusion::prelude::{Expr, SessionContext, create_udf};
 use postgres_types::Oid;
 use tokio::sync::RwLock;
 

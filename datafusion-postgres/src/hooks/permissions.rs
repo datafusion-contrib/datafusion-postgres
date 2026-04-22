@@ -5,13 +5,13 @@ use datafusion::common::ParamValues;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::Statement;
-use pgwire::api::results::Response;
 use pgwire::api::ClientInfo;
+use pgwire::api::results::Response;
 use pgwire::error::{PgWireError, PgWireResult};
 
+use crate::QueryHook;
 use crate::auth::AuthManager;
 use crate::hooks::HookClient;
-use crate::QueryHook;
 
 use datafusion_pg_catalog::pg_catalog::context::{Permission, ResourceType};
 

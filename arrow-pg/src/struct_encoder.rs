@@ -12,11 +12,11 @@ use bytes::{BufMut, BytesMut};
 use pgwire::api::results::{FieldFormat, FieldInfo};
 use pgwire::error::PgWireResult;
 use pgwire::types::format::FormatOptions;
-use pgwire::types::{ToSqlText, QUOTE_CHECK, QUOTE_ESCAPE};
+use pgwire::types::{QUOTE_CHECK, QUOTE_ESCAPE, ToSqlText};
 use postgres_types::{Field, IsNull, ToSql, Type};
 
 use crate::datatypes::field_into_pg_type;
-use crate::encoder::{encode_value, Encoder};
+use crate::encoder::{Encoder, encode_value};
 
 #[derive(Debug)]
 struct BytesWrapper(BytesMut, bool);
