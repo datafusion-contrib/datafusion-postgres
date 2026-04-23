@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_pg_catalog::sql::PostgresCompatibilityParser;
 
 fn bench_parser_parse(c: &mut Criterion) {

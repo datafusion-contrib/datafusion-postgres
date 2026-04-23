@@ -5,15 +5,15 @@ use datafusion_pg_catalog::pg_catalog::setup_pg_catalog;
 use futures::Sink;
 use pgwire::{
     api::{
-        store::MemPortalStore, ClientInfo, ClientPortalStore, PgWireConnectionState,
-        SessionExtensions, METADATA_USER,
+        ClientInfo, ClientPortalStore, METADATA_USER, PgWireConnectionState, SessionExtensions,
+        store::MemPortalStore,
     },
     messages::{
-        response::TransactionStatus, startup::SecretKey, PgWireBackendMessage, ProtocolVersion,
+        PgWireBackendMessage, ProtocolVersion, response::TransactionStatus, startup::SecretKey,
     },
 };
 
-use crate::{auth::AuthManager, DfSessionService};
+use crate::{DfSessionService, auth::AuthManager};
 
 pub fn setup_handlers() -> DfSessionService {
     let session_config = SessionConfig::new().with_information_schema(true);

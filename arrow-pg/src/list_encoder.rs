@@ -3,40 +3,40 @@ use std::{str::FromStr, sync::Arc};
 #[cfg(not(feature = "datafusion"))]
 use arrow::{
     array::{
-        timezone::Tz, Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+        Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
         Decimal128Array, Decimal256Array, DurationMicrosecondArray, DurationMillisecondArray,
         DurationNanosecondArray, DurationSecondArray, IntervalDayTimeArray,
         IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
         LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray, StringViewArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray,
+        TimestampSecondArray, timezone::Tz,
     },
     datatypes::{
-        DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,
-        Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+        DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+        Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
         Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-        TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+        TimeUnit, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     },
     temporal_conversions::{as_date, as_time},
 };
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::{
     array::{
-        timezone::Tz, Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+        Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
         Decimal128Array, Decimal256Array, DurationMicrosecondArray, DurationMillisecondArray,
         DurationNanosecondArray, DurationSecondArray, IntervalDayTimeArray,
         IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
         LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray, StringViewArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray,
+        TimestampSecondArray, timezone::Tz,
     },
     datatypes::{
-        DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,
-        Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+        DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+        Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
         Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-        TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+        TimeUnit, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     },
     temporal_conversions::{as_date, as_time},
 };

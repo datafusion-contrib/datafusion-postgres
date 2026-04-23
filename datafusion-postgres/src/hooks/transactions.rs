@@ -5,13 +5,13 @@ use datafusion::common::ParamValues;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::Statement;
-use pgwire::api::results::{Response, Tag};
 use pgwire::api::ClientInfo;
+use pgwire::api::results::{Response, Tag};
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::response::TransactionStatus;
 
-use crate::hooks::HookClient;
 use crate::QueryHook;
+use crate::hooks::HookClient;
 
 /// Hook for processing transaction related statements
 ///

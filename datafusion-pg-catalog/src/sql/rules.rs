@@ -136,10 +136,10 @@ impl AliasDuplicatedProjectionRewrite {
 
 impl SqlStatementRewriteRule for AliasDuplicatedProjectionRewrite {
     fn rewrite(&self, mut statement: Statement) -> Statement {
-        if let Statement::Query(query) = &mut statement {
-            if let SetExpr::Select(select) = query.body.as_mut() {
-                Self::rewrite_select_with_alias(select);
-            }
+        if let Statement::Query(query) = &mut statement
+            && let SetExpr::Select(select) = query.body.as_mut()
+        {
+            Self::rewrite_select_with_alias(select);
         }
 
         statement
@@ -459,12 +459,11 @@ impl RewriteRegclassCastToSubqueryVisitor {
             format: _,
             ..
         } = expr
+            && *kind == CastKind::DoubleColon
         {
-            if *kind == CastKind::DoubleColon {
-                let dt_lower = data_type.to_string().to_lowercase();
-                if dt_lower == "oid" || dt_lower == "pg_catalog.oid" {
-                    return self.is_regclass_cast(inner_expr);
-                }
+            let dt_lower = data_type.to_string().to_lowercase();
+            if dt_lower == "oid" || dt_lower == "pg_catalog.oid" {
+                return self.is_regclass_cast(inner_expr);
             }
         }
         false
@@ -478,11 +477,10 @@ impl RewriteRegclassCastToSubqueryVisitor {
             format: _,
             ..
         } = expr
+            && *kind == CastKind::DoubleColon
         {
-            if *kind == CastKind::DoubleColon {
-                let dt_lower = data_type.to_string().to_lowercase();
-                return dt_lower == "regclass" || dt_lower == "pg_catalog.regclass";
-            }
+            let dt_lower = data_type.to_string().to_lowercase();
+            return dt_lower == "regclass" || dt_lower == "pg_catalog.regclass";
         }
         false
     }
@@ -495,27 +493,22 @@ impl RewriteRegclassCastToSubqueryVisitor {
             format: _,
             ..
         } = expr
+            && *kind == CastKind::DoubleColon
         {
-            if *kind == CastKind::DoubleColon {
-                let dt_lower = data_type.to_string().to_lowercase();
-                if dt_lower == "oid" || dt_lower == "pg_catalog.oid" {
-                    if let Expr::Cast {
-                        kind: inner_kind,
-                        data_type: inner_data_type,
-                        expr: inner_inner_expr,
-                        format: _,
-                        ..
-                    } = inner_expr.as_ref()
-                    {
-                        if *inner_kind == CastKind::DoubleColon {
-                            let inner_dt_lower = inner_data_type.to_string().to_lowercase();
-                            if inner_dt_lower == "regclass"
-                                || inner_dt_lower == "pg_catalog.regclass"
-                            {
-                                return Some((**inner_inner_expr).clone());
-                            }
-                        }
-                    }
+            let dt_lower = data_type.to_string().to_lowercase();
+            if (dt_lower == "oid" || dt_lower == "pg_catalog.oid")
+                && let Expr::Cast {
+                    kind: inner_kind,
+                    data_type: inner_data_type,
+                    expr: inner_inner_expr,
+                    format: _,
+                    ..
+                } = inner_expr.as_ref()
+                && *inner_kind == CastKind::DoubleColon
+            {
+                let inner_dt_lower = inner_data_type.to_string().to_lowercase();
+                if inner_dt_lower == "regclass" || inner_dt_lower == "pg_catalog.regclass" {
+                    return Some((**inner_inner_expr).clone());
                 }
             }
         }
@@ -527,10 +520,10 @@ impl VisitorMut for RewriteRegclassCastToSubqueryVisitor {
     type Break = ();
 
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-        if self.is_regclass_to_oid_cast(expr) {
-            if let Some(inner_expr) = self.extract_inner_expr(expr) {
-                *expr = self.create_subquery(&inner_expr);
-            }
+        if self.is_regclass_to_oid_cast(expr)
+            && let Some(inner_expr) = self.extract_inner_expr(expr)
+        {
+            *expr = self.create_subquery(&inner_expr);
         }
         ControlFlow::Continue(())
     }
@@ -669,15 +662,15 @@ impl VisitorMut for PrependUnqualifiedPgTableNameVisitor {
     ) -> ControlFlow<Self::Break> {
         if let TableFactor::Table { name, args, .. } = table_factor {
             // not a table function
-            if args.is_none() && name.0.len() == 1 {
-                if let ObjectNamePart::Identifier(ident) = &name.0[0] {
-                    if ident.value.starts_with("pg_") {
-                        *name = ObjectName(vec![
-                            ObjectNamePart::Identifier(Ident::new("pg_catalog")),
-                            name.0[0].clone(),
-                        ]);
-                    }
-                }
+            if args.is_none()
+                && name.0.len() == 1
+                && let ObjectNamePart::Identifier(ident) = &name.0[0]
+                && ident.value.starts_with("pg_")
+            {
+                *name = ObjectName(vec![
+                    ObjectNamePart::Identifier(Ident::new("pg_catalog")),
+                    name.0[0].clone(),
+                ]);
             }
         }
 
@@ -718,47 +711,38 @@ impl VisitorMut for FixArrayLiteralVisitor {
             data_type,
             ..
         } = expr
+            && kind == &CastKind::DoubleColon
+            && let DataType::Array(arr) = data_type
         {
-            if kind == &CastKind::DoubleColon {
-                if let DataType::Array(arr) = data_type {
-                    // cast some to
-                    if let Expr::Value(ValueWithSpan {
-                        value: Value::SingleQuotedString(array_literal),
-                        ..
-                    }) = expr.as_ref()
-                    {
-                        let items =
-                            array_literal.trim_matches(|c| c == '{' || c == '}' || c == ' ');
-                        let items = items.split(',').map(|s| s.trim()).filter(|s| !s.is_empty());
+            // cast some to
+            if let Expr::Value(ValueWithSpan {
+                value: Value::SingleQuotedString(array_literal),
+                ..
+            }) = expr.as_ref()
+            {
+                let items = array_literal.trim_matches(|c| c == '{' || c == '}' || c == ' ');
+                let items = items.split(',').map(|s| s.trim()).filter(|s| !s.is_empty());
 
-                        let is_text = match arr {
-                            ArrayElemTypeDef::AngleBracket(dt) => Self::is_string_type(dt.as_ref()),
-                            ArrayElemTypeDef::SquareBracket(dt, _) => {
-                                Self::is_string_type(dt.as_ref())
-                            }
-                            ArrayElemTypeDef::Parenthesis(dt) => Self::is_string_type(dt.as_ref()),
-                            _ => false,
-                        };
+                let is_text = match arr {
+                    ArrayElemTypeDef::AngleBracket(dt) => Self::is_string_type(dt.as_ref()),
+                    ArrayElemTypeDef::SquareBracket(dt, _) => Self::is_string_type(dt.as_ref()),
+                    ArrayElemTypeDef::Parenthesis(dt) => Self::is_string_type(dt.as_ref()),
+                    _ => false,
+                };
 
-                        let elems = items
-                            .map(|s| {
-                                if is_text {
-                                    Expr::Value(
-                                        Value::SingleQuotedString(s.to_string()).with_empty_span(),
-                                    )
-                                } else {
-                                    Expr::Value(
-                                        Value::Number(s.to_string(), false).with_empty_span(),
-                                    )
-                                }
-                            })
-                            .collect();
-                        **expr = Expr::Array(Array {
-                            elem: elems,
-                            named: true,
-                        });
-                    }
-                }
+                let elems = items
+                    .map(|s| {
+                        if is_text {
+                            Expr::Value(Value::SingleQuotedString(s.to_string()).with_empty_span())
+                        } else {
+                            Expr::Value(Value::Number(s.to_string(), false).with_empty_span())
+                        }
+                    })
+                    .collect();
+                **expr = Expr::Array(Array {
+                    elem: elems,
+                    named: true,
+                });
             }
         }
 
@@ -794,14 +778,14 @@ impl VisitorMut for RemoveQualifierVisitor {
         table_factor: &mut TableFactor,
     ) -> ControlFlow<Self::Break> {
         // remove table function qualifier
-        if let TableFactor::Table { name, args, .. } = table_factor {
-            if args.is_some() {
-                //  multiple idents in name, which means it's a qualified table name
-                if name.0.len() > 1 {
-                    if let Some(last_ident) = name.0.pop() {
-                        *name = ObjectName(vec![last_ident]);
-                    }
-                }
+        if let TableFactor::Table { name, args, .. } = table_factor
+            && args.is_some()
+        {
+            //  multiple idents in name, which means it's a qualified table name
+            if name.0.len() > 1
+                && let Some(last_ident) = name.0.pop()
+            {
+                *name = ObjectName(vec![last_ident]);
             }
         }
         ControlFlow::Continue(())
@@ -828,10 +812,10 @@ impl VisitorMut for RemoveQualifierVisitor {
             Expr::Function(function) => {
                 // remove qualifier from pg_catalog.function
                 let name = &mut function.name;
-                if name.0.len() > 1 {
-                    if let Some(last_ident) = name.0.pop() {
-                        *name = ObjectName(vec![last_ident]);
-                    }
+                if name.0.len() > 1
+                    && let Some(last_ident) = name.0.pop()
+                {
+                    *name = ObjectName(vec![last_ident]);
                 }
             }
 
@@ -860,19 +844,20 @@ impl VisitorMut for CurrentUserVariableToSessionUserFunctionCallVisitor {
     type Break = ();
 
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-        if let Expr::Identifier(ident) = expr {
-            if ident.quote_style.is_none() && ident.value.to_lowercase() == "current_user" {
-                *expr = Expr::Function(Function {
-                    name: ObjectName::from(vec![Ident::new("session_user")]),
-                    args: FunctionArguments::None,
-                    uses_odbc_syntax: false,
-                    parameters: FunctionArguments::None,
-                    filter: None,
-                    null_treatment: None,
-                    over: None,
-                    within_group: vec![],
-                });
-            }
+        if let Expr::Identifier(ident) = expr
+            && ident.quote_style.is_none()
+            && ident.value.to_lowercase() == "current_user"
+        {
+            *expr = Expr::Function(Function {
+                name: ObjectName::from(vec![Ident::new("session_user")]),
+                args: FunctionArguments::None,
+                uses_odbc_syntax: false,
+                parameters: FunctionArguments::None,
+                filter: None,
+                null_treatment: None,
+                over: None,
+                within_group: vec![],
+            });
         }
 
         if let Expr::Function(func) = expr {
@@ -916,10 +901,10 @@ impl VisitorMut for FixCollateVisitor {
                 *expr = inner.as_ref().clone();
             }
             Expr::BinaryOp { op, .. } => {
-                if let BinaryOperator::PGCustomBinaryOperator(ops) = op {
-                    if *ops == ["pg_catalog", "~"] {
-                        *op = BinaryOperator::PGRegexMatch;
-                    }
+                if let BinaryOperator::PGCustomBinaryOperator(ops) = op
+                    && *ops == ["pg_catalog", "~"]
+                {
+                    *op = BinaryOperator::PGRegexMatch;
                 }
             }
             _ => {}
@@ -1081,20 +1066,16 @@ impl VisitorMut for FixVersionColumnNameVisitor {
     fn pre_visit_query(&mut self, query: &mut Query) -> ControlFlow<Self::Break> {
         if let SetExpr::Select(select) = query.body.as_mut() {
             for projection in &mut select.projection {
-                if let SelectItem::UnnamedExpr(Expr::Function(f)) = projection {
-                    if f.name.0.len() == 1 {
-                        if let ObjectNamePart::Identifier(part) = &f.name.0[0] {
-                            if part.value == "version" {
-                                if let FunctionArguments::List(args) = &f.args {
-                                    if args.args.is_empty() {
-                                        *projection = SelectItem::ExprWithAlias {
-                                            expr: Expr::Function(f.clone()),
-                                            alias: Ident::new("version"),
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                if let SelectItem::UnnamedExpr(Expr::Function(f)) = projection
+                    && f.name.0.len() == 1
+                    && let ObjectNamePart::Identifier(part) = &f.name.0[0]
+                    && part.value == "version"
+                    && let FunctionArguments::List(args) = &f.args
+                    && args.args.is_empty()
+                {
+                    *projection = SelectItem::ExprWithAlias {
+                        expr: Expr::Function(f.clone()),
+                        alias: Ident::new("version"),
                     }
                 }
             }
@@ -1201,7 +1182,8 @@ mod tests {
             "SELECT n.oid, n.*, d.description FROM pg_catalog.pg_namespace n LEFT OUTER JOIN pg_catalog.pg_description d ON d.objoid = n.oid AND d.objsubid = 0 AND d.classoid = 'pg_namespace' ORDER BY n.nspsname"
         );
 
-        assert_rewrite!(&rules,
+        assert_rewrite!(
+            &rules,
             "SELECT i.*,i.indkey as keys,c.relname,c.relnamespace,c.relam,c.reltablespace,tc.relname as tabrelname,dsc.description FROM pg_catalog.pg_index i INNER JOIN pg_catalog.pg_class c ON c.oid=i.indexrelid INNER JOIN pg_catalog.pg_class tc ON tc.oid=i.indrelid LEFT OUTER JOIN pg_catalog.pg_description dsc ON i.indexrelid=dsc.objoid WHERE i.indrelid=1 ORDER BY tabrelname, c.relname",
             "SELECT i.*, i.indkey AS keys, c.relname, c.relnamespace, c.relam, c.reltablespace, tc.relname AS tabrelname, dsc.description FROM pg_catalog.pg_index i INNER JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid INNER JOIN pg_catalog.pg_class tc ON tc.oid = i.indrelid LEFT OUTER JOIN pg_catalog.pg_description dsc ON i.indexrelid = dsc.objoid WHERE i.indrelid = 1 ORDER BY tabrelname, c.relname"
         );
@@ -1387,7 +1369,11 @@ mod tests {
     fn test_collate_fix() {
         let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![Arc::new(FixCollate)];
 
-        assert_rewrite!(&rules, "SELECT c.oid, c.relname FROM pg_catalog.pg_class c WHERE c.relname OPERATOR(pg_catalog.~) '^(tablename)$' COLLATE pg_catalog.default AND pg_catalog.pg_table_is_visible(c.oid) ORDER BY 2, 3;", "SELECT c.oid, c.relname FROM pg_catalog.pg_class c WHERE c.relname ~ '^(tablename)$' AND pg_catalog.pg_table_is_visible(c.oid) ORDER BY 2, 3");
+        assert_rewrite!(
+            &rules,
+            "SELECT c.oid, c.relname FROM pg_catalog.pg_class c WHERE c.relname OPERATOR(pg_catalog.~) '^(tablename)$' COLLATE pg_catalog.default AND pg_catalog.pg_table_is_visible(c.oid) ORDER BY 2, 3;",
+            "SELECT c.oid, c.relname FROM pg_catalog.pg_class c WHERE c.relname ~ '^(tablename)$' AND pg_catalog.pg_table_is_visible(c.oid) ORDER BY 2, 3"
+        );
     }
 
     #[test]
@@ -1395,9 +1381,11 @@ mod tests {
         let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
             vec![Arc::new(RemoveSubqueryFromProjection)];
 
-        assert_rewrite!(&rules,
+        assert_rewrite!(
+            &rules,
             "SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), (SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true) FROM pg_catalog.pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef), a.attnotnull, (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type t WHERE c.oid = a.attcollation AND t.oid = a.atttypid AND a.attcollation <> t.typcollation LIMIT 1) AS attcollation, a.attidentity, a.attgenerated FROM pg_catalog.pg_attribute a WHERE a.attrelid = '16384' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum;",
-            "SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), NULL, a.attnotnull, NULL AS attcollation, a.attidentity, a.attgenerated FROM pg_catalog.pg_attribute a WHERE a.attrelid = '16384' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum");
+            "SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), NULL, a.attnotnull, NULL AS attcollation, a.attidentity, a.attgenerated FROM pg_catalog.pg_attribute a WHERE a.attrelid = '16384' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum"
+        );
     }
 
     #[test]
@@ -1405,7 +1393,8 @@ mod tests {
         let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
             vec![Arc::new(RemoveSubqueryFromProjection)];
 
-        assert_rewrite!(&rules,
+        assert_rewrite!(
+            &rules,
             "SELECT id, (SELECT COUNT(*) FROM pg_catalog.pg_attribute) AS attr_count FROM pg_catalog.pg_class",
             "SELECT id, (SELECT COUNT(*) FROM pg_catalog.pg_attribute LIMIT 1) AS attr_count FROM pg_catalog.pg_class"
         );
@@ -1416,7 +1405,8 @@ mod tests {
         let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
             vec![Arc::new(RemoveSubqueryFromProjection)];
 
-        assert_rewrite!(&rules,
+        assert_rewrite!(
+            &rules,
             "SELECT a.attname, (SELECT COUNT(*) FROM pg_catalog.pg_attribute WHERE attrelid = a.oid) AS count FROM pg_catalog.pg_attribute a",
             "SELECT a.attname, NULL AS count FROM pg_catalog.pg_attribute a"
         );
@@ -1427,7 +1417,8 @@ mod tests {
         let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
             vec![Arc::new(RemoveSubqueryFromProjection)];
 
-        assert_rewrite!(&rules,
+        assert_rewrite!(
+            &rules,
             "SELECT id, (SELECT attname FROM pg_catalog.pg_attribute LIMIT 1) AS first_attr FROM pg_catalog.pg_class",
             "SELECT id, (SELECT attname FROM pg_catalog.pg_attribute LIMIT 1) AS first_attr FROM pg_catalog.pg_class"
         );

@@ -227,10 +227,11 @@ fn needs_quoting(ident: &str) -> bool {
 
     // Check if identifier starts with a letter or underscore and contains only letters, digits, underscores
     let mut chars = ident.chars();
-    if let Some(first_char) = chars.next() {
-        if !first_char.is_alphabetic() && first_char != '_' {
-            return true;
-        }
+    if let Some(first_char) = chars.next()
+        && !first_char.is_alphabetic()
+        && first_char != '_'
+    {
+        return true;
     }
 
     // Check remaining characters

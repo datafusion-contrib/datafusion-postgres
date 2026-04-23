@@ -13,19 +13,18 @@ fn extract_placeholder_cast_types(plan: &LogicalPlan) -> Result<HashMap<String, 
     plan.apply(|node| {
         for expr in node.expressions() {
             let _ = expr.apply(|e| {
-                if let Expr::Cast(cast) = e {
-                    if let Expr::Placeholder(ph) = &*cast.expr {
-                        placeholder_types.insert(ph.id.clone(), Some(cast.data_type.clone()));
-                        casted_placeholders.insert(ph.id.clone());
-                    }
+                if let Expr::Cast(cast) = e
+                    && let Expr::Placeholder(ph) = &*cast.expr
+                {
+                    placeholder_types.insert(ph.id.clone(), Some(cast.data_type.clone()));
+                    casted_placeholders.insert(ph.id.clone());
                 }
 
-                if let Expr::Placeholder(ph) = e {
-                    if !casted_placeholders.contains(&ph.id)
-                        && !placeholder_types.contains_key(&ph.id)
-                    {
-                        placeholder_types.insert(ph.id.clone(), None);
-                    }
+                if let Expr::Placeholder(ph) = e
+                    && !casted_placeholders.contains(&ph.id)
+                    && !placeholder_types.contains_key(&ph.id)
+                {
+                    placeholder_types.insert(ph.id.clone(), None);
                 }
 
                 Ok(TreeNodeRecursion::Continue)

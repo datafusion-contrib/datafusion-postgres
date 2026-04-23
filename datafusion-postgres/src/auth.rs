@@ -567,11 +567,11 @@ impl AuthSource for SimpleAuthSource {
         let username = login.user().unwrap_or("anonymous");
 
         // Check if user exists and can login
-        if let Some(user) = self.auth_manager.get_user(username).await {
-            if user.can_login {
-                // Return empty password for now (no authentication required)
-                return Ok(Password::new(None, vec![]));
-            }
+        if let Some(user) = self.auth_manager.get_user(username).await
+            && user.can_login
+        {
+            // Return empty password for now (no authentication required)
+            return Ok(Password::new(None, vec![]));
         }
 
         // For postgres user, always allow
@@ -619,10 +619,12 @@ mod tests {
 
         // Test postgres user authentication
         assert!(auth_manager.authenticate("postgres", "").await.unwrap());
-        assert!(!auth_manager
-            .authenticate("nonexistent", "password")
-            .await
-            .unwrap());
+        assert!(
+            !auth_manager
+                .authenticate("nonexistent", "password")
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

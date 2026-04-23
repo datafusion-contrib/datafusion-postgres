@@ -7,9 +7,9 @@ use arrow_schema::extension::ExtensionType;
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::{datatypes::*, record_batch::RecordBatch};
 
+use pgwire::api::Type;
 use pgwire::api::portal::Format;
 use pgwire::api::results::FieldInfo;
-use pgwire::api::Type;
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::messages::data::DataRow;
 use pgwire::types::format::FormatOptions;

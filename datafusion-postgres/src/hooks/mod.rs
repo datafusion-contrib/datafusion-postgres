@@ -9,8 +9,8 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::Statement;
 use futures::Sink;
-use pgwire::api::results::Response;
 use pgwire::api::ClientInfo;
+use pgwire::api::results::Response;
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::PgWireBackendMessage;
 
