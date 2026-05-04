@@ -16,12 +16,16 @@ use pgwire::api::portal::{Format, Portal};
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
 use pgwire::api::results::{FieldInfo, Response, Tag};
 use pgwire::api::stmt::QueryParser;
-use pgwire::api::{ClientInfo, ConnectionManager, ErrorHandler, PgWireServerHandlers, Type};
+use pgwire::api::store::PortalStore;
+use pgwire::api::{
+    ClientInfo, ClientPortalStore, ConnectionManager, ErrorHandler, PgWireServerHandlers, Type,
+};
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::PgWireBackendMessage;
 use pgwire::types::format::FormatOptions;
 
 use crate::hooks::QueryHook;
+use crate::hooks::cursor::CursorStatementHook;
 use crate::hooks::set_show::SetShowHook;
 use crate::hooks::transactions::TransactionStatementHook;
 use crate::{client, planner};
@@ -121,8 +125,11 @@ pub struct DfSessionService {
 
 impl DfSessionService {
     pub fn new(session_context: Arc<SessionContext>) -> DfSessionService {
-        let hooks: Vec<Arc<dyn QueryHook>> =
-            vec![Arc::new(SetShowHook), Arc::new(TransactionStatementHook)];
+        let hooks: Vec<Arc<dyn QueryHook>> = vec![
+            Arc::new(CursorStatementHook),
+            Arc::new(SetShowHook),
+            Arc::new(TransactionStatementHook),
+        ];
         Self::new_with_hooks(session_context, hooks)
     }
 
@@ -147,11 +154,18 @@ impl DfSessionService {
 impl SimpleQueryHandler for DfSessionService {
     async fn do_query<C>(&self, client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
     where
-        C: ClientInfo + futures::Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C: ClientInfo
+            + ClientPortalStore
+            + futures::Sink<PgWireBackendMessage>
+            + Unpin
+            + Send
+            + Sync,
+        C::PortalStore: PortalStore,
         C::Error: std::fmt::Debug,
         PgWireError: From<<C as futures::Sink<PgWireBackendMessage>>::Error>,
     {
         log::debug!("Received query: {query}");
+
         let statements = self
             .parser
             .sql_parser
@@ -235,7 +249,13 @@ impl ExtendedQueryHandler for DfSessionService {
         _max_rows: usize,
     ) -> PgWireResult<Response>
     where
-        C: ClientInfo + futures::Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C: ClientInfo
+            + ClientPortalStore
+            + futures::Sink<PgWireBackendMessage>
+            + Unpin
+            + Send
+            + Sync,
+        C::PortalStore: PortalStore,
         C::Error: std::fmt::Debug,
         PgWireError: From<<C as futures::Sink<PgWireBackendMessage>>::Error>,
     {
@@ -635,5 +655,233 @@ mod tests {
             .any(|m| matches!(m, PgWireBackendMessage::ParameterStatus(_)));
 
         assert!(!has_ps, "statement_timeout should not send ParameterStatus");
+    }
+
+    fn assert_execution_tag(response: &Response, expected: &str) {
+        match response {
+            Response::Execution(tag) => {
+                let cc = pgwire::messages::response::CommandComplete::from(tag.clone());
+                assert_eq!(cc.tag, expected, "Unexpected execution tag");
+            }
+            other => panic!("Expected Execution response, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_declare_fetch_close_cursor() {
+        let service = crate::testing::setup_handlers();
+        let mut client = MockClient::new();
+
+        let responses = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "DECLARE test_cursor CURSOR FOR SELECT 1 AS col",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(responses.len(), 1);
+        assert_execution_tag(&responses[0], "DECLARE CURSOR");
+
+        let responses = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "FETCH NEXT FROM test_cursor",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(responses.len(), 1);
+        assert!(
+            matches!(&responses[0], Response::Query(_)),
+            "Expected Query response for FETCH"
+        );
+
+        let responses = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "FETCH NEXT FROM test_cursor",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(responses.len(), 1);
+        assert_execution_tag(&responses[0], "FETCH 0");
+
+        let responses = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "CLOSE test_cursor",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(responses.len(), 1);
+        assert_execution_tag(&responses[0], "CLOSE CURSOR");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_nonexistent_cursor() {
+        let service = crate::testing::setup_handlers();
+        let mut client = MockClient::new();
+
+        let result = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "FETCH NEXT FROM nonexistent",
+        )
+        .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_close_all_portals() {
+        let service = crate::testing::setup_handlers();
+        let mut client = MockClient::new();
+
+        <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "DECLARE c1 CURSOR FOR SELECT 1",
+        )
+        .await
+        .unwrap();
+
+        <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "DECLARE c2 CURSOR FOR SELECT 2",
+        )
+        .await
+        .unwrap();
+
+        let responses =
+            <DfSessionService as SimpleQueryHandler>::do_query(&service, &mut client, "CLOSE ALL")
+                .await
+                .unwrap();
+
+        assert!(matches!(&responses[0], Response::Execution(_)),);
+
+        let result = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "FETCH NEXT FROM c1",
+        )
+        .await;
+        assert!(result.is_err(), "c1 should be closed");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_forward_n() {
+        let service = crate::testing::setup_handlers();
+        let mut client = MockClient::new();
+
+        <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "CREATE TABLE nums AS SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5",
+        )
+        .await
+        .unwrap();
+
+        <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "DECLARE mycur CURSOR FOR SELECT n FROM nums ORDER BY n",
+        )
+        .await
+        .unwrap();
+
+        let responses = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "FETCH FORWARD 3 FROM mycur",
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(&responses[0], Response::Query(_)),
+            "Expected Query response for FORWARD 3"
+        );
+
+        let responses = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "FETCH FORWARD ALL FROM mycur",
+        )
+        .await
+        .unwrap();
+
+        let resp_desc = match &responses[0] {
+            Response::Query(_) => "Query".to_string(),
+            Response::Execution(tag) => {
+                let cc = pgwire::messages::response::CommandComplete::from(tag.clone());
+                format!("Execution({})", cc.tag)
+            }
+            other => format!("{:?}", other),
+        };
+        assert!(
+            matches!(&responses[0], Response::Query(_)),
+            "Expected Query response for remaining rows, got: {resp_desc}"
+        );
+
+        let responses = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "FETCH NEXT FROM mycur",
+        )
+        .await
+        .unwrap();
+
+        assert_execution_tag(&responses[0], "FETCH 0");
+    }
+
+    #[tokio::test]
+    async fn test_scroll_cursor_error() {
+        let service = crate::testing::setup_handlers();
+        let mut client = MockClient::new();
+
+        <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "DECLARE mycur CURSOR FOR SELECT 1",
+        )
+        .await
+        .unwrap();
+
+        let result = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "FETCH PRIOR FROM mycur",
+        )
+        .await;
+
+        assert!(result.is_err(), "PRIOR should fail on forward-only cursor");
+    }
+
+    #[tokio::test]
+    async fn test_move_cursor() {
+        let service = crate::testing::setup_handlers();
+        let mut client = MockClient::new();
+
+        <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "DECLARE mycur CURSOR FOR SELECT generate_series(1, 5) AS n",
+        )
+        .await
+        .unwrap();
+
+        let responses = <DfSessionService as SimpleQueryHandler>::do_query(
+            &service,
+            &mut client,
+            "FETCH FORWARD 3 FROM mycur",
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(&responses[0], Response::Query(_)));
     }
 }

@@ -1,6 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::sql::sqlparser;
 use datafusion_pg_catalog::pg_catalog::setup_pg_catalog;
 use futures::Sink;
 use pgwire::{
@@ -29,10 +31,12 @@ pub fn setup_handlers() -> DfSessionService {
     DfSessionService::new(Arc::new(session_context))
 }
 
+type DfStatement = (String, Option<(sqlparser::ast::Statement, LogicalPlan)>);
+
 #[derive(Debug, Default)]
 pub struct MockClient {
     metadata: HashMap<String, String>,
-    portal_store: MemPortalStore<String>,
+    portal_store: MemPortalStore<DfStatement>,
     pub sent_messages: Vec<PgWireBackendMessage>,
     session_extensions: SessionExtensions,
 }
@@ -110,7 +114,7 @@ impl ClientInfo for MockClient {
 }
 
 impl ClientPortalStore for MockClient {
-    type PortalStore = MemPortalStore<String>;
+    type PortalStore = MemPortalStore<DfStatement>;
     fn portal_store(&self) -> &Self::PortalStore {
         &self.portal_store
     }
