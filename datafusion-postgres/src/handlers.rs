@@ -706,7 +706,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(responses.len(), 1);
-        assert_execution_tag(&responses[0], "FETCH 0");
+        assert!(
+            matches!(&responses[0], Response::Query(_)),
+            "Expected Query response for empty FETCH"
+        );
 
         let responses = <DfSessionService as SimpleQueryHandler>::do_query(
             &service,
@@ -835,7 +838,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert_execution_tag(&responses[0], "FETCH 0");
+        assert!(
+            matches!(&responses[0], Response::Query(_)),
+            "Expected Query response for empty FETCH"
+        );
     }
 
     #[tokio::test]

@@ -8,7 +8,7 @@ use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::ast::{CloseCursor, DeclareType, FetchDirection};
 use pgwire::api::ClientInfo;
 use pgwire::api::portal::{Format, Portal};
-use pgwire::api::results::{QueryResponse, Response, Tag};
+use pgwire::api::results::{Response, Tag};
 use pgwire::api::stmt::StoredStatement;
 use pgwire::api::store::{MemPortalStore, PortalStore};
 use pgwire::error::{PgWireError, PgWireResult};
@@ -197,17 +197,7 @@ async fn handle_fetch(
 
     let fetch_result = portal.fetch(max_rows.unwrap_or(0)).await?;
 
-    if fetch_result.rows.is_empty() {
-        return Ok(Response::Execution(Tag::new("FETCH").with_rows(0)));
-    }
-
-    let mut response = QueryResponse::new(
-        fetch_result.row_schema,
-        futures::stream::iter(fetch_result.rows.into_iter().map(Ok)),
-    );
-    response.set_command_tag("FETCH");
-
-    Ok(Response::Query(response))
+    Ok(Response::Query(fetch_result.response))
 }
 
 fn handle_close(
