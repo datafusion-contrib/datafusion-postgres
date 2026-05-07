@@ -5,11 +5,14 @@ set -e
 # Function to cleanup processes
 cleanup() {
     echo "🧹 Cleaning up processes..."
-    for pid in $CSV_PID $TRANSACTION_PID $PARQUET_PID $RBAC_PID $SSL_PID $POSTGIS_PID; do
+    for pid in $CSV_PID $TRANSACTION_PID $PARQUET_PID $RBAC_PID $SSL_PID $POSTGIS_PID $FDW_PG_PID; do
         if [ ! -z "$pid" ]; then
             kill -9 $pid 2>/dev/null || true
         fi
     done
+    if [ ! -z "$FDW_PG_CONTAINER" ]; then
+        podman rm -f $FDW_PG_CONTAINER 2>/dev/null || true
+    fi
 }
 
 # Trap to cleanup on exit
@@ -80,9 +83,62 @@ fi
 kill -9 $CSV_PID 2>/dev/null || true
 sleep 3
 
-# Test 2: Transaction support
+# Test 2: Foreign Data Wrapper (postgres_fdw)
 echo ""
-echo "🔐 Test 2: Transaction Support"
+echo "🌍 Test 2: Foreign Data Wrapper (postgres_fdw)"
+echo "-----------------------------------------------"
+
+# Start a PostgreSQL container for the FDW test
+echo "Starting PostgreSQL container..."
+FDW_PG_CONTAINER=$(podman run -d \
+    -e POSTGRES_USER=postgres \
+    -e POSTGRES_DB=fdw_test \
+    -p 5435:5432 \
+    docker.io/library/postgres:17 2>/dev/null || echo "")
+
+if [ -z "$FDW_PG_CONTAINER" ]; then
+    echo "⚠️  Could not start PostgreSQL container, skipping FDW test"
+else
+    echo "Waiting for PostgreSQL container to be ready..."
+    sleep 10
+
+    # Start datafusion-postgres with CSV data for FDW target
+    wait_for_port 5433
+    ../target/debug/datafusion-postgres-cli -p 5433 --csv delhi:delhiclimate.csv &
+    FDW_PID=$!
+    sleep 5
+
+    if ! ps -p $FDW_PID > /dev/null 2>&1; then
+        echo "❌ DataFusion server for FDW test failed to start"
+        podman rm -f $FDW_PG_CONTAINER 2>/dev/null || true
+        exit 1
+    fi
+
+    # Run FDW test using the container's psql for setup, then python for validation
+    export PGHOST=127.0.0.1
+    export PGPORT=5435
+    export PGUSER=postgres
+    export PGDATABASE=fdw_test
+    export DF_PORT=5433
+
+    if python3 test_fdw.py; then
+        echo "✅ FDW test passed"
+    else
+        echo "❌ FDW test failed"
+        kill -9 $FDW_PID 2>/dev/null || true
+        podman rm -f $FDW_PG_CONTAINER 2>/dev/null || true
+        exit 1
+    fi
+
+    kill -9 $FDW_PID 2>/dev/null || true
+    podman rm -f $FDW_PG_CONTAINER 2>/dev/null || true
+    FDW_PG_CONTAINER=""
+    sleep 3
+fi
+
+# Test 3: Transaction support
+echo ""
+echo "🔐 Test 3: Transaction Support"
 echo "------------------------------"
 wait_for_port 5433
 ../target/debug/datafusion-postgres-cli -p 5433 --csv delhi:delhiclimate.csv &
@@ -100,9 +156,9 @@ fi
 kill -9 $TRANSACTION_PID 2>/dev/null || true
 sleep 3
 
-# Test 3: Parquet data loading and advanced data types
+# Test 4: Parquet data loading and advanced data types
 echo ""
-echo "📦 Test 3: Enhanced Parquet Data Loading & Advanced Data Types"
+echo "📦 Test 4: Enhanced Parquet Data Loading & Advanced Data Types"
 echo "--------------------------------------------------------------"
 wait_for_port 5434
 ../target/debug/datafusion-postgres-cli -p 5434 --parquet all_types:all_types.parquet &
@@ -177,6 +233,7 @@ echo "=========================================="
 echo ""
 echo "📈 Test Summary:"
 echo "  ✅ Enhanced CSV data loading with PostgreSQL compatibility"
+echo "  ✅ Foreign Data Wrapper (postgres_fdw) support"
 echo "  ✅ Complete transaction support (BEGIN/COMMIT/ROLLBACK)"
 echo "  ✅ Enhanced Parquet data loading with advanced data types"
 echo "  ✅ Array types and complex data type support"
