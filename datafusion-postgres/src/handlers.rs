@@ -667,6 +667,20 @@ mod tests {
         }
     }
 
+    async fn assert_query_response_empty(response: &mut Response) {
+        use futures::StreamExt;
+
+        let Response::Query(qr) = response else {
+            panic!("Expected Query response, got: {response:?}");
+        };
+
+        let mut count = 0;
+        while qr.data_rows().next().await.is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 0, "Expected no rows from exhausted cursor");
+    }
+
     #[tokio::test]
     async fn test_declare_fetch_close_cursor() {
         let service = crate::testing::setup_handlers();
@@ -697,7 +711,7 @@ mod tests {
             "Expected Query response for FETCH"
         );
 
-        let responses = <DfSessionService as SimpleQueryHandler>::do_query(
+        let mut responses = <DfSessionService as SimpleQueryHandler>::do_query(
             &service,
             &mut client,
             "FETCH NEXT FROM test_cursor",
@@ -706,10 +720,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(responses.len(), 1);
-        assert!(
-            matches!(&responses[0], Response::Query(_)),
-            "Expected Query response for empty FETCH"
-        );
+        assert_query_response_empty(&mut responses[0]).await;
 
         let responses = <DfSessionService as SimpleQueryHandler>::do_query(
             &service,
@@ -830,7 +841,7 @@ mod tests {
             "Expected Query response for remaining rows, got: {resp_desc}"
         );
 
-        let responses = <DfSessionService as SimpleQueryHandler>::do_query(
+        let mut responses = <DfSessionService as SimpleQueryHandler>::do_query(
             &service,
             &mut client,
             "FETCH NEXT FROM mycur",
@@ -838,10 +849,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(
-            matches!(&responses[0], Response::Query(_)),
-            "Expected Query response for empty FETCH"
-        );
+        assert_query_response_empty(&mut responses[0]).await;
     }
 
     #[tokio::test]
