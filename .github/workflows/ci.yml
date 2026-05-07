@@ -74,19 +74,14 @@ jobs:
     needs: [test]
     steps:
     - uses: actions/checkout@v6
-    - uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        override: true
-    - run: |
-        pip install psycopg
-    - name: Install podman
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y podman
+    - uses: cachix/install-nix-action@v31
+    - name: Diagnose podman
+      run: nix develop --command podman info 2>&1 || true
+    - name: Test podman run
+      run: nix develop --command podman run --rm docker.io/library/hello-world 2>&1 || true
     - run: |
         cd tests-integration
-        ./test.sh
+        nix develop --command bash test.sh
 
   msrv:
     name: MSRV
