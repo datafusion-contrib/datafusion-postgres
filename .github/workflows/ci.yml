@@ -75,10 +75,6 @@ jobs:
     steps:
     - uses: actions/checkout@v6
     - uses: cachix/install-nix-action@v31
-    - name: Diagnose podman
-      run: nix develop --command podman info 2>&1 || true
-    - name: Test podman run
-      run: nix develop --command podman run --rm docker.io/library/hello-world 2>&1 || true
     - run: |
         cd tests-integration
         nix develop --command bash test.sh
