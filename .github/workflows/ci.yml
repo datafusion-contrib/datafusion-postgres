@@ -74,15 +74,12 @@ jobs:
     needs: [test]
     steps:
     - uses: actions/checkout@v6
-    - uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        override: true
-    - run: |
-        pip install psycopg
+    - uses: cachix/install-nix-action@v31
+    - name: Initialize podman
+      run: nix develop --command podman info >/dev/null 2>&1 || true
     - run: |
         cd tests-integration
-        ./test.sh
+        nix develop --command bash test.sh
 
   msrv:
     name: MSRV

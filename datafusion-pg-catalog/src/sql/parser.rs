@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::sql::sqlparser::ast::Statement;
 use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
+use datafusion::sql::sqlparser::keywords::Keyword;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::parser::ParserError;
 use datafusion::sql::sqlparser::tokenizer::Token;
@@ -247,10 +248,19 @@ impl PostgresCompatibilityParser {
 
         // Get token values (without spans) and filter out only whitespace
         // Keep semicolons as they separate statements
+        // Also rewrite ABORT to ROLLBACK for postgres compatibility
+        // remove this when https://github.com/apache/datafusion-sqlparser-rs/pull/2332 is ready
         let filtered_tokens: Vec<Token> = tokens
             .iter()
             .map(|t| t.token.clone())
             .filter(|t| !matches!(t, Token::Whitespace(_)))
+            .map(|t| {
+                if matches!(&t, Token::Word(w) if w.keyword == Keyword::ABORT) {
+                    Token::make_keyword("ROLLBACK")
+                } else {
+                    t
+                }
+            })
             .collect();
 
         // Handle empty input

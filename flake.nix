@@ -43,6 +43,8 @@
             cargo-nextest
             cargo-release
             curl
+            lsof
+            podman
             pythonEnv
             postgresql_18.out
           ];
