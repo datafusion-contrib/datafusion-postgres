@@ -29,14 +29,13 @@ impl<C: CatalogInfo> PgNamespaceTable<C> {
         oid_counter: Arc<AtomicU32>,
         oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
     ) -> Self {
-        // Define the schema for pg_namespace
-        // This matches the columns from PostgreSQL's pg_namespace
         let schema = Arc::new(Schema::new(vec![
-            Field::new("oid", DataType::Int32, false), // Object identifier
-            Field::new("nspname", DataType::Utf8, false), // Name of the namespace (schema)
-            Field::new("nspowner", DataType::Int32, false), // Owner of the namespace
-            Field::new("nspacl", DataType::Utf8, true), // Access privileges
-            Field::new("options", DataType::Utf8, true), // Schema-level options
+            Field::new("oid", DataType::Int32, false),
+            Field::new("xmin", DataType::Int32, true),
+            Field::new("nspname", DataType::Utf8, false),
+            Field::new("nspowner", DataType::Int32, false),
+            Field::new("nspacl", DataType::Utf8, true),
+            Field::new("options", DataType::Utf8, true),
         ]));
 
         Self {
@@ -47,10 +46,9 @@ impl<C: CatalogInfo> PgNamespaceTable<C> {
         }
     }
 
-    /// Generate record batches based on the current state of the catalog
     async fn get_data(this: Self) -> Result<RecordBatch> {
-        // Vectors to store column data
         let mut oids = Vec::new();
+        let mut xmins = Vec::new();
         let mut nspnames = Vec::new();
         let mut nspowners = Vec::new();
         let mut nspacls: Vec<Option<String>> = Vec::new();
@@ -74,6 +72,7 @@ impl<C: CatalogInfo> PgNamespaceTable<C> {
                     schema_oid_cache.insert(cache_key, schema_oid);
 
                     oids.push(schema_oid as i32);
+                    xmins.push(Some(1i32));
                     nspnames.push(schema_name.clone());
                     nspowners.push(10); // Default owner
                     nspacls.push(None);
@@ -92,9 +91,9 @@ impl<C: CatalogInfo> PgNamespaceTable<C> {
         // add new schema cache
         oid_cache.extend(schema_oid_cache);
 
-        // Create Arrow arrays from the collected data
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(Int32Array::from(oids)),
+            Arc::new(Int32Array::from(xmins)),
             Arc::new(StringArray::from(nspnames)),
             Arc::new(Int32Array::from(nspowners)),
             Arc::new(StringArray::from_iter(nspacls.into_iter())),

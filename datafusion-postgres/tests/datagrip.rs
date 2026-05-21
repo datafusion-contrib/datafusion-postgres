@@ -1,7 +1,6 @@
-mod common;
-
-use common::*;
 use pgwire::api::query::SimpleQueryHandler;
+
+use datafusion_postgres::testing::*;
 
 const DATAGRIP_QUERIES: &[&str] = &[
     "SET extra_float_digits = 3",
@@ -74,6 +73,7 @@ const DATAGRIP_QUERIES: &[&str] = &[
     r#"SELECT e.typdelim FROM pg_catalog.pg_type t, pg_catalog.pg_type e WHERE t.oid = '1034' and t.typelem = e.oid"#,
     r#" SELECT e.oid, n.nspname = ANY(current_schemas(true)), n.nspname, e.typname FROM pg_catalog.pg_type t JOIN pg_catalog.pg_type e ON t.typelem = e.oid JOIN pg_catalog.pg_namespace n ON t.typnamespace = n.oid WHERE t.oid = '1034'"#,
     r#"SELECT typinput='pg_catalog.array_in'::regproc as is_array, typtype, typname, pg_type.oid   FROM pg_catalog.pg_type   LEFT JOIN (select ns.oid as nspoid, ns.nspname, r.r           from pg_namespace as ns           join ( select s.r, (current_schemas(false))[s.r] as nspname                    from generate_series(1, array_upper(current_schemas(false), 1)) as s(r) ) as r          using ( nspname )        ) as sp     ON sp.nspoid = typnamespace  WHERE pg_type.oid = '1033'  ORDER BY sp.r, pg_type.oid DESC"#,
+    r#"select ssl from pg_stat_ssl where pid = pg_backend_pid()"#,
 ];
 
 #[tokio::test]
