@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use datafusion::arrow::array::{
-    ArrayRef, BooleanArray, Int32Array, ListArray, RecordBatch, StringArray,
+    ArrayRef, BooleanArray, Int32Array, ListBuilder, RecordBatch, StringArray, StringBuilder,
 };
-use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::error::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -52,9 +52,9 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
             Field::new("daticurules", DataType::Utf8, true),
             Field::new(
                 "datacl",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
                 true,
-            ), // Access privileges
+            ),
         ]));
 
         Self {
@@ -84,7 +84,7 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
         let mut dattablespaces = Vec::new();
         let mut daticulocales: Vec<Option<String>> = Vec::new();
         let mut daticurules: Vec<Option<String>> = Vec::new();
-        let mut datacls: Vec<Option<Vec<Option<i32>>>> = Vec::new();
+        let mut datacls: Vec<Option<Vec<Option<String>>>> = Vec::new();
 
         // to store all schema-oid mapping temporarily before adding to global oid cache
         let mut catalog_oid_cache = HashMap::new();
@@ -169,9 +169,21 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
             Arc::new(Int32Array::from(dattablespaces)),
             Arc::new(StringArray::from(daticulocales)),
             Arc::new(StringArray::from(daticurules)),
-            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
-                datacls.into_iter(),
-            )),
+            Arc::new({
+                let mut builder = ListBuilder::new(StringBuilder::new());
+                for acl in &datacls {
+                    match acl {
+                        Some(items) => {
+                            for item in items {
+                                builder.values().append_option(item.as_deref());
+                            }
+                            builder.append(true);
+                        }
+                        None => builder.append(false),
+                    }
+                }
+                builder.finish()
+            }),
         ];
 
         // Create a full record batch

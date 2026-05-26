@@ -4,8 +4,8 @@ use std::sync::atomic::AtomicU32;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{
-    ArrayRef, AsArray, BooleanBuilder, Int32Builder, RecordBatch, StringArray, StringBuilder,
-    as_boolean_array,
+    ArrayRef, AsArray, BooleanArray, BooleanBuilder, Int32Builder, RecordBatch, StringArray,
+    StringBuilder, as_boolean_array,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
 use datafusion::arrow::ipc::reader::FileReader;
@@ -35,12 +35,16 @@ pub mod pg_attribute;
 pub mod pg_class;
 pub mod pg_database;
 pub mod pg_get_expr_udf;
+pub mod pg_locks;
 pub mod pg_namespace;
 pub mod pg_replication_slot;
 pub mod pg_roles;
 pub mod pg_settings;
 pub mod pg_stat_gssapi;
+pub mod pg_stat_ssl;
 pub mod pg_tables;
+pub mod pg_tablespace;
+pub mod pg_timezone;
 pub mod pg_views;
 pub mod quote_ident_udf;
 
@@ -103,6 +107,9 @@ const PG_CATALOG_TABLE_PG_STATISTIC_EXT_DATA: &str = "pg_statistic_ext_data";
 const PG_CATALOG_TABLE_PG_SUBSCRIPTION: &str = "pg_subscription";
 const PG_CATALOG_TABLE_PG_SUBSCRIPTION_REL: &str = "pg_subscription_rel";
 const PG_CATALOG_TABLE_PG_TABLESPACE: &str = "pg_tablespace";
+const PG_CATALOG_TABLE_PG_LOCKS: &str = "pg_locks";
+const PG_CATALOG_VIEW_PG_TIMEZONE_NAMES: &str = "pg_timezone_names";
+const PG_CATALOG_VIEW_PG_TIMEZONE_ABBREVS: &str = "pg_timezone_abbrevs";
 const PG_CATALOG_TABLE_PG_TRIGGER: &str = "pg_trigger";
 const PG_CATALOG_TABLE_PG_USER_MAPPING: &str = "pg_user_mapping";
 const PG_CATALOG_VIEW_PG_SETTINGS: &str = "pg_settings";
@@ -111,6 +118,7 @@ const PG_CATALOG_VIEW_PG_MATVIEWS: &str = "pg_matviews";
 const PG_CATALOG_VIEW_PG_ROLES: &str = "pg_roles";
 const PG_CATALOG_VIEW_PG_TABLES: &str = "pg_tables";
 const PG_CATALOG_VIEW_PG_STAT_GSSAPI: &str = "pg_stat_gssapi";
+const PG_CATALOG_VIEW_PG_STAT_SSL: &str = "pg_stat_ssl";
 const PG_CATALOG_VIEW_PG_STAT_USER_TABLES: &str = "pg_stat_user_tables";
 const PG_CATALOG_VIEW_PG_REPLICATION_SLOTS: &str = "pg_replication_slots";
 
@@ -174,16 +182,20 @@ pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_TABLE_PG_SUBSCRIPTION,
     PG_CATALOG_TABLE_PG_SUBSCRIPTION_REL,
     PG_CATALOG_TABLE_PG_TABLESPACE,
+    PG_CATALOG_TABLE_PG_LOCKS,
     PG_CATALOG_TABLE_PG_TRIGGER,
     PG_CATALOG_TABLE_PG_USER_MAPPING,
     PG_CATALOG_VIEW_PG_ROLES,
     PG_CATALOG_VIEW_PG_SETTINGS,
     PG_CATALOG_VIEW_PG_STAT_GSSAPI,
+    PG_CATALOG_VIEW_PG_STAT_SSL,
     PG_CATALOG_VIEW_PG_TABLES,
     PG_CATALOG_VIEW_PG_VIEWS,
     PG_CATALOG_VIEW_PG_MATVIEWS,
     PG_CATALOG_VIEW_PG_STAT_USER_TABLES,
     PG_CATALOG_VIEW_PG_REPLICATION_SLOTS,
+    PG_CATALOG_VIEW_PG_TIMEZONE_NAMES,
+    PG_CATALOG_VIEW_PG_TIMEZONE_ABBREVS,
 ];
 
 #[derive(Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
@@ -364,7 +376,8 @@ impl<C: CatalogInfo, P: PgCatalogContextProvider> PgCatalogSchemaProvider<C, P> 
                 Ok(Some(self.static_tables.pg_subscription_rel.clone().into()))
             }
             PG_CATALOG_TABLE_PG_TABLESPACE => {
-                Ok(Some(self.static_tables.pg_tablespace.clone().into()))
+                let table = Arc::new(pg_tablespace::PgTablespaceTable::new());
+                Ok(Some(PgCatalogTable::Dynamic(table)))
             }
             PG_CATALOG_TABLE_PG_TRIGGER => Ok(Some(self.static_tables.pg_trigger.clone().into())),
             PG_CATALOG_TABLE_PG_USER_MAPPING => {
@@ -416,6 +429,10 @@ impl<C: CatalogInfo, P: PgCatalogContextProvider> PgCatalogSchemaProvider<C, P> 
                 let table = Arc::new(pg_stat_gssapi::PgStatGssApiTable::new());
                 Ok(Some(PgCatalogTable::Dynamic(table)))
             }
+            PG_CATALOG_VIEW_PG_STAT_SSL => {
+                let table = Arc::new(pg_stat_ssl::PgStatSslTable::new());
+                Ok(Some(PgCatalogTable::Dynamic(table)))
+            }
             PG_CATALOG_VIEW_PG_ROLES => {
                 let table = Arc::new(pg_roles::PgRolesTable::new(self.context_provider.clone()));
                 Ok(Some(PgCatalogTable::Dynamic(table)))
@@ -426,6 +443,11 @@ impl<C: CatalogInfo, P: PgCatalogContextProvider> PgCatalogSchemaProvider<C, P> 
             PG_CATALOG_VIEW_PG_STAT_USER_TABLES => Ok(Some(pg_views::pg_stat_user_tables().into())),
             PG_CATALOG_VIEW_PG_REPLICATION_SLOTS => {
                 Ok(Some(pg_replication_slot::pg_replication_slots().into()))
+            }
+            PG_CATALOG_TABLE_PG_LOCKS => Ok(Some(pg_locks::pg_locks().into())),
+            PG_CATALOG_VIEW_PG_TIMEZONE_NAMES => Ok(Some(pg_timezone::pg_timezone_names().into())),
+            PG_CATALOG_VIEW_PG_TIMEZONE_ABBREVS => {
+                Ok(Some(pg_timezone::pg_timezone_abbrevs().into()))
             }
 
             _ => Ok(None),
@@ -588,7 +610,6 @@ pub struct PgCatalogStaticTables {
     pub pg_statistic_ext_data: Arc<ArrowTable>,
     pub pg_subscription: Arc<ArrowTable>,
     pub pg_subscription_rel: Arc<ArrowTable>,
-    pub pg_tablespace: Arc<ArrowTable>,
     pub pg_trigger: Arc<ArrowTable>,
     pub pg_user_mapping: Arc<ArrowTable>,
 
@@ -974,13 +995,6 @@ impl PgCatalogStaticTables {
                 include_bytes!(concat!(
                     env!("CARGO_MANIFEST_DIR"),
                     "/pg_catalog_arrow_exports/pg_subscription_rel.feather"
-                ))
-                .to_vec(),
-            )?,
-            pg_tablespace: Self::create_arrow_table(
-                include_bytes!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/pg_catalog_arrow_exports/pg_tablespace.feather"
                 ))
                 .to_vec(),
             )?,
@@ -1426,6 +1440,102 @@ pub fn create_pg_get_partition_ancestors_udf() -> ScalarUDF {
     )
 }
 
+pub fn create_pg_postmaster_start_time_udf() -> ScalarUDF {
+    let func = move |_args: &[ColumnarValue]| {
+        let mut builder = datafusion::arrow::array::TimestampNanosecondBuilder::new()
+            .with_data_type(DataType::Timestamp(
+                datafusion::arrow::datatypes::TimeUnit::Nanosecond,
+                Some(Arc::from("UTC")),
+            ));
+        builder.append_value(1_700_000_000_000_000_000);
+        let array: ArrayRef = Arc::new(builder.finish());
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "pg_postmaster_start_time",
+        vec![],
+        DataType::Timestamp(
+            datafusion::arrow::datatypes::TimeUnit::Nanosecond,
+            Some(Arc::from("UTC")),
+        ),
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_pg_is_in_recovery_udf() -> ScalarUDF {
+    let func = move |_args: &[ColumnarValue]| {
+        let array: ArrayRef = Arc::new(BooleanArray::from(vec![false]));
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "pg_is_in_recovery",
+        vec![],
+        DataType::Boolean,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_txid_current_udf() -> ScalarUDF {
+    let func = move |_args: &[ColumnarValue]| {
+        let array: ArrayRef = Arc::new(datafusion::arrow::array::Int64Array::from(vec![1i64]));
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "txid_current",
+        vec![],
+        DataType::Int64,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_pg_tablespace_location_udf() -> ScalarUDF {
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let input = &args[0];
+        let mut builder = StringBuilder::new();
+        for _ in 0..input.len() {
+            builder.append_null();
+        }
+        let array: ArrayRef = Arc::new(builder.finish());
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "pg_tablespace_location",
+        vec![DataType::Int32],
+        DataType::Utf8,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
+pub fn create_age_udf() -> ScalarUDF {
+    let func = move |args: &[ColumnarValue]| {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let input = &args[0];
+        let mut builder = datafusion::arrow::array::Int64Builder::new();
+        for _ in 0..input.len() {
+            builder.append_value(0);
+        }
+        let array: ArrayRef = Arc::new(builder.finish());
+        Ok(ColumnarValue::Array(array))
+    };
+
+    create_udf(
+        "age",
+        vec![DataType::Utf8],
+        DataType::Int64,
+        Volatility::Stable,
+        Arc::new(func),
+    )
+}
+
 /// Install pg_catalog and postgres UDFs to current `SessionContext`
 pub fn setup_pg_catalog<P>(
     session_context: &SessionContext,
@@ -1484,6 +1594,11 @@ where
     session_context.register_udf(create_pg_get_partition_ancestors_udf());
     session_context.register_udf(quote_ident_udf::create_quote_ident_udf());
     session_context.register_udf(quote_ident_udf::create_parse_ident_udf());
+    session_context.register_udf(create_pg_postmaster_start_time_udf());
+    session_context.register_udf(create_pg_is_in_recovery_udf());
+    session_context.register_udf(create_txid_current_udf());
+    session_context.register_udf(create_pg_tablespace_location_udf());
+    session_context.register_udf(create_age_udf());
 
     Ok(())
 }
@@ -1938,14 +2053,6 @@ mod test {
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/pg_catalog_arrow_exports/pg_subscription_rel.feather"
-            ))
-            .to_vec(),
-        )
-        .expect("Failed to load ipc data");
-        let _ = ArrowTable::from_ipc_data(
-            include_bytes!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/pg_catalog_arrow_exports/pg_tablespace.feather"
             ))
             .to_vec(),
         )
