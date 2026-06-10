@@ -206,10 +206,6 @@ pub struct PgCatalogSchemaProvider<C, P> {
 
 #[async_trait]
 impl<C: CatalogInfo, P: PgCatalogContextProvider> SchemaProvider for PgCatalogSchemaProvider<C, P> {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         PG_CATALOG_TABLES.iter().map(ToString::to_string).collect()
     }
@@ -1369,10 +1365,6 @@ pub fn create_pg_get_constraintdef() -> ScalarUDF {
     }
 
     impl ScalarUDFImpl for GetConstraintDefUDF {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "pg_get_constraintdef"
         }
