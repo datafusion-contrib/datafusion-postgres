@@ -474,7 +474,11 @@ fn ordered_param_types(types: &HashMap<String, Option<DataType>>) -> Vec<Option<
     // Datafusion stores the parameters as a map.  In our case, the keys will be
     // `$1`, `$2` etc.  The values will be the parameter types.
     let mut types = types.iter().collect::<Vec<_>>();
-    types.sort_by(|a, b| a.0.cmp(b.0));
+    types.sort_by_key(|(key, _)| {
+        key.trim_start_matches('$')
+            .parse::<u32>()
+            .unwrap_or(u32::MAX)
+    });
     types.into_iter().map(|pt| pt.1.as_ref()).collect()
 }
 
@@ -525,6 +529,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_ordered_param_types_sorts_placeholders_numerically() {
+        let params = HashMap::from([
+            ("$1".to_string(), Some(DataType::Boolean)),
+            ("$2".to_string(), Some(DataType::Int64)),
+            ("$10".to_string(), Some(DataType::Utf8)),
+        ]);
+
+        let ordered = ordered_param_types(&params)
+            .into_iter()
+            .map(|ty| ty.cloned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            ordered,
+            vec![
+                Some(DataType::Boolean),
+                Some(DataType::Int64),
+                Some(DataType::Utf8)
+            ]
+        );
+    }
+    
     #[tokio::test]
     async fn test_query_hooks() {
         let hook = TestHook;
