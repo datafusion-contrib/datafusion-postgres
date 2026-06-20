@@ -19,7 +19,7 @@ use super::rules::RemoveSubqueryFromProjection;
 use super::rules::RemoveUnsupportedTypes;
 use super::rules::ResolveUnqualifiedIdentifer;
 use super::rules::RewriteArrayAnyAllOperation;
-use super::rules::RewriteRegclassCastToSubquery;
+use super::rules::RewriteRegCastToSubquery;
 use super::rules::SqlStatementRewriteRule;
 
 const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
@@ -199,6 +199,26 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
  WHERE false"
     ),
 
+    // psql foreign-key (\d) lookup. Hits a DataFusion internal bug:
+    // "ScalarSubqueryExpr evaluated before the subquery was executed" -- the
+    // `confrelid IN (SELECT ... UNION ALL VALUES (...))` form isn't executed
+    // correctly by the optimizer. Unrelated to the regtype/regclass rewrite
+    // family; tracked as a separate DataFusion limitation.
+    (
+"SELECT conname, conrelid::pg_catalog.regclass AS ontable,
+            pg_catalog.pg_get_constraintdef(oid, true) AS condef
+        FROM pg_catalog.pg_constraint c
+      WHERE confrelid IN (SELECT pg_catalog.pg_partition_ancestors('16417')
+                          UNION ALL VALUES ('16417'::pg_catalog.regclass))
+            AND contype = 'f' AND conparentid = 0
+      ORDER BY conname;",
+"SELECT
+   NULL::TEXT AS conname,
+   NULL::INT AS ontable,
+   NULL::TEXT AS condef
+ WHERE false"
+    ),
+
     // grafana array index magic
     (r#"SELECT
             CASE WHEN trim(s[i]) = '"$user"' THEN user ELSE trim(s[i]) END
@@ -263,7 +283,7 @@ impl PostgresCompatibilityParser {
                 Arc::new(RewriteArrayAnyAllOperation),
                 Arc::new(PrependUnqualifiedPgTableName),
                 Arc::new(RemoveQualifier),
-                Arc::new(RewriteRegclassCastToSubquery::new()),
+                Arc::new(RewriteRegCastToSubquery::new()),
                 Arc::new(RemoveUnsupportedTypes::new()),
                 Arc::new(FixArrayLiteral),
                 Arc::new(CurrentUserVariableToSessionUserFunctionCall),

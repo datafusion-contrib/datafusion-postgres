@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow;
@@ -316,21 +317,17 @@ impl RemoveUnsupportedTypes {
     pub fn new() -> Self {
         let mut unsupported_types = HashSet::new();
 
-        // NOTE: `regclass` is intentionally NOT in this set. It is handled by
-        // `RewriteRegclassCastToSubquery`, which rewrites `'name'::regclass`
-        // into a name->oid lookup subquery instead of stripping it to a bare
-        // string (which produced wrong runtime types, since regclass is an
-        // oid/int4 alias).
-        for item in ["regproc", "regtype", "regtype[]", "regnamespace", "oid"] {
+        // NOTE: `regclass`, `regnamespace`, `regproc` and `regtype` are handled
+        // for the *forward* (name->oid) direction by `RewriteRegCastToSubquery`,
+        // which runs before this rule and rewrites those casts to lookup
+        // subqueries. They remain in THIS set so the *reverse* direction --
+        // `<oid-column>::regtype` (e.g. `prorettype::regtype::text` for display,
+        // or `c.oid::regclass`) -- is stripped down to the bare oid column,
+        // which is correct since the column already is an oid.
+        for item in ["regclass", "regproc", "regtype", "regtype[]", "regnamespace", "oid"] {
             unsupported_types.insert(item.to_owned());
             unsupported_types.insert(format!("pg_catalog.{item}"));
         }
-
-        // TODO: `regnamespace`, `regproc` and `regtype` suffer from the same
-        // latent bug `regclass` had -- they are oid alias types, and stripping
-        // their casts to a bare string breaks oid comparisons at runtime. Each
-        // should get its own lookup subquery (against pg_namespace / pg_proc /
-        // pg_type respectively) like regclass.
 
         Self { unsupported_types }
     }
@@ -385,28 +382,48 @@ impl SqlStatementRewriteRule for RemoveUnsupportedTypes {
     }
 }
 
-/// Rewrite `::regclass` casts to a name->oid lookup subquery
+/// Rewrite `::regclass` / `::regnamespace` / `::regtype` / `::regproc` casts
+/// to a name->oid lookup subquery.
 ///
-/// Rewrites two patterns to `(SELECT c.oid FROM pg_catalog.pg_class ...
-/// WHERE ...)`:
-///   * `$1::regclass::oid` (and qualified variants like `$1::pg_catalog.regclass::oid`)
-///   * `$1::regclass` (bare cast)
+/// In postgres these are all `oid` (int4) alias types: casting a *name* to one
+/// of them yields the matching catalog oid. DataFusion has no such types, so a
+/// bare `'trigger'::regtype` would otherwise be stripped to the string
+/// `'trigger'` and later crash an oid comparison with
+/// "Cannot cast string to Int32". This rule instead rewrites the cast into a
+/// `(SELECT oid FROM pg_catalog.<table> WHERE name = ...) ` subquery.
 ///
-/// In postgres `regclass` is an `oid` (int4) alias type, so a bare cast must
-/// not be left as a string or it will fail with "Cannot cast string to Int32"
-/// at execution time.
+/// Two shapes are rewritten (and their `pg_catalog.`-qualified variants):
+///   * `<name>::regTYPE::oid`
+///   * `<name>::regTYPE` (bare cast)
+///
+/// # Direction guard
+///
+/// Only the **forward** direction -- name-to-oid -- is rewritten. We require
+/// the cast operand to be a string literal (`'foo'`) or a placeholder (`$1`),
+/// which is how clients spell "resolve this name to an oid". The **reverse**
+/// direction, `<oid-column>::regtype` (e.g. `prorettype::regtype::text` for
+/// display, or the left side of `prorettype::regtype != 'trigger'::regtype`),
+/// has a column operand and is intentionally left untouched here; it is
+/// stripped to the bare oid column by `RemoveUnsupportedTypes`, which is the
+/// correct behavior since the column already *is* an oid.
 #[derive(Debug)]
-pub struct RewriteRegclassCastToSubquery(Box<Query>);
+pub struct RewriteRegCastToSubquery(HashMap<String, Box<Query>>);
 
-impl Default for RewriteRegclassCastToSubquery {
-    fn default() -> Self {
-        Self::new()
-    }
+/// One oid-alias type plus the name->oid lookup query that resolves it. The
+/// query must contain exactly one `$1` placeholder, into which the cast operand
+/// (as text) is substituted.
+struct RegCastSpec {
+    /// Bare lowercased type name, e.g. `"regclass"`. Both `regclass` and
+    /// `pg_catalog.regclass` are matched against this.
+    type_name: &'static str,
+    query: &'static str,
 }
 
-impl RewriteRegclassCastToSubquery {
-    pub fn new() -> Self {
-        let sql = "SELECT c.oid
+const REG_CAST_SPECS: &[RegCastSpec] = &[
+    // regclass: schema-qualified relation name -> pg_class.oid
+    RegCastSpec {
+        type_name: "regclass",
+        query: "SELECT c.oid
 FROM pg_catalog.pg_class c
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p
@@ -414,30 +431,103 @@ WHERE n.nspname = COALESCE(
     CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END,
     current_schema()
 )
-AND c.relname = p.parts[-1]";
-        let dialect = PostgreSqlDialect {};
-        let query = Parser::parse_sql(&dialect, sql)
-            .map(|mut stmts| {
-                let stmt = stmts.remove(0);
-                if let Statement::Query(query) = stmt {
-                    query
-                } else {
-                    unreachable!()
-                }
-            })
-            .expect("Failed to parse prepared query");
-        Self(query)
+AND c.relname = p.parts[-1]",
+    },
+    // regnamespace: schema name -> pg_namespace.oid (single identifier)
+    RegCastSpec {
+        type_name: "regnamespace",
+        query: "SELECT n.oid
+FROM pg_catalog.pg_namespace n
+CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p
+WHERE n.nspname = p.parts[-1]",
+    },
+    // regtype: schema-qualified type name -> pg_type.oid
+    RegCastSpec {
+        type_name: "regtype",
+        query: "SELECT t.oid
+FROM pg_catalog.pg_type t
+JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p
+WHERE n.nspname = COALESCE(
+    CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END,
+    current_schema()
+)
+AND t.typname = p.parts[-1]",
+    },
+    // regproc: schema-qualified function name -> pg_proc.oid
+    RegCastSpec {
+        type_name: "regproc",
+        query: "SELECT pr.oid
+FROM pg_catalog.pg_proc pr
+JOIN pg_catalog.pg_namespace n ON n.oid = pr.pronamespace
+CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p
+WHERE n.nspname = COALESCE(
+    CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END,
+    current_schema()
+)
+AND pr.proname = p.parts[-1]",
+    },
+];
+
+impl Default for RewriteRegCastToSubquery {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-struct RewriteRegclassCastToSubqueryVisitor(Box<Query>);
+impl RewriteRegCastToSubquery {
+    pub fn new() -> Self {
+        let dialect = PostgreSqlDialect {};
+        let mut queries = HashMap::new();
+        for spec in REG_CAST_SPECS {
+            let query = Parser::parse_sql(&dialect, spec.query)
+                .map(|mut stmts| {
+                    let stmt = stmts.remove(0);
+                    if let Statement::Query(query) = stmt {
+                        query
+                    } else {
+                        unreachable!()
+                    }
+                })
+                .expect("Failed to parse prepared query");
+            queries.insert(spec.type_name.to_owned(), query);
+        }
+        Self(queries)
+    }
+}
 
-impl RewriteRegclassCastToSubqueryVisitor {
-    pub fn new(query: Box<Query>) -> Self {
-        Self(query)
+struct RewriteRegCastToSubqueryVisitor<'a>(&'a HashMap<String, Box<Query>>);
+
+impl RewriteRegCastToSubqueryVisitor<'_> {
+    /// Normalize a cast's `DataType` to the bare lowercased type name used as a
+    /// key in [`REG_CAST_SPECS`], e.g. `pg_catalog.RegClass` -> `regclass`.
+    fn normalize_type_name(data_type: &DataType) -> String {
+        let lower = data_type.to_string().to_lowercase();
+        lower
+            .strip_prefix("pg_catalog.")
+            .unwrap_or(&lower)
+            .to_owned()
     }
 
-    fn create_subquery(&self, expr: &Expr) -> Expr {
+    /// True when `expr` is the forward (name->oid) cast operand we rewrite:
+    /// a string literal or a prepared-statement placeholder. Column operands
+    /// (the reverse oid->regtype direction) are deliberately excluded.
+    fn is_name_operand(expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::Value(ValueWithSpan {
+                value: Value::SingleQuotedString(_),
+                ..
+            }) | Expr::Value(ValueWithSpan {
+                value: Value::Placeholder(_),
+                ..
+            })
+        )
+    }
+
+    /// Build `(SELECT oid FROM pg_catalog.<table> WHERE name = <expr-as-text>)`
+    /// by cloning the type's query template and substituting `$1` with `expr`.
+    fn create_subquery(template: &Query, expr: &Expr) -> Expr {
         struct PlaceholderReplacer(Expr);
 
         impl VisitorMut for PlaceholderReplacer {
@@ -455,107 +545,64 @@ impl RewriteRegclassCastToSubqueryVisitor {
             }
         }
 
-        let mut query = self.0.clone();
+        let mut query = template.clone();
         let mut replacer = PlaceholderReplacer(expr.clone());
         let _ = query.visit(&mut replacer);
-        Expr::Subquery(query)
-    }
-
-    fn is_regclass_to_oid_cast(&self, expr: &Expr) -> bool {
-        if let Expr::Cast {
-            kind,
-            data_type,
-            expr: inner_expr,
-            format: _,
-            ..
-        } = expr
-            && *kind == CastKind::DoubleColon
-        {
-            let dt_lower = data_type.to_string().to_lowercase();
-            if dt_lower == "oid" || dt_lower == "pg_catalog.oid" {
-                return self.is_regclass_cast(inner_expr);
-            }
-        }
-        false
-    }
-
-    fn is_regclass_cast(&self, expr: &Expr) -> bool {
-        if let Expr::Cast {
-            kind,
-            data_type,
-            expr: _,
-            format: _,
-            ..
-        } = expr
-            && *kind == CastKind::DoubleColon
-        {
-            let dt_lower = data_type.to_string().to_lowercase();
-            return dt_lower == "regclass" || dt_lower == "pg_catalog.regclass";
-        }
-        false
-    }
-
-    fn extract_inner_expr(&self, expr: &Expr) -> Option<Expr> {
-        if let Expr::Cast {
-            kind,
-            data_type,
-            expr: inner_expr,
-            format: _,
-            ..
-        } = expr
-            && *kind == CastKind::DoubleColon
-        {
-            let dt_lower = data_type.to_string().to_lowercase();
-            if (dt_lower == "oid" || dt_lower == "pg_catalog.oid")
-                && let Expr::Cast {
-                    kind: inner_kind,
-                    data_type: inner_data_type,
-                    expr: inner_inner_expr,
-                    format: _,
-                    ..
-                } = inner_expr.as_ref()
-                && *inner_kind == CastKind::DoubleColon
-            {
-                let inner_dt_lower = inner_data_type.to_string().to_lowercase();
-                if inner_dt_lower == "regclass" || inner_dt_lower == "pg_catalog.regclass" {
-                    return Some((**inner_inner_expr).clone());
-                }
-            }
-        }
-        None
+        Expr::Subquery(Box::new(query))
     }
 }
 
-impl VisitorMut for RewriteRegclassCastToSubqueryVisitor {
+impl VisitorMut for RewriteRegCastToSubqueryVisitor<'_> {
     type Break = ();
 
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-        // Two shapes are rewritten to a name->oid lookup subquery:
-        //   1. `X::regclass::oid` (and qualified variants)
-        //   2. `X::regclass` (bare cast). `regclass` is an `oid` (int4) alias
-        //      type, so leaving it as a bare string would fail with
-        //      "Cannot cast string to Int32" at execution time.
-        let inner_expr = if self.is_regclass_to_oid_cast(expr) {
-            self.extract_inner_expr(expr)
-        } else if self.is_regclass_cast(expr) {
-            match expr {
-                Expr::Cast { expr: inner, .. } => Some((**inner).clone()),
-                _ => None,
-            }
-        } else {
-            None
+        let Expr::Cast {
+            kind,
+            data_type,
+            expr: outer_operand,
+            ..
+        } = expr
+        else {
+            return ControlFlow::Continue(());
         };
-
-        if let Some(inner_expr) = inner_expr {
-            *expr = self.create_subquery(&inner_expr);
+        if *kind != CastKind::DoubleColon {
+            return ControlFlow::Continue(());
         }
+
+        let outer_type = Self::normalize_type_name(data_type);
+
+        // Pattern 1: `<name>::regTYPE::oid` -- the outer cast is to `oid` and
+        // its operand is itself a `::regTYPE` cast of a name operand.
+        if outer_type == "oid" {
+            if let Expr::Cast {
+                kind: inner_kind,
+                data_type: inner_dt,
+                expr: inner_operand,
+                ..
+            } = outer_operand.as_ref()
+                && *inner_kind == CastKind::DoubleColon
+                && let Some(template) = self.0.get(&Self::normalize_type_name(inner_dt))
+                && Self::is_name_operand(inner_operand)
+            {
+                *expr = Self::create_subquery(template, inner_operand);
+            }
+            return ControlFlow::Continue(());
+        }
+
+        // Pattern 2: `<name>::regTYPE` (bare cast).
+        if let Some(template) = self.0.get(&outer_type)
+            && Self::is_name_operand(outer_operand)
+        {
+            *expr = Self::create_subquery(template, outer_operand);
+        }
+
         ControlFlow::Continue(())
     }
 }
 
-impl SqlStatementRewriteRule for RewriteRegclassCastToSubquery {
+impl SqlStatementRewriteRule for RewriteRegCastToSubquery {
     fn rewrite(&self, mut s: Statement) -> Statement {
-        let mut visitor = RewriteRegclassCastToSubqueryVisitor::new(self.0.clone());
+        let mut visitor = RewriteRegCastToSubqueryVisitor(&self.0);
         let _ = s.visit(&mut visitor);
         s
     }
@@ -1220,10 +1267,12 @@ mod tests {
             Arc::new(RemoveUnsupportedTypes::new()),
         ];
 
-        // NOTE: `::regclass` casts used to be stripped to a bare string here,
-        // but that produced wrong runtime types (regclass is an oid/int4 alias).
-        // They are now rewritten to a name->oid lookup subquery by
-        // `RewriteRegclassCastToSubquery` -- see test_rewrite_regclass_cast_to_subquery.
+        // NOTE: `::regclass` / `::regtype` / `::regproc` / `::regnamespace`
+        // (forward, name->oid direction) used to be stripped to a bare string
+        // here, but that produced wrong runtime types (they are oid/int4
+        // aliases). They are now rewritten to name->oid lookup subqueries by
+        // `RewriteRegCastToSubquery` -- see test_rewrite_reg_cast_to_subquery.
+        // This rule still strips the *reverse* direction (`col::regtype`).
 
         assert_rewrite!(
             &rules,
@@ -1243,9 +1292,9 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_regclass_cast_to_subquery() {
+    fn test_rewrite_reg_cast_to_subquery() {
         let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
-            vec![Arc::new(RewriteRegclassCastToSubquery::new())];
+            vec![Arc::new(RewriteRegCastToSubquery::new())];
 
         assert_rewrite!(
             &rules,
@@ -1284,6 +1333,89 @@ mod tests {
             &rules,
             "SELECT * FROM pg_catalog.pg_class WHERE oid = 't'::pg_catalog.regclass",
             "SELECT * FROM pg_catalog.pg_class WHERE oid = (SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident('t'::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
+        );
+    }
+
+    #[test]
+    fn test_rewrite_reg_cast_to_subquery_new_types() {
+        // Forward (name->oid) casts for the other oid-alias types. Exact
+        // expected strings are generated below from the same templates the
+        // rule uses, so this test stays in sync if a template is tweaked.
+        let regnamespace_sql =
+            "SELECT n.oid FROM pg_catalog.pg_namespace n CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p WHERE n.nspname = p.parts[-1]";
+        let regtype_sql =
+            "SELECT t.oid FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND t.typname = p.parts[-1]";
+        let regproc_sql =
+            "SELECT pr.oid FROM pg_catalog.pg_proc pr JOIN pg_catalog.pg_namespace n ON n.oid = pr.pronamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND pr.proname = p.parts[-1]";
+
+        let expected = |template: &str, operand: &str| -> String {
+            format!(
+                "SELECT ({})",
+                template.replace("$1::TEXT", &format!("{operand}::TEXT"))
+            )
+        };
+
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RewriteRegCastToSubquery::new())];
+
+        // regnamespace: literal and qualified
+        assert_rewrite!(
+            &rules,
+            "SELECT 'public'::regnamespace",
+            expected(regnamespace_sql, "'public'")
+        );
+        assert_rewrite!(
+            &rules,
+            "SELECT 'public'::pg_catalog.regnamespace::oid",
+            expected(regnamespace_sql, "'public'")
+        );
+
+        // regtype: literal (this is the case that crashed pgcli with
+        // "Cannot cast string 'trigger' to Int32" before this rule).
+        assert_rewrite!(
+            &rules,
+            "SELECT 'trigger'::regtype",
+            expected(regtype_sql, "'trigger'")
+        );
+        assert_rewrite!(
+            &rules,
+            "SELECT 'pg_catalog.int4'::regtype::oid",
+            expected(regtype_sql, "'pg_catalog.int4'")
+        );
+
+        // regproc: literal and parameter operand
+        assert_rewrite!(
+            &rules,
+            "SELECT 'now'::regproc",
+            expected(regproc_sql, "'now'")
+        );
+        assert_rewrite!(
+            &rules,
+            "SELECT $1::regproc::oid",
+            expected(regproc_sql, "$1")
+        );
+    }
+
+    #[test]
+    fn test_reg_cast_leaves_reverse_direction() {
+        // The reverse direction (oid-column -> regtype, used for display and
+        // for the left side of `col::regtype != 'lit'::regtype`) must NOT be
+        // rewritten -- the column is already an oid. It is left untouched here
+        // and stripped to the bare column later by RemoveUnsupportedTypes.
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RewriteRegCastToSubquery::new())];
+
+        assert_rewrite!(&rules,
+            "SELECT prorettype::regtype::text FROM pg_proc",
+            "SELECT prorettype::regtype::TEXT FROM pg_proc"
+        );
+        assert_rewrite!(&rules,
+            "SELECT atttypid::regtype FROM pg_attribute",
+            "SELECT atttypid::regtype FROM pg_attribute"
+        );
+        assert_rewrite!(&rules,
+            "SELECT relnamespace::regnamespace FROM pg_class",
+            "SELECT relnamespace::regnamespace FROM pg_class"
         );
     }
 
