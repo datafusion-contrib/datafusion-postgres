@@ -166,6 +166,39 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
  WHERE false"
     ),
 
+    // dbeaver type lookup. Uses `generate_series(1, array_upper(...))` over a
+    // *dynamic* array bound; DataFusion's `generate_series` is a table function
+    // that only accepts literal Int64 bounds, so this can't be executed as-is.
+    // `array_upper`/`array_lower` themselves are supported via the dedicated
+    // UDFs (see array_bounds_udf); the blocker here is generate_series, plus
+    // correlated array indexing in the same query.
+    (
+"SELECT typinput='pg_catalog.array_in'::regproc as is_array, typtype, typname, pg_type.oid   FROM pg_catalog.pg_type   LEFT JOIN (select ns.oid as nspoid, ns.nspname, r.r           from pg_namespace as ns           join ( select s.r, (current_schemas(false))[s.r] as nspname                    from generate_series(1, array_upper(current_schemas(false), 1)) as s(r) ) as r          using ( nspname )        ) as sp     ON sp.nspoid = typnamespace  WHERE pg_type.oid = 1034  ORDER BY sp.r, pg_type.oid DESC",
+"SELECT
+   NULL::BOOLEAN AS is_array,
+   NULL::TEXT AS typtype,
+   NULL::TEXT AS typname,
+   NULL::INT AS oid
+ WHERE false"
+    ),
+
+    // dbeaver relation-size lookup. Blocked by `c.relnamespace = 'public'`:
+    // relnamespace is an oid (Int32) column, and comparing it to a bare string
+    // requires Postgres' regnamespace/oid-alias resolution, which DataFusion
+    // can't do (it tries string -> Int32 and fails). The proper fix is a
+    // regnamespace name->oid rewrite analogous to the regclass one; tracked
+    // separately. (Unrelated to array_upper/lower.)
+    (
+"select c.oid,pg_catalog.pg_total_relation_size(c.oid) as total_rel_size,pg_catalog.pg_relation_size(c.oid) as rel_size
+     FROM pg_class c
+     WHERE c.relnamespace='public'",
+"SELECT
+   NULL::INT AS oid,
+   NULL::INT AS total_rel_size,
+   NULL::INT AS rel_size
+ WHERE false"
+    ),
+
     // grafana array index magic
     (r#"SELECT
             CASE WHEN trim(s[i]) = '"$user"' THEN user ELSE trim(s[i]) END

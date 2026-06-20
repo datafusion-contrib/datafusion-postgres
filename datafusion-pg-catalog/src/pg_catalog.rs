@@ -26,6 +26,7 @@ use crate::pg_catalog::catalog_info::CatalogInfo;
 use crate::pg_catalog::context::PgCatalogContextProvider;
 use crate::pg_catalog::empty_table::EmptyTable;
 
+pub mod array_bounds_udf;
 pub mod catalog_info;
 pub mod context;
 pub mod empty_table;
@@ -1476,6 +1477,11 @@ where
     session_context.register_udf(create_pg_get_partition_ancestors_udf());
     session_context.register_udf(quote_ident_udf::create_quote_ident_udf());
     session_context.register_udf(quote_ident_udf::create_parse_ident_udf());
+    // Postgres array bounds. DataFusion ships array_length but not array_upper /
+    // array_lower; without these, client queries (psql/dbeaver/grafan) that use
+    // them were only "supported" via hardcoded blacklist token substitution.
+    session_context.register_udf(array_bounds_udf::create_array_upper_udf());
+    session_context.register_udf(array_bounds_udf::create_array_lower_udf());
 
     Ok(())
 }
