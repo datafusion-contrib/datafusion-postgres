@@ -316,17 +316,21 @@ impl RemoveUnsupportedTypes {
     pub fn new() -> Self {
         let mut unsupported_types = HashSet::new();
 
-        for item in [
-            "regclass",
-            "regproc",
-            "regtype",
-            "regtype[]",
-            "regnamespace",
-            "oid",
-        ] {
+        // NOTE: `regclass` is intentionally NOT in this set. It is handled by
+        // `RewriteRegclassCastToSubquery`, which rewrites `'name'::regclass`
+        // into a name->oid lookup subquery instead of stripping it to a bare
+        // string (which produced wrong runtime types, since regclass is an
+        // oid/int4 alias).
+        for item in ["regproc", "regtype", "regtype[]", "regnamespace", "oid"] {
             unsupported_types.insert(item.to_owned());
             unsupported_types.insert(format!("pg_catalog.{item}"));
         }
+
+        // TODO: `regnamespace`, `regproc` and `regtype` suffer from the same
+        // latent bug `regclass` had -- they are oid alias types, and stripping
+        // their casts to a bare string breaks oid comparisons at runtime. Each
+        // should get its own lookup subquery (against pg_namespace / pg_proc /
+        // pg_type respectively) like regclass.
 
         Self { unsupported_types }
     }
@@ -381,10 +385,16 @@ impl SqlStatementRewriteRule for RemoveUnsupportedTypes {
     }
 }
 
-/// Rewrite regclass::oid cast to subquery
+/// Rewrite `::regclass` casts to a name->oid lookup subquery
 ///
-/// This rewrites patterns like `$1::regclass::oid` to
-/// `(SELECT oid FROM pg_catalog.pg_class WHERE relname = $1)`
+/// Rewrites two patterns to `(SELECT c.oid FROM pg_catalog.pg_class ...
+/// WHERE ...)`:
+///   * `$1::regclass::oid` (and qualified variants like `$1::pg_catalog.regclass::oid`)
+///   * `$1::regclass` (bare cast)
+///
+/// In postgres `regclass` is an `oid` (int4) alias type, so a bare cast must
+/// not be left as a string or it will fail with "Cannot cast string to Int32"
+/// at execution time.
 #[derive(Debug)]
 pub struct RewriteRegclassCastToSubquery(Box<Query>);
 
@@ -520,9 +530,23 @@ impl VisitorMut for RewriteRegclassCastToSubqueryVisitor {
     type Break = ();
 
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-        if self.is_regclass_to_oid_cast(expr)
-            && let Some(inner_expr) = self.extract_inner_expr(expr)
-        {
+        // Two shapes are rewritten to a name->oid lookup subquery:
+        //   1. `X::regclass::oid` (and qualified variants)
+        //   2. `X::regclass` (bare cast). `regclass` is an `oid` (int4) alias
+        //      type, so leaving it as a bare string would fail with
+        //      "Cannot cast string to Int32" at execution time.
+        let inner_expr = if self.is_regclass_to_oid_cast(expr) {
+            self.extract_inner_expr(expr)
+        } else if self.is_regclass_cast(expr) {
+            match expr {
+                Expr::Cast { expr: inner, .. } => Some((**inner).clone()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        if let Some(inner_expr) = inner_expr {
             *expr = self.create_subquery(&inner_expr);
         }
         ControlFlow::Continue(())
@@ -1196,23 +1220,10 @@ mod tests {
             Arc::new(RemoveUnsupportedTypes::new()),
         ];
 
-        assert_rewrite!(
-            &rules,
-            "SELECT n.* FROM pg_catalog.pg_namespace n WHERE n.nspname = 'pg_catalog'::regclass ORDER BY n.nspname",
-            "SELECT n.* FROM pg_catalog.pg_namespace n WHERE n.nspname = 'pg_catalog' ORDER BY n.nspname"
-        );
-
-        assert_rewrite!(
-            &rules,
-            "SELECT n.* FROM pg_catalog.pg_namespace n WHERE n.oid = 1 AND n.nspname = 'pg_catalog'::regclass ORDER BY n.nspname",
-            "SELECT n.* FROM pg_catalog.pg_namespace n WHERE n.oid = 1 AND n.nspname = 'pg_catalog' ORDER BY n.nspname"
-        );
-
-        assert_rewrite!(
-            &rules,
-            "SELECT n.oid, n.*, d.description FROM pg_catalog.pg_namespace n LEFT OUTER JOIN pg_catalog.pg_description d ON d.objoid = n.oid AND d.objsubid = 0 AND d.classoid = 'pg_namespace'::regclass ORDER BY nspname",
-            "SELECT n.oid, n.*, d.description FROM pg_catalog.pg_namespace n LEFT OUTER JOIN pg_catalog.pg_description d ON d.objoid = n.oid AND d.objsubid = 0 AND d.classoid = 'pg_namespace' ORDER BY nspname"
-        );
+        // NOTE: `::regclass` casts used to be stripped to a bare string here,
+        // but that produced wrong runtime types (regclass is an oid/int4 alias).
+        // They are now rewritten to a name->oid lookup subquery by
+        // `RewriteRegclassCastToSubquery` -- see test_rewrite_regclass_cast_to_subquery.
 
         assert_rewrite!(
             &rules,
@@ -1257,6 +1268,21 @@ mod tests {
         assert_rewrite!(
             &rules,
             "SELECT * FROM pg_catalog.pg_class WHERE oid = 't'::pg_catalog.regclass::pg_catalog.oid",
+            "SELECT * FROM pg_catalog.pg_class WHERE oid = (SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident('t'::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
+        );
+
+        // Bare `X::regclass` (no outer `::oid`) is rewritten the same way. In
+        // postgres `regclass` is an oid (int4) alias type, so stripping it to
+        // a bare string would later fail "Cannot cast string to Int32".
+        assert_rewrite!(
+            &rules,
+            "SELECT * FROM pg_catalog.pg_class WHERE oid = 'pg_namespace'::regclass",
+            "SELECT * FROM pg_catalog.pg_class WHERE oid = (SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident('pg_namespace'::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT * FROM pg_catalog.pg_class WHERE oid = 't'::pg_catalog.regclass",
             "SELECT * FROM pg_catalog.pg_class WHERE oid = (SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident('t'::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
         );
     }
