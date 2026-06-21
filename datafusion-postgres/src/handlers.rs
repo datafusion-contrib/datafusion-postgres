@@ -551,7 +551,7 @@ mod tests {
             ]
         );
     }
-    
+
     #[tokio::test]
     async fn test_query_hooks() {
         let hook = TestHook;
