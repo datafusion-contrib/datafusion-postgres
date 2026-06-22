@@ -138,10 +138,12 @@ fn array_bounds_impl(
 
 fn two_arg_array_signature() -> Signature {
     Signature::one_of(
-        vec![TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
-            arguments: vec![ArrayFunctionArgument::Array, ArrayFunctionArgument::Index],
-            array_coercion: None,
-        })],
+        vec![TypeSignature::ArraySignature(
+            ArrayFunctionSignature::Array {
+                arguments: vec![ArrayFunctionArgument::Array, ArrayFunctionArgument::Index],
+                array_coercion: None,
+            },
+        )],
         Volatility::Immutable,
     )
 }
@@ -264,13 +266,11 @@ mod tests {
     }
 
     fn run_bounds(list: ArrayRef, dim: i64, upper: bool) -> Vec<Option<i32>> {
-        let dim_arr = Arc::new(
-            datafusion::arrow::array::Int64Array::from(vec![dim; list.len()]),
-        );
-        let args = vec![
-            ColumnarValue::Array(list),
-            ColumnarValue::Array(dim_arr),
-        ];
+        let dim_arr = Arc::new(datafusion::arrow::array::Int64Array::from(vec![
+            dim;
+            list.len()
+        ]));
+        let args = vec![ColumnarValue::Array(list), ColumnarValue::Array(dim_arr)];
         let out = array_bounds_impl(&args, upper).unwrap();
         let arr = match out {
             ColumnarValue::Array(a) => a,
@@ -294,7 +294,10 @@ mod tests {
         assert_eq!(length_at_dim(Some(one.as_list::<i32>().value(0)), 0), None);
         // empty list at dim 1 -> None (Postgres: empty array has no length)
         let empty = int_list(&[Some(vec![])]);
-        assert_eq!(length_at_dim(Some(empty.as_list::<i32>().value(0)), 1), None);
+        assert_eq!(
+            length_at_dim(Some(empty.as_list::<i32>().value(0)), 1),
+            None
+        );
     }
 
     #[test]
@@ -340,4 +343,3 @@ mod tests {
         assert_eq!(run_bounds(arr, 1, true), vec![Some(1), Some(2), None, None]);
     }
 }
-

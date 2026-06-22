@@ -325,7 +325,14 @@ impl RemoveUnsupportedTypes {
         // `<oid-column>::regtype` (e.g. `prorettype::regtype::text` for display,
         // or `c.oid::regclass`) -- is stripped down to the bare oid column,
         // which is correct since the column already is an oid.
-        for item in ["regclass", "regproc", "regtype", "regtype[]", "regnamespace", "oid"] {
+        for item in [
+            "regclass",
+            "regproc",
+            "regtype",
+            "regtype[]",
+            "regnamespace",
+            "oid",
+        ] {
             unsupported_types.insert(item.to_owned());
             unsupported_types.insert(format!("pg_catalog.{item}"));
         }
@@ -610,16 +617,20 @@ impl VisitorMut for RewriteRegCastToSubqueryVisitor<'_> {
                 && self.0.contains_key(&Self::normalize_type_name(inner_dt))
                 && Self::is_name_operand(inner_operand)
             {
-                *expr = Self::rewrite_operand(self.0.get(&Self::normalize_type_name(inner_dt)).map(|b| b.as_ref()), inner_operand);
+                *expr = Self::rewrite_operand(
+                    self.0
+                        .get(&Self::normalize_type_name(inner_dt))
+                        .map(|b| b.as_ref()),
+                    inner_operand,
+                );
             }
             return ControlFlow::Continue(());
         }
 
         // Pattern 2: `<name>::regTYPE` (bare cast).
-        if self.0.contains_key(&outer_type)
-            && Self::is_name_operand(outer_operand)
-        {
-            *expr = Self::rewrite_operand(self.0.get(&outer_type).map(|b| b.as_ref()), outer_operand);
+        if self.0.contains_key(&outer_type) && Self::is_name_operand(outer_operand) {
+            *expr =
+                Self::rewrite_operand(self.0.get(&outer_type).map(|b| b.as_ref()), outer_operand);
         }
 
         ControlFlow::Continue(())
@@ -633,7 +644,10 @@ impl RewriteRegCastToSubqueryVisitor<'_> {
         if let Some(lit) = Self::numeric_string_to_literal(operand) {
             return lit;
         }
-        Self::create_subquery(template.expect("template present for non-numeric operand"), operand)
+        Self::create_subquery(
+            template.expect("template present for non-numeric operand"),
+            operand,
+        )
     }
 }
 
@@ -696,7 +710,9 @@ impl VisitorMut for CastArrayBoundsForGenerateSeriesVisitor {
         if let TableFactor::Table { name, args, .. } = tf
             && let Some(ObjectNamePart::Identifier(ident)) = name.0.last()
             && ident.value.to_lowercase() == "generate_series"
-            && let Some(TableFunctionArgs { args: func_args, .. }) = args
+            && let Some(TableFunctionArgs {
+                args: func_args, ..
+            }) = args
         {
             for fa in func_args {
                 if let FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) = fa {
@@ -1449,12 +1465,9 @@ mod tests {
         // Forward (name->oid) casts for the other oid-alias types. Exact
         // expected strings are generated below from the same templates the
         // rule uses, so this test stays in sync if a template is tweaked.
-        let regnamespace_sql =
-            "SELECT n.oid FROM pg_catalog.pg_namespace n CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p WHERE n.nspname = p.parts[-1]";
-        let regtype_sql =
-            "SELECT t.oid FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND t.typname = p.parts[-1]";
-        let regproc_sql =
-            "SELECT pr.oid FROM pg_catalog.pg_proc pr JOIN pg_catalog.pg_namespace n ON n.oid = pr.pronamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND pr.proname = p.parts[-1]";
+        let regnamespace_sql = "SELECT n.oid FROM pg_catalog.pg_namespace n CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p WHERE n.nspname = p.parts[-1]";
+        let regtype_sql = "SELECT t.oid FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND t.typname = p.parts[-1]";
+        let regproc_sql = "SELECT pr.oid FROM pg_catalog.pg_proc pr JOIN pg_catalog.pg_namespace n ON n.oid = pr.pronamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND pr.proname = p.parts[-1]";
 
         let expected = |template: &str, operand: &str| -> String {
             format!(
@@ -1513,15 +1526,18 @@ mod tests {
         let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
             vec![Arc::new(RewriteRegCastToSubquery::new())];
 
-        assert_rewrite!(&rules,
+        assert_rewrite!(
+            &rules,
             "SELECT prorettype::regtype::text FROM pg_proc",
             "SELECT prorettype::regtype::TEXT FROM pg_proc"
         );
-        assert_rewrite!(&rules,
+        assert_rewrite!(
+            &rules,
             "SELECT atttypid::regtype FROM pg_attribute",
             "SELECT atttypid::regtype FROM pg_attribute"
         );
-        assert_rewrite!(&rules,
+        assert_rewrite!(
+            &rules,
             "SELECT relnamespace::regnamespace FROM pg_class",
             "SELECT relnamespace::regnamespace FROM pg_class"
         );
@@ -1547,7 +1563,8 @@ mod tests {
         assert_rewrite!(&rules, "SELECT '99'::regnamespace", "SELECT 99");
 
         // A *non-numeric* name operand still becomes a lookup subquery.
-        assert_rewrite!(&rules,
+        assert_rewrite!(
+            &rules,
             "SELECT 'pg_namespace'::regclass",
             "SELECT (SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident('pg_namespace'::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
         );
