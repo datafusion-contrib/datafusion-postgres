@@ -26,6 +26,7 @@ use datafusion::sql::sqlparser::ast::SelectItemQualifiedWildcardKind;
 use datafusion::sql::sqlparser::ast::SetExpr;
 use datafusion::sql::sqlparser::ast::Statement;
 use datafusion::sql::sqlparser::ast::TableFactor;
+use datafusion::sql::sqlparser::ast::TableFunctionArgs;
 use datafusion::sql::sqlparser::ast::TableWithJoins;
 use datafusion::sql::sqlparser::ast::TypedString;
 use datafusion::sql::sqlparser::ast::UnaryOperator;
@@ -525,6 +526,31 @@ impl RewriteRegCastToSubqueryVisitor<'_> {
         )
     }
 
+    /// If `expr` is a single-quoted string whose contents are a base-10
+    /// integer, return that integer as a SQL number literal.
+    ///
+    /// In Postgres, `'16417'::regclass` (a *numeric* string) resolves directly
+    /// to the relation with that oid -- it does NOT do a name lookup. Emitting
+    /// the literal oid here is both more correct *and* avoids embedding a
+    /// `(SELECT ...)` subquery in contexts DataFusion can't decorrelate (e.g.
+    /// `VALUES ('16417'::regclass)` inside an `IN (...)`).
+    fn numeric_string_to_literal(expr: &Expr) -> Option<Expr> {
+        if let Expr::Value(ValueWithSpan {
+            value: Value::SingleQuotedString(s),
+            ..
+        }) = expr
+            && s.bytes().all(|b| b.is_ascii_digit())
+            && !s.is_empty()
+        {
+            // negative numbers can't be oids; the ascii_digit check above also
+            // rejects signs, so this is always non-negative.
+            return Some(Expr::Value(
+                Value::Number(s.clone(), false).with_empty_span(),
+            ));
+        }
+        None
+    }
+
     /// Build `(SELECT oid FROM pg_catalog.<table> WHERE name = <expr-as-text>)`
     /// by cloning the type's query template and substituting `$1` with `expr`.
     fn create_subquery(template: &Query, expr: &Expr) -> Expr {
@@ -581,28 +607,110 @@ impl VisitorMut for RewriteRegCastToSubqueryVisitor<'_> {
                 ..
             } = outer_operand.as_ref()
                 && *inner_kind == CastKind::DoubleColon
-                && let Some(template) = self.0.get(&Self::normalize_type_name(inner_dt))
+                && self.0.contains_key(&Self::normalize_type_name(inner_dt))
                 && Self::is_name_operand(inner_operand)
             {
-                *expr = Self::create_subquery(template, inner_operand);
+                *expr = Self::rewrite_operand(self.0.get(&Self::normalize_type_name(inner_dt)).map(|b| b.as_ref()), inner_operand);
             }
             return ControlFlow::Continue(());
         }
 
         // Pattern 2: `<name>::regTYPE` (bare cast).
-        if let Some(template) = self.0.get(&outer_type)
+        if self.0.contains_key(&outer_type)
             && Self::is_name_operand(outer_operand)
         {
-            *expr = Self::create_subquery(template, outer_operand);
+            *expr = Self::rewrite_operand(self.0.get(&outer_type).map(|b| b.as_ref()), outer_operand);
         }
 
         ControlFlow::Continue(())
     }
 }
 
+impl RewriteRegCastToSubqueryVisitor<'_> {
+    /// Rewrite a forward cast operand to either a literal oid (when it's a
+    /// numeric string, matching Postgres) or the name->oid lookup subquery.
+    fn rewrite_operand(template: Option<&Query>, operand: &Expr) -> Expr {
+        if let Some(lit) = Self::numeric_string_to_literal(operand) {
+            return lit;
+        }
+        Self::create_subquery(template.expect("template present for non-numeric operand"), operand)
+    }
+}
+
 impl SqlStatementRewriteRule for RewriteRegCastToSubquery {
     fn rewrite(&self, mut s: Statement) -> Statement {
         let mut visitor = RewriteRegCastToSubqueryVisitor(&self.0);
+        let _ = s.visit(&mut visitor);
+        s
+    }
+}
+
+/// Cast `array_upper`/`array_lower` results to `bigint` when used as
+/// `generate_series` arguments.
+///
+/// DataFusion's `generate_series` requires Int64 bounds, but our
+/// `array_upper`/`array_lower` UDFs return Int32 (correct Postgres semantics --
+/// Postgres `array_upper` returns `int4`). Postgres implicitly coerces int4 to
+/// int8 for `generate_series`; DataFusion does not, so without this rule
+/// `generate_series(1, array_upper(current_schemas(false), 1))` fails with
+/// "Argument #2 must be an INTEGER". This rule performs the coercion the way
+/// Postgres would, removing the need to blacklist such client queries.
+#[derive(Debug)]
+pub struct CastArrayBoundsForGenerateSeries;
+
+struct CastArrayBoundsForGenerateSeriesVisitor;
+
+impl CastArrayBoundsForGenerateSeriesVisitor {
+    /// True when `expr` is a call to `array_upper`/`array_lower` (optionally
+    /// `pg_catalog.`-qualified) -- the Int32-returning UDFs that collide with
+    /// `generate_series`'s Int64 requirement.
+    fn is_array_bounds_call(expr: &Expr) -> bool {
+        if let Expr::Function(f) = expr
+            && let Some(ObjectNamePart::Identifier(ident)) = f.name.0.last()
+        {
+            let v = ident.value.to_lowercase();
+            return v == "array_upper" || v == "array_lower";
+        }
+        false
+    }
+
+    /// Wrap `expr` in `::bigint` if it's an array_bounds call.
+    fn maybe_cast(expr: &mut Expr) {
+        if Self::is_array_bounds_call(expr) {
+            let inner = std::mem::replace(expr, Expr::Value(Value::Null.with_empty_span()));
+            *expr = Expr::Cast {
+                expr: Box::new(inner),
+                kind: CastKind::DoubleColon,
+                data_type: DataType::BigInt(None),
+                array: false,
+                format: None,
+            };
+        }
+    }
+}
+
+impl VisitorMut for CastArrayBoundsForGenerateSeriesVisitor {
+    type Break = ();
+
+    fn pre_visit_table_factor(&mut self, tf: &mut TableFactor) -> ControlFlow<Self::Break> {
+        if let TableFactor::Table { name, args, .. } = tf
+            && let Some(ObjectNamePart::Identifier(ident)) = name.0.last()
+            && ident.value.to_lowercase() == "generate_series"
+            && let Some(TableFunctionArgs { args: func_args, .. }) = args
+        {
+            for fa in func_args {
+                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) = fa {
+                    Self::maybe_cast(e);
+                }
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+impl SqlStatementRewriteRule for CastArrayBoundsForGenerateSeries {
+    fn rewrite(&self, mut s: Statement) -> Statement {
+        let mut visitor = CastArrayBoundsForGenerateSeriesVisitor;
         let _ = s.visit(&mut visitor);
         s
     }
@@ -1416,6 +1524,64 @@ mod tests {
         assert_rewrite!(&rules,
             "SELECT relnamespace::regnamespace FROM pg_class",
             "SELECT relnamespace::regnamespace FROM pg_class"
+        );
+    }
+
+    #[test]
+    fn test_reg_cast_numeric_string_is_literal_oid() {
+        // A *numeric* string operand resolves directly to that oid (Postgres
+        // behavior), emitting a literal rather than a name-lookup subquery.
+        // This also avoids embedding a subquery in contexts DataFusion can't
+        // decorrelate (e.g. `VALUES ('16417'::regclass)` inside `IN (...)`).
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RewriteRegCastToSubquery::new())];
+
+        assert_rewrite!(&rules, "SELECT '16417'::regclass", "SELECT 16417");
+        assert_rewrite!(
+            &rules,
+            "SELECT '16417'::pg_catalog.regclass::oid",
+            "SELECT 16417"
+        );
+        assert_rewrite!(&rules, "SELECT '12345'::regtype", "SELECT 12345");
+        assert_rewrite!(&rules, "SELECT '42'::regproc", "SELECT 42");
+        assert_rewrite!(&rules, "SELECT '99'::regnamespace", "SELECT 99");
+
+        // A *non-numeric* name operand still becomes a lookup subquery.
+        assert_rewrite!(&rules,
+            "SELECT 'pg_namespace'::regclass",
+            "SELECT (SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident('pg_namespace'::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
+        );
+    }
+
+    #[test]
+    fn test_cast_array_bounds_for_generate_series() {
+        // array_upper/array_lower return Int32; generate_series wants Int64.
+        // The rule wraps those calls in ::bigint when used as generate_series args.
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(CastArrayBoundsForGenerateSeries)];
+
+        assert_rewrite!(
+            &rules,
+            "SELECT s.r FROM generate_series(1, array_upper(current_schemas(false), 1)) as s(r)",
+            "SELECT s.r FROM generate_series(1, array_upper(current_schemas(false), 1)::BIGINT) AS s (r)"
+        );
+        assert_rewrite!(
+            &rules,
+            "SELECT s.r FROM generate_series(array_lower(x, 1), array_upper(x, 1)) as s(r)",
+            "SELECT s.r FROM generate_series(array_lower(x, 1)::BIGINT, array_upper(x, 1)::BIGINT) AS s (r)"
+        );
+
+        // Non-array-bounds args are left alone (literal ints already work).
+        assert_rewrite!(
+            &rules,
+            "SELECT s.r FROM generate_series(1, 10) as s(r)",
+            "SELECT s.r FROM generate_series(1, 10) AS s (r)"
+        );
+        // array_upper used outside generate_series is NOT touched.
+        assert_rewrite!(
+            &rules,
+            "SELECT array_upper(x, 1)",
+            "SELECT array_upper(x, 1)"
         );
     }
 

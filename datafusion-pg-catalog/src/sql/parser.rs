@@ -9,6 +9,7 @@ use datafusion::sql::sqlparser::tokenizer::Token;
 use datafusion::sql::sqlparser::tokenizer::TokenWithSpan;
 
 use super::rules::AliasDuplicatedProjectionRewrite;
+use super::rules::CastArrayBoundsForGenerateSeries;
 use super::rules::CurrentUserVariableToSessionUserFunctionCall;
 use super::rules::FixArrayLiteral;
 use super::rules::FixCollate;
@@ -166,28 +167,15 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
  WHERE false"
     ),
 
-    // dbeaver type lookup. Uses `generate_series(1, array_upper(...))` over a
-    // *dynamic* array bound; DataFusion's `generate_series` is a table function
-    // that only accepts literal Int64 bounds, so this can't be executed as-is.
-    // `array_upper`/`array_lower` themselves are supported via the dedicated
-    // UDFs (see array_bounds_udf); the blocker here is generate_series, plus
-    // correlated array indexing in the same query.
-    (
-"SELECT typinput='pg_catalog.array_in'::regproc as is_array, typtype, typname, pg_type.oid   FROM pg_catalog.pg_type   LEFT JOIN (select ns.oid as nspoid, ns.nspname, r.r           from pg_namespace as ns           join ( select s.r, (current_schemas(false))[s.r] as nspname                    from generate_series(1, array_upper(current_schemas(false), 1)) as s(r) ) as r          using ( nspname )        ) as sp     ON sp.nspoid = typnamespace  WHERE pg_type.oid = 1034  ORDER BY sp.r, pg_type.oid DESC",
-"SELECT
-   NULL::BOOLEAN AS is_array,
-   NULL::TEXT AS typtype,
-   NULL::TEXT AS typname,
-   NULL::INT AS oid
- WHERE false"
-    ),
-
     // dbeaver relation-size lookup. Blocked by `c.relnamespace = 'public'`:
     // relnamespace is an oid (Int32) column, and comparing it to a bare string
-    // requires Postgres' regnamespace/oid-alias resolution, which DataFusion
-    // can't do (it tries string -> Int32 and fails). The proper fix is a
-    // regnamespace name->oid rewrite analogous to the regclass one; tracked
-    // separately. (Unrelated to array_upper/lower.)
+    // requires Postgres' implicit string->oid coercion, which DataFusion can't
+    // do (it tries string -> Int32 and fails). The explicit form
+    // `'public'::regnamespace` IS handled by RewriteRegCastToSubquery, but
+    // detecting that a *bare* string should be coerced requires knowing the
+    // column is an oid column -- schema awareness the AST-rewrite layer lacks.
+    // (Hardcoding pg_catalog column names like `relnamespace` would risk
+    // regressing user tables with same-named text columns, so it's not done.)
     (
 "select c.oid,pg_catalog.pg_total_relation_size(c.oid) as total_rel_size,pg_catalog.pg_relation_size(c.oid) as rel_size
      FROM pg_class c
@@ -196,26 +184,6 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
    NULL::INT AS oid,
    NULL::INT AS total_rel_size,
    NULL::INT AS rel_size
- WHERE false"
-    ),
-
-    // psql foreign-key (\d) lookup. Hits a DataFusion internal bug:
-    // "ScalarSubqueryExpr evaluated before the subquery was executed" -- the
-    // `confrelid IN (SELECT ... UNION ALL VALUES (...))` form isn't executed
-    // correctly by the optimizer. Unrelated to the regtype/regclass rewrite
-    // family; tracked as a separate DataFusion limitation.
-    (
-"SELECT conname, conrelid::pg_catalog.regclass AS ontable,
-            pg_catalog.pg_get_constraintdef(oid, true) AS condef
-        FROM pg_catalog.pg_constraint c
-      WHERE confrelid IN (SELECT pg_catalog.pg_partition_ancestors('16417')
-                          UNION ALL VALUES ('16417'::pg_catalog.regclass))
-            AND contype = 'f' AND conparentid = 0
-      ORDER BY conname;",
-"SELECT
-   NULL::TEXT AS conname,
-   NULL::INT AS ontable,
-   NULL::TEXT AS condef
  WHERE false"
     ),
 
@@ -284,6 +252,7 @@ impl PostgresCompatibilityParser {
                 Arc::new(PrependUnqualifiedPgTableName),
                 Arc::new(RemoveQualifier),
                 Arc::new(RewriteRegCastToSubquery::new()),
+                Arc::new(CastArrayBoundsForGenerateSeries),
                 Arc::new(RemoveUnsupportedTypes::new()),
                 Arc::new(FixArrayLiteral),
                 Arc::new(CurrentUserVariableToSessionUserFunctionCall),
