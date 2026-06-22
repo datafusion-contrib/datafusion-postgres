@@ -16,6 +16,7 @@ use tokio::sync::RwLock;
 use crate::pg_catalog::catalog_info::CatalogInfo;
 
 use super::OidCacheKey;
+use super::oid_field;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PgAttributeTable<C> {
@@ -34,9 +35,9 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
         // Define the schema for pg_attribute
         // This matches PostgreSQL's pg_attribute table columns
         let schema = Arc::new(Schema::new(vec![
-            Field::new("attrelid", DataType::Int32, false), // OID of the relation this column belongs to
+            oid_field::oid_field("attrelid", oid_field::kind::REGCLASS, false), // OID of the relation this column belongs to
             Field::new("attname", DataType::Utf8, false),   // Column name
-            Field::new("atttypid", DataType::Int32, false), // OID of the column data type
+            oid_field::oid_field("atttypid", oid_field::kind::REGTYPE, false), // OID of the column data type
             Field::new("attstattarget", DataType::Int32, false), // Statistics target
             Field::new("attlen", DataType::Int16, false),   // Length of the type
             Field::new("attnum", DataType::Int16, false), // Column number (positive for regular columns)
