@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow;
 
+use crate::pg_catalog::oid_field;
+
 use datafusion::sql::sqlparser::ast::Array;
 use datafusion::sql::sqlparser::ast::ArrayElemTypeDef;
 use datafusion::sql::sqlparser::ast::BinaryOperator;
@@ -297,44 +299,52 @@ impl SqlStatementRewriteRule for ResolveUnqualifiedIdentifer {
     }
 }
 
-/// Remove datafusion unsupported type annotations
-/// it also removes pg_catalog as qualifier
+/// Strip oid-alias cast type names (`::regclass`, `::regtype`, `::oid`, ...)
+/// that DataFusion rejects as unsupported SQL types during `sql_to_plan`.
+///
+/// This runs at the SQL/AST layer -- *before* `sql_to_plan` -- because the
+/// oid-coercion analyzer rule lives at the logical-plan layer and never gets a
+/// chance to see these casts (planning fails first). The set of stripped type
+/// names is derived from [`oid_field::OID_ALIAS_TYPE_NAMES`] so there is a
+/// single source of truth shared with the oid-alias column metadata.
+///
+/// Casts are peeled to a fixed point so nested forms like
+/// `'x'::regclass::oid` fully unwind to `'x'` (the bare value, which the
+/// oid-coercion rule then resolves against any oid-alias column it is compared
+/// with) rather than stopping at the intermediate `'x'::regclass` that would
+/// itself be rejected.
 #[derive(Debug)]
-pub struct RemoveUnsupportedTypes {
+pub struct RemoveOidTypeCast {
     unsupported_types: HashSet<String>,
 }
 
-impl Default for RemoveUnsupportedTypes {
+impl Default for RemoveOidTypeCast {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl RemoveUnsupportedTypes {
+impl RemoveOidTypeCast {
     pub fn new() -> Self {
         let mut unsupported_types = HashSet::new();
-
-        for item in [
-            "regclass",
-            "regproc",
-            "regtype",
-            "regtype[]",
-            "regnamespace",
-            "oid",
-        ] {
-            unsupported_types.insert(item.to_owned());
-            unsupported_types.insert(format!("pg_catalog.{item}"));
+        // Single source of truth: every oid-alias type name, in four spellings
+        // (bare, `pg_catalog.`-qualified, array, and qualified-array) to match
+        // however sqlparser stringifies the cast's target type.
+        for name in oid_field::OID_ALIAS_TYPE_NAMES {
+            unsupported_types.insert((*name).to_string());
+            unsupported_types.insert(format!("pg_catalog.{name}"));
+            unsupported_types.insert(format!("{name}[]"));
+            unsupported_types.insert(format!("pg_catalog.{name}[]"));
         }
-
         Self { unsupported_types }
     }
 }
 
-struct RemoveUnsupportedTypesVisitor<'a> {
+struct RemoveOidTypeCastVisitor<'a> {
     unsupported_types: &'a HashSet<String>,
 }
 
-impl VisitorMut for RemoveUnsupportedTypesVisitor<'_> {
+impl VisitorMut for RemoveOidTypeCastVisitor<'_> {
     type Break = ();
 
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
@@ -373,12 +383,12 @@ impl VisitorMut for RemoveUnsupportedTypesVisitor<'_> {
     }
 }
 
-impl SqlStatementRewriteRule for RemoveUnsupportedTypes {
+impl SqlStatementRewriteRule for RemoveOidTypeCast {
     fn rewrite(&self, mut statement: Statement) -> Statement {
         // The cast-peeling visitor may need multiple passes to fully unwind
         // nested casts (`'x'::regclass::oid`); loop until a fixed point.
         loop {
-            let mut visitor = RemoveUnsupportedTypesVisitor {
+            let mut visitor = RemoveOidTypeCastVisitor {
                 unsupported_types: &self.unsupported_types,
             };
             let before = statement.to_string();
@@ -1045,10 +1055,10 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_unsupported_types() {
+    fn test_remove_oid_type_cast() {
         let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![
             Arc::new(RemoveQualifier),
-            Arc::new(RemoveUnsupportedTypes::new()),
+            Arc::new(RemoveOidTypeCast::new()),
         ];
         assert_rewrite!(
             &rules,
@@ -1098,6 +1108,21 @@ mod tests {
             &rules,
             "SELECT 'pg_namespace'::regclass::oid",
             "SELECT 'pg_namespace'"
+        );
+
+        // The stripped set is derived from oid_field::OID_ALIAS_TYPE_NAMES, so
+        // every oid-alias type -- not just the original hardcoded six -- is
+        // peeled. Verify a representative newly-covered one (regrole) plus the
+        // array variant (regtype[], used by pgcli's proallargtypes).
+        assert_rewrite!(
+            &rules,
+            "SELECT 'postgres'::regrole",
+            "SELECT 'postgres'"
+        );
+        assert_rewrite!(
+            &rules,
+            "SELECT proallargtypes::regtype[] FROM pg_proc",
+            "SELECT proallargtypes FROM pg_proc"
         );
     }
 

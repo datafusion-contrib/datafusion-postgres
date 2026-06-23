@@ -35,16 +35,43 @@ pub mod kind {
     pub const REGPROC: &str = "regproc";
 }
 
+/// Every Postgres oid-alias type name this crate recognizes.
+///
+/// This is the **single source of truth** for:
+///  * the `pg.oid_alias` metadata value stamped on Int32 catalog columns (see
+///    [`oid_field`]) and embedded in the pg_catalog feather exports, and
+///  * the set of oid-alias cast type names that the `RemoveOidTypeCast`
+///    rewrite rule must strip before DataFusion's `sql_to_plan` (which rejects
+///    them as unsupported SQL types).
+///
+/// All of these are stored as `Int32` (the raw object identifier); the
+/// oid-coercion analyzer rule resolves string comparisons against them. The
+/// [`kind`] named constants anchor the subset that the dynamic catalog tables
+/// use and that have name-lookup support (`regclass`/`regnamespace`/`regproc`);
+/// the remainder are numeric-resolution-only.
+pub const OID_ALIAS_TYPE_NAMES: &[&str] = &[
+    kind::OID,
+    kind::REGPROC,
+    "regprocedure",
+    "regoper",
+    "regoperator",
+    kind::REGCLASS,
+    kind::REGTYPE,
+    kind::REGNAMESPACE,
+    "regrole",
+    "regconfig",
+    "regdictionary",
+    "regcollation",
+];
+
 /// Build an `Int32` [`Field`] for an oid / oid-alias column, annotated with
 /// metadata so the oid-coercion analyzer rule can recognize it.
 ///
-/// `kind` should be one of the [`kind`] constants (e.g. [`kind::REGNAMESPACE`]).
+/// `kind` should be one of the names in [`OID_ALIAS_TYPE_NAMES`] (e.g.
+/// [`kind::REGNAMESPACE`]).
 pub fn oid_field(name: impl Into<String>, kind: &str, nullable: bool) -> Field {
     debug_assert!(
-        matches!(
-            kind,
-            kind::OID | kind::REGCLASS | kind::REGNAMESPACE | kind::REGTYPE | kind::REGPROC
-        ),
+        OID_ALIAS_TYPE_NAMES.contains(&kind),
         "unknown oid-alias kind: {kind}"
     );
     Field::new(name, DataType::Int32, nullable).with_metadata(HashMap::from([(
