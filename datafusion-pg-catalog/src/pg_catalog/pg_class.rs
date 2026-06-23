@@ -12,6 +12,8 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::PartitionStream;
 use postgres_types::Oid;
+
+use super::oid_field;
 use tokio::sync::RwLock;
 
 use crate::pg_catalog::catalog_info::{CatalogInfo, table_type_to_string};
@@ -35,11 +37,11 @@ impl<C: CatalogInfo> PgClassTable<C> {
         // Define the schema for pg_class
         // This matches key columns from PostgreSQL's pg_class
         let schema = Arc::new(Schema::new(vec![
-            Field::new("oid", DataType::Int32, false), // Object identifier
+            oid_field::oid_field("oid", oid_field::kind::OID, false), // Object identifier
             Field::new("relname", DataType::Utf8, false), // Name of the table, index, view, etc.
-            Field::new("relnamespace", DataType::Int32, false), // OID of the namespace that contains this relation
-            Field::new("reltype", DataType::Int32, false), // OID of the data type (composite type) this table describes
-            Field::new("reloftype", DataType::Int32, true), // OID of the composite type for typed table, 0 otherwise
+            oid_field::oid_field("relnamespace", oid_field::kind::REGNAMESPACE, false), // OID of the namespace that contains this relation
+            oid_field::oid_field("reltype", oid_field::kind::REGTYPE, false), // OID of the data type (composite type) this table describes
+            oid_field::oid_field("reloftype", oid_field::kind::REGTYPE, true), // OID of the composite type for typed table, 0 otherwise
             Field::new("relowner", DataType::Int32, false), // Owner of the relation
             Field::new("relam", DataType::Int32, false), // If this is an index, the access method used
             Field::new("relfilenode", DataType::Int32, false), // Name of the on-disk file of this relation
@@ -47,7 +49,7 @@ impl<C: CatalogInfo> PgClassTable<C> {
             Field::new("relpages", DataType::Int32, false), // Size of the on-disk representation in pages
             Field::new("reltuples", DataType::Float64, false), // Number of tuples
             Field::new("relallvisible", DataType::Int32, false), // Number of all-visible pages
-            Field::new("reltoastrelid", DataType::Int32, false), // OID of the TOAST table
+            oid_field::oid_field("reltoastrelid", oid_field::kind::REGCLASS, false), // OID of the TOAST table
             Field::new("relhasindex", DataType::Boolean, false), // True if this is a table and it has (or recently had) any indexes
             Field::new("relisshared", DataType::Boolean, false), // True if this table is shared across all databases
             Field::new("relpersistence", DataType::Utf8, false), // p=permanent table, u=unlogged table, t=temporary table
@@ -62,7 +64,7 @@ impl<C: CatalogInfo> PgClassTable<C> {
             Field::new("relispopulated", DataType::Boolean, false), // True if relation is populated (not true for some materialized views)
             Field::new("relreplident", DataType::Utf8, false), // Columns used to form "replica identity" for rows
             Field::new("relispartition", DataType::Boolean, false), // True if table is a partition
-            Field::new("relrewrite", DataType::Int32, true), // OID of a rule that rewrites this relation
+            oid_field::oid_field("relrewrite", oid_field::kind::REGCLASS, true), // OID of a rule that rewrites this relation
             Field::new("relfrozenxid", DataType::Int32, false), // All transaction IDs before this have been replaced with a permanent ("frozen") transaction ID
             Field::new("relminmxid", DataType::Int32, false), // All Multixact IDs before this have been replaced with a transaction ID
             Field::new("relpartbound", DataType::Utf8, true),

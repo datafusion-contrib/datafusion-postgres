@@ -15,12 +15,11 @@ use super::rules::FixArrayLiteral;
 use super::rules::FixCollate;
 use super::rules::FixVersionColumnName;
 use super::rules::PrependUnqualifiedPgTableName;
+use super::rules::RemoveOidTypeCast;
 use super::rules::RemoveQualifier;
 use super::rules::RemoveSubqueryFromProjection;
-use super::rules::RemoveUnsupportedTypes;
 use super::rules::ResolveUnqualifiedIdentifer;
 use super::rules::RewriteArrayAnyAllOperation;
-use super::rules::RewriteRegCastToSubquery;
 use super::rules::SqlStatementRewriteRule;
 
 const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
@@ -251,9 +250,8 @@ impl PostgresCompatibilityParser {
                 Arc::new(RewriteArrayAnyAllOperation),
                 Arc::new(PrependUnqualifiedPgTableName),
                 Arc::new(RemoveQualifier),
-                Arc::new(RewriteRegCastToSubquery::new()),
                 Arc::new(CastArrayBoundsForGenerateSeries),
-                Arc::new(RemoveUnsupportedTypes::new()),
+                Arc::new(RemoveOidTypeCast::new()),
                 Arc::new(FixArrayLiteral),
                 Arc::new(CurrentUserVariableToSessionUserFunctionCall),
                 Arc::new(FixCollate),
