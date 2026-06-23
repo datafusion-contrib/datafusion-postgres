@@ -8,6 +8,8 @@ use datafusion::error::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::PartitionStream;
+
+use super::oid_field;
 use postgres_types::Oid;
 use tokio::sync::RwLock;
 
@@ -32,11 +34,11 @@ impl<C: CatalogInfo> PgNamespaceTable<C> {
         // Define the schema for pg_namespace
         // This matches the columns from PostgreSQL's pg_namespace
         let schema = Arc::new(Schema::new(vec![
-            Field::new("oid", DataType::Int32, false), // Object identifier
+            oid_field::oid_field("oid", oid_field::kind::OID, false), // Object identifier
             Field::new("nspname", DataType::Utf8, false), // Name of the namespace (schema)
             Field::new("nspowner", DataType::Int32, false), // Owner of the namespace
-            Field::new("nspacl", DataType::Utf8, true), // Access privileges
-            Field::new("options", DataType::Utf8, true), // Schema-level options
+            Field::new("nspacl", DataType::Utf8, true),   // Access privileges
+            Field::new("options", DataType::Utf8, true),  // Schema-level options
         ]));
 
         Self {

@@ -13,7 +13,13 @@ from typing import Dict, Any, List, Optional
 import sys
 
 def map_postgresql_to_arrow_type(type_oid: int) -> pa.DataType:
-    """Map PostgreSQL data types to Arrow data types."""
+    """Map PostgreSQL data types to Arrow data types.
+
+    Every oid-alias type (oid, regproc, regtype, regclass, regnamespace, ...)
+    is stored as int32 (the raw object identifier) so the
+    `datafusion-pg-catalog` oid-coercion analyzer rule can resolve name/numeric
+    string comparisons uniformly.
+    """
     # Map OIDs to Arrow types
     type_mapping = {
         # Integer types (OIDs from PostgreSQL documentation)
@@ -61,6 +67,31 @@ def map_postgresql_to_arrow_type(type_oid: int) -> pa.DataType:
 
     return type_mapping.get(type_oid, pa.string())  # Fallback to string
 
+# PostgreSQL `reg*` type names (and `oid`). Their OIDs are version-stable but
+# kept here as (oid, name) pairs so we can both map them to int32 and stamp
+# `pg.oid_alias=<name>` field metadata for the catalog analyzer rule.
+OID_ALIAS_TYPES_BY_NAME = {
+    'oid',
+    'regproc', 'regprocedure',
+    'regoper', 'regoperator',
+    'regclass', 'regtype',
+    'regnamespace', 'regrole',
+    'regconfig', 'regdictionary', 'regcollation',
+}
+
+
+def load_type_names(conn) -> dict:
+    """Build a {type_oid: typname} map from pg_type for oid-alias detection."""
+    cur = conn.cursor()
+    cur.execute("SELECT oid, typname FROM pg_catalog.pg_type")
+    mapping = {row[0]: row[1] for row in cur.fetchall()}
+    cur.close()
+    return mapping
+
+
+def is_oid_alias(type_name: str) -> bool:
+    return type_name in OID_ALIAS_TYPES_BY_NAME
+
 def export_query_to_feather(
     connection_string: str,
     query: str,
@@ -74,6 +105,9 @@ def export_query_to_feather(
         conn = psycopg2.connect(connection_string)
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
+        # type_oid -> typname, used to detect oid-alias columns for metadata.
+        type_names = load_type_names(conn)
+
         # Execute query
         cursor.execute(query)
 
@@ -81,16 +115,20 @@ def export_query_to_feather(
         columns = []
         arrow_types = []
         column_names = []
+        column_oid_kinds = []  # pg.oid_alias value per column, or None
 
         for desc in cursor.description:
             col_name = desc.name
             col_oid = desc.type_code
 
             arrow_type = map_postgresql_to_arrow_type(col_oid)
+            type_name = type_names.get(col_oid, '')
+            oid_kind = type_name if is_oid_alias(type_name) else None
 
             columns.append(col_name)
             arrow_types.append(arrow_type)
             column_names.append(col_name)
+            column_oid_kinds.append(oid_kind)
 
         # Process data in batches
         all_data = {col: [] for col in columns}
@@ -122,8 +160,12 @@ def export_query_to_feather(
                     array = pa.array([str(x) if x is not None else None for x in all_data[col]], type=pa.string())
                 arrays.append(array)
 
-            # Create table and write to feather
-            table = pa.Table.from_arrays(arrays, names=column_names)
+            # Build schema with pg.oid_alias metadata on oid-alias columns.
+            fields = []
+            for name, arrow_type, oid_kind in zip(column_names, arrow_types, column_oid_kinds):
+                metadata = {b'pg.oid_alias': oid_kind.encode()} if oid_kind else {}
+                fields.append(pa.field(name, arrow_type, metadata=metadata))
+            table = pa.Table.from_arrays(arrays, schema=pa.schema(fields))
             feather.write_feather(table, output_file)
 
             print(f"Successfully exported {rows_processed} rows to {output_file}")

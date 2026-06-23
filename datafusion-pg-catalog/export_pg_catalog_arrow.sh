@@ -160,7 +160,13 @@ import json
 import numpy as np
 
 def pg_type_to_arrow_type(pg_type, is_nullable=True):
-    """Map PostgreSQL types to Arrow types"""
+    """Map PostgreSQL types to Arrow types
+
+    Every oid-alias type (oid, regproc, regtype, regclass, regnamespace, ...)
+    is stored as int32: the underlying object identifier. This lets the
+    `datafusion-pg-catalog` oid-coercion analyzer rule resolve name/numeric
+    string comparisons uniformly across all such columns.
+    """
     type_mapping = {
         'bigint': pa.int64(),
         'integer': pa.int32(),
@@ -173,10 +179,20 @@ def pg_type_to_arrow_type(pg_type, is_nullable=True):
         'character varying': pa.string(),
         'character': pa.string(),
         'name': pa.string(),
-        'oid': pa.int32(),  # OIDs are signed
-        'regproc': pa.string(),
-        'regtype': pa.string(),
-        'regclass': pa.string(),
+        # --- oid-alias family: all stored as int32 (the raw oid) ---
+        'oid': pa.int32(),
+        'regproc': pa.int32(),
+        'regprocedure': pa.int32(),
+        'regoper': pa.int32(),
+        'regoperator': pa.int32(),
+        'regclass': pa.int32(),
+        'regtype': pa.int32(),
+        'regnamespace': pa.int32(),
+        'regrole': pa.int32(),
+        'regconfig': pa.int32(),
+        'regdictionary': pa.int32(),
+        'regcollation': pa.int32(),
+        # --- end oid-alias family ---
         'timestamp': pa.timestamp('us'),
         'timestamp without time zone': pa.timestamp('us'),
         'timestamp with time zone': pa.timestamp('us', tz='UTC'),
@@ -206,6 +222,30 @@ def pg_type_to_arrow_type(pg_type, is_nullable=True):
 
     arrow_type = type_mapping.get(pg_type, pa.string())
     return arrow_type
+
+# PostgreSQL types that are object-identifier aliases. For these we stamp Arrow
+# field metadata `pg.oid_alias=<pg_type>` so the catalog's oid-coercion analyzer
+# rule can resolve name/numeric string comparisons the way Postgres does.
+OID_ALIAS_TYPES = {
+    'oid',
+    'regproc', 'regprocedure',
+    'regoper', 'regoperator',
+    'regclass', 'regtype',
+    'regnamespace', 'regrole',
+    'regconfig', 'regdictionary', 'regcollation',
+}
+
+# reg* aliases need an explicit `::oid` cast at SELECT time because Postgres
+# returns their display (name) form, not the integer, on a plain SELECT.
+REG_OID_TYPES = OID_ALIAS_TYPES - {'oid'}
+
+
+def select_expr(col_name, data_type):
+    """Build a SELECT column expression, casting reg* columns to oid."""
+    quoted = '"' + col_name.replace('"', '""') + '"'
+    if data_type in REG_OID_TYPES:
+        return f'{quoted}::oid AS {quoted}'
+    return quoted
 
 def convert_value(value, arrow_type):
     """Convert PostgreSQL value to Arrow-compatible value"""
@@ -325,7 +365,9 @@ def export_table_to_arrow(conn, schema_name, table_name, output_dir):
         print(f"{'Column Name':<30} {'Type':<20} {'Nullable':<10} {'Description':<40}")
         print("-" * 100)
 
-        # Build Arrow schema
+        # Build Arrow schema. For oid-alias columns we attach field metadata
+        # so the Rust catalog's oid-coercion analyzer rule can resolve string
+        # comparisons against them.
         arrow_fields = []
         for col_name, data_type, is_nullable, default, comment in columns:
             nullable = "YES" if is_nullable == 'YES' else "NO"
@@ -334,13 +376,26 @@ def export_table_to_arrow(conn, schema_name, table_name, output_dir):
 
             # Create Arrow field
             arrow_type = pg_type_to_arrow_type(data_type, is_nullable == 'YES')
-            field = pa.field(col_name, arrow_type, nullable=(is_nullable == 'YES'))
+            metadata = {}
+            if data_type in OID_ALIAS_TYPES:
+                metadata['pg.oid_alias'] = data_type
+                print(f"{'':>62} -> annotated pg.oid_alias={data_type}")
+            field = pa.field(
+                col_name, arrow_type,
+                nullable=(is_nullable == 'YES'),
+                metadata=metadata,
+            )
             arrow_fields.append(field)
 
         arrow_schema = pa.schema(arrow_fields)
 
-        # Fetch all data
-        cur.execute(f"SELECT * FROM {schema_name}.{table_name}")
+        # Fetch all data. reg* oid-alias columns are cast to oid at SELECT time
+        # so they are returned as integers (matching their stored Arrow type).
+        select_cols = ", ".join(
+            select_expr(name, dtype)
+            for (name, dtype, _, _, _) in columns
+        )
+        cur.execute(f'SELECT {select_cols} FROM {schema_name}."{table_name}"')
 
         # Process data in batches to handle large tables
         batch_size = 10000
