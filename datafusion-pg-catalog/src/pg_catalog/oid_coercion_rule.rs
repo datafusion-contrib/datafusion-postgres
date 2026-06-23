@@ -468,4 +468,48 @@ mod tests {
             "IN ('{name}') must resolve the name the same as = {oid}"
         );
     }
+
+    /// End-to-end proof that oid metadata embedded in the FEATHER files (not
+    /// hand-annotated in the dynamic builder) reaches the analyzer rule.
+    /// `pg_type` and `pg_proc` are both static tables loaded from feather;
+    /// `pg_type.typinput` is annotated `regproc` purely via the export script.
+    #[tokio::test]
+    async fn feather_metadata_reaches_rule_for_static_tables() {
+        let ctx = make_ctx().await;
+
+        // Find a pg_type row whose typinput maps to a real pg_proc row, so we
+        // have a concrete (name, oid) pair to test name resolution.
+        let pairs = utf8_column(
+            &ctx,
+            "SELECT p.proname FROM pg_catalog.pg_proc p \
+             JOIN pg_catalog.pg_type t ON t.typinput = p.oid \
+             WHERE p.proname IS NOT NULL LIMIT 1",
+        )
+        .await;
+        assert!(!pairs.is_empty(), "should find a pg_type/pg_proc join");
+        let proc_name = &pairs[0];
+
+        // Baseline: the int oid of that proc.
+        let oid_rows = utf8_column(
+            &ctx,
+            &format!("SELECT oid::text FROM pg_catalog.pg_proc WHERE proname = '{proc_name}' LIMIT 1"),
+        ).await;
+        let oid = &oid_rows[0];
+
+        // Baseline: pg_type rows whose typinput equals that oid (as int).
+        let baseline = utf8_column(
+            &ctx,
+            &format!("SELECT typname FROM pg_catalog.pg_type WHERE typinput = {oid}"),
+        ).await;
+
+        // The headline: compare typinput (regproc, from feather metadata)
+        // against the proc NAME string. Without the rule this returns 0 rows;
+        // with it, the name resolves via pg_proc and matches the baseline.
+        let by_name = utf8_column(
+            &ctx,
+            &format!("SELECT typname FROM pg_catalog.pg_type WHERE typinput = '{proc_name}'"),
+        ).await;
+        assert_eq!(by_name, baseline,
+            "feather-annotated regproc column must resolve name strings via the rule");
+    }
 }
