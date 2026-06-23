@@ -37,8 +37,8 @@ impl<C: CatalogInfo> PgNamespaceTable<C> {
             oid_field::oid_field("oid", oid_field::kind::OID, false), // Object identifier
             Field::new("nspname", DataType::Utf8, false), // Name of the namespace (schema)
             Field::new("nspowner", DataType::Int32, false), // Owner of the namespace
-            Field::new("nspacl", DataType::Utf8, true), // Access privileges
-            Field::new("options", DataType::Utf8, true), // Schema-level options
+            Field::new("nspacl", DataType::Utf8, true),   // Access privileges
+            Field::new("options", DataType::Utf8, true),  // Schema-level options
         ]));
 
         Self {

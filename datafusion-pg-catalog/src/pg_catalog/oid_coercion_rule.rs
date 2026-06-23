@@ -69,7 +69,9 @@ impl OidStringCoercion {
 
 impl AnalyzerRule for OidStringCoercion {
     fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
-        let mut rewriter = PlanRewriter { provider: &self.provider };
+        let mut rewriter = PlanRewriter {
+            provider: &self.provider,
+        };
         Ok(plan.rewrite(&mut rewriter)?.data)
     }
 
@@ -131,9 +133,15 @@ fn rewrite_expr_shallow(
         Expr::BinaryExpr(b) if matches!(b.op, Operator::Eq | Operator::NotEq) => {
             // Try both operand orders: `col = 'x'` and `'x' = col`.
             for (col_side, lit_side) in [(&b.left, &b.right), (&b.right, &b.left)] {
-                let Some(col) = unwrap_column(col_side) else { continue };
-                let Some(kind) = oid_kind(&col, schema) else { continue };
-                let Some(s) = as_str_literal(lit_side) else { continue };
+                let Some(col) = unwrap_column(col_side) else {
+                    continue;
+                };
+                let Some(kind) = oid_kind(&col, schema) else {
+                    continue;
+                };
+                let Some(s) = as_str_literal(lit_side) else {
+                    continue;
+                };
                 if let Some(resolved) = resolve_operand(&kind, s, provider)? {
                     return Ok(Some(Expr::BinaryExpr(BinaryExpr {
                         left: Box::new(Expr::Column(col)),
@@ -144,9 +152,17 @@ fn rewrite_expr_shallow(
             }
             Ok(None)
         }
-        Expr::InList(InList { expr, list, negated }) => {
-            let Some(col) = unwrap_column(expr) else { return Ok(None) };
-            let Some(kind) = oid_kind(&col, schema) else { return Ok(None) };
+        Expr::InList(InList {
+            expr,
+            list,
+            negated,
+        }) => {
+            let Some(col) = unwrap_column(expr) else {
+                return Ok(None);
+            };
+            let Some(kind) = oid_kind(&col, schema) else {
+                return Ok(None);
+            };
 
             // Resolve every string-literal entry; if any is a name we cannot
             // resolve (no backing table), leave the whole IN alone rather than
@@ -186,10 +202,12 @@ fn rewrite_expr_shallow(
 fn unwrap_column(e: &Expr) -> Option<Column> {
     match e {
         Expr::Column(c) => Some(c.clone()),
-        Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => match expr.as_ref() {
-            Expr::Column(c) => Some(c.clone()),
-            _ => None,
-        },
+        Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
+            match expr.as_ref() {
+                Expr::Column(c) => Some(c.clone()),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -289,8 +307,14 @@ mod tests {
             lookup_target(oid_field::kind::REGNAMESPACE),
             Some(("pg_namespace", "nspname"))
         );
-        assert_eq!(lookup_target(oid_field::kind::REGCLASS), Some(("pg_class", "relname")));
-        assert_eq!(lookup_target(oid_field::kind::REGPROC), Some(("pg_proc", "proname")));
+        assert_eq!(
+            lookup_target(oid_field::kind::REGCLASS),
+            Some(("pg_class", "relname"))
+        );
+        assert_eq!(
+            lookup_target(oid_field::kind::REGPROC),
+            Some(("pg_proc", "proname"))
+        );
         // bare oid and regtype have no backing table -> name resolution unsupported
         assert_eq!(lookup_target(oid_field::kind::OID), None);
         assert_eq!(lookup_target(oid_field::kind::REGTYPE), None);
@@ -356,18 +380,24 @@ mod tests {
         for b in &batches {
             let col = b.column(0);
             let strs: Vec<Option<&str>> = match col.data_type() {
-                DataType::Utf8 => {
-                    col.as_any().downcast_ref::<StringArray>().unwrap().iter().collect()
-                }
+                DataType::Utf8 => col
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap()
+                    .iter()
+                    .collect(),
                 DataType::LargeUtf8 => col
                     .as_any()
                     .downcast_ref::<datafusion::arrow::array::GenericStringArray<i64>>()
                     .unwrap()
                     .iter()
                     .collect(),
-                DataType::Utf8View => {
-                    col.as_any().downcast_ref::<StringViewArray>().unwrap().iter().collect()
-                }
+                DataType::Utf8View => col
+                    .as_any()
+                    .downcast_ref::<StringViewArray>()
+                    .unwrap()
+                    .iter()
+                    .collect(),
                 other => panic!("expected string column, got {other:?}"),
             };
             for v in strs {
@@ -393,12 +423,21 @@ mod tests {
             "SELECT DISTINCT relnamespace::text FROM pg_catalog.pg_class ORDER BY 1 LIMIT 1",
         )
         .await;
-        assert!(!oids.is_empty(), "pg_class should contain at least one relation");
+        assert!(
+            !oids.is_empty(),
+            "pg_class should contain at least one relation"
+        );
         let oid = oids[0].clone();
-        let names =
-            utf8_column(ctx, &format!("SELECT nspname FROM pg_catalog.pg_namespace WHERE oid = {oid}"))
-                .await;
-        assert_eq!(names.len(), 1, "relnamespace oid should map to exactly one schema");
+        let names = utf8_column(
+            ctx,
+            &format!("SELECT nspname FROM pg_catalog.pg_namespace WHERE oid = {oid}"),
+        )
+        .await;
+        assert_eq!(
+            names.len(),
+            1,
+            "relnamespace oid should map to exactly one schema"
+        );
         (oid, names[0].clone())
     }
 
@@ -413,7 +452,10 @@ mod tests {
             &format!("SELECT relname FROM pg_catalog.pg_class WHERE relnamespace = {oid}"),
         )
         .await;
-        assert!(!baseline.is_empty(), "baseline (int oid) should match relations");
+        assert!(
+            !baseline.is_empty(),
+            "baseline (int oid) should match relations"
+        );
 
         // The headline case: compare against a NAME string. Without the rule
         // DataFusion silently returns 0 rows; with it, Postgres name->oid
@@ -492,15 +534,19 @@ mod tests {
         // Baseline: the int oid of that proc.
         let oid_rows = utf8_column(
             &ctx,
-            &format!("SELECT oid::text FROM pg_catalog.pg_proc WHERE proname = '{proc_name}' LIMIT 1"),
-        ).await;
+            &format!(
+                "SELECT oid::text FROM pg_catalog.pg_proc WHERE proname = '{proc_name}' LIMIT 1"
+            ),
+        )
+        .await;
         let oid = &oid_rows[0];
 
         // Baseline: pg_type rows whose typinput equals that oid (as int).
         let baseline = utf8_column(
             &ctx,
             &format!("SELECT typname FROM pg_catalog.pg_type WHERE typinput = {oid}"),
-        ).await;
+        )
+        .await;
 
         // The headline: compare typinput (regproc, from feather metadata)
         // against the proc NAME string. Without the rule this returns 0 rows;
@@ -508,8 +554,11 @@ mod tests {
         let by_name = utf8_column(
             &ctx,
             &format!("SELECT typname FROM pg_catalog.pg_type WHERE typinput = '{proc_name}'"),
-        ).await;
-        assert_eq!(by_name, baseline,
-            "feather-annotated regproc column must resolve name strings via the rule");
+        )
+        .await;
+        assert_eq!(
+            by_name, baseline,
+            "feather-annotated regproc column must resolve name strings via the rule"
+        );
     }
 }

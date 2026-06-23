@@ -36,10 +36,10 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
         // This matches PostgreSQL's pg_attribute table columns
         let schema = Arc::new(Schema::new(vec![
             oid_field::oid_field("attrelid", oid_field::kind::REGCLASS, false), // OID of the relation this column belongs to
-            Field::new("attname", DataType::Utf8, false),   // Column name
+            Field::new("attname", DataType::Utf8, false),                       // Column name
             oid_field::oid_field("atttypid", oid_field::kind::REGTYPE, false), // OID of the column data type
-            Field::new("attstattarget", DataType::Int32, false), // Statistics target
-            Field::new("attlen", DataType::Int16, false),   // Length of the type
+            Field::new("attstattarget", DataType::Int32, false),               // Statistics target
+            Field::new("attlen", DataType::Int16, false),                      // Length of the type
             Field::new("attnum", DataType::Int16, false), // Column number (positive for regular columns)
             Field::new("attndims", DataType::Int32, false), // Number of dimensions for array types
             Field::new("attcacheoff", DataType::Int32, false), // Cache offset

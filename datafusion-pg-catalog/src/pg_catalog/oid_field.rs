@@ -47,8 +47,10 @@ pub fn oid_field(name: impl Into<String>, kind: &str, nullable: bool) -> Field {
         ),
         "unknown oid-alias kind: {kind}"
     );
-    Field::new(name, DataType::Int32, nullable)
-        .with_metadata(HashMap::from([(OID_ALIAS_KEY.to_string(), kind.to_string())]))
+    Field::new(name, DataType::Int32, nullable).with_metadata(HashMap::from([(
+        OID_ALIAS_KEY.to_string(),
+        kind.to_string(),
+    )]))
 }
 
 #[cfg(test)]
@@ -59,7 +61,10 @@ mod tests {
     fn oid_field_carries_kind_metadata() {
         let f = oid_field("relnamespace", kind::REGNAMESPACE, false);
         assert_eq!(f.data_type(), &DataType::Int32);
-        assert_eq!(f.metadata().get(OID_ALIAS_KEY).map(String::as_str), Some("regnamespace"));
+        assert_eq!(
+            f.metadata().get(OID_ALIAS_KEY).map(String::as_str),
+            Some("regnamespace")
+        );
         assert!(!f.is_nullable());
 
         let nullable = oid_field("reloftype", kind::REGTYPE, true);

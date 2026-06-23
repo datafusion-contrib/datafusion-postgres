@@ -1503,11 +1503,9 @@ where
     // Make oid / oid-alias columns (relnamespace, atttypid, ...) compare
     // against string literals the way Postgres does. Requires the schema
     // provider handle (kept above) to resolve names -> oids at plan time.
-    session_context.add_analyzer_rule(Arc::new(
-        oid_coercion_rule::OidStringCoercion::new(
-            pg_catalog.clone() as Arc<dyn oid_coercion_rule::OidLookupProvider>,
-        ),
-    ));
+    session_context.add_analyzer_rule(Arc::new(oid_coercion_rule::OidStringCoercion::new(
+        pg_catalog.clone() as Arc<dyn oid_coercion_rule::OidLookupProvider>,
+    )));
 
     Ok(())
 }
