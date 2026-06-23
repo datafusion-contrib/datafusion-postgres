@@ -33,8 +33,6 @@ use datafusion::sql::sqlparser::ast::ValueWithSpan;
 use datafusion::sql::sqlparser::ast::VisitMut;
 use datafusion::sql::sqlparser::ast::Visitor;
 use datafusion::sql::sqlparser::ast::VisitorMut;
-use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
-use datafusion::sql::sqlparser::parser::Parser;
 
 pub trait SqlStatementRewriteRule: Send + Sync + Debug {
     fn rewrite(&self, s: Statement) -> Statement;
@@ -360,6 +358,10 @@ impl VisitorMut for RemoveUnsupportedTypesVisitor<'_> {
                 .unsupported_types
                 .contains(data_type.to_string().to_lowercase().as_str()) =>
             {
+                // Replace with the inner expression. The single-pass visitor
+                // won't re-visit this replacement, so the rule driver loops to
+                // a fixed point to fully peel nested casts like
+                // `'x'::regclass::oid` -> `'x'`.
                 *expr = *value.clone();
             }
 
@@ -373,167 +375,20 @@ impl VisitorMut for RemoveUnsupportedTypesVisitor<'_> {
 
 impl SqlStatementRewriteRule for RemoveUnsupportedTypes {
     fn rewrite(&self, mut statement: Statement) -> Statement {
-        let mut visitor = RemoveUnsupportedTypesVisitor {
-            unsupported_types: &self.unsupported_types,
-        };
-        let _ = statement.visit(&mut visitor);
+        // The cast-peeling visitor may need multiple passes to fully unwind
+        // nested casts (`'x'::regclass::oid`); loop until a fixed point.
+        loop {
+            let mut visitor = RemoveUnsupportedTypesVisitor {
+                unsupported_types: &self.unsupported_types,
+            };
+            let before = statement.to_string();
+            let _ = statement.visit(&mut visitor);
+            let after = statement.to_string();
+            if before == after {
+                break;
+            }
+        }
         statement
-    }
-}
-
-/// Rewrite regclass::oid cast to subquery
-///
-/// This rewrites patterns like `$1::regclass::oid` to
-/// `(SELECT oid FROM pg_catalog.pg_class WHERE relname = $1)`
-#[derive(Debug)]
-pub struct RewriteRegclassCastToSubquery(Box<Query>);
-
-impl Default for RewriteRegclassCastToSubquery {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RewriteRegclassCastToSubquery {
-    pub fn new() -> Self {
-        let sql = "SELECT c.oid
-FROM pg_catalog.pg_class c
-JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p
-WHERE n.nspname = COALESCE(
-    CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END,
-    current_schema()
-)
-AND c.relname = p.parts[-1]";
-        let dialect = PostgreSqlDialect {};
-        let query = Parser::parse_sql(&dialect, sql)
-            .map(|mut stmts| {
-                let stmt = stmts.remove(0);
-                if let Statement::Query(query) = stmt {
-                    query
-                } else {
-                    unreachable!()
-                }
-            })
-            .expect("Failed to parse prepared query");
-        Self(query)
-    }
-}
-
-struct RewriteRegclassCastToSubqueryVisitor(Box<Query>);
-
-impl RewriteRegclassCastToSubqueryVisitor {
-    pub fn new(query: Box<Query>) -> Self {
-        Self(query)
-    }
-
-    fn create_subquery(&self, expr: &Expr) -> Expr {
-        struct PlaceholderReplacer(Expr);
-
-        impl VisitorMut for PlaceholderReplacer {
-            type Break = ();
-
-            fn pre_visit_expr(&mut self, e: &mut Expr) -> ControlFlow<Self::Break> {
-                if let Expr::Value(ValueWithSpan {
-                    value: Value::Placeholder(_placeholder),
-                    ..
-                }) = e
-                {
-                    *e = self.0.clone();
-                }
-                ControlFlow::Continue(())
-            }
-        }
-
-        let mut query = self.0.clone();
-        let mut replacer = PlaceholderReplacer(expr.clone());
-        let _ = query.visit(&mut replacer);
-        Expr::Subquery(query)
-    }
-
-    fn is_regclass_to_oid_cast(&self, expr: &Expr) -> bool {
-        if let Expr::Cast {
-            kind,
-            data_type,
-            expr: inner_expr,
-            format: _,
-            ..
-        } = expr
-            && *kind == CastKind::DoubleColon
-        {
-            let dt_lower = data_type.to_string().to_lowercase();
-            if dt_lower == "oid" || dt_lower == "pg_catalog.oid" {
-                return self.is_regclass_cast(inner_expr);
-            }
-        }
-        false
-    }
-
-    fn is_regclass_cast(&self, expr: &Expr) -> bool {
-        if let Expr::Cast {
-            kind,
-            data_type,
-            expr: _,
-            format: _,
-            ..
-        } = expr
-            && *kind == CastKind::DoubleColon
-        {
-            let dt_lower = data_type.to_string().to_lowercase();
-            return dt_lower == "regclass" || dt_lower == "pg_catalog.regclass";
-        }
-        false
-    }
-
-    fn extract_inner_expr(&self, expr: &Expr) -> Option<Expr> {
-        if let Expr::Cast {
-            kind,
-            data_type,
-            expr: inner_expr,
-            format: _,
-            ..
-        } = expr
-            && *kind == CastKind::DoubleColon
-        {
-            let dt_lower = data_type.to_string().to_lowercase();
-            if (dt_lower == "oid" || dt_lower == "pg_catalog.oid")
-                && let Expr::Cast {
-                    kind: inner_kind,
-                    data_type: inner_data_type,
-                    expr: inner_inner_expr,
-                    format: _,
-                    ..
-                } = inner_expr.as_ref()
-                && *inner_kind == CastKind::DoubleColon
-            {
-                let inner_dt_lower = inner_data_type.to_string().to_lowercase();
-                if inner_dt_lower == "regclass" || inner_dt_lower == "pg_catalog.regclass" {
-                    return Some((**inner_inner_expr).clone());
-                }
-            }
-        }
-        None
-    }
-}
-
-impl VisitorMut for RewriteRegclassCastToSubqueryVisitor {
-    type Break = ();
-
-    fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-        if self.is_regclass_to_oid_cast(expr)
-            && let Some(inner_expr) = self.extract_inner_expr(expr)
-        {
-            *expr = self.create_subquery(&inner_expr);
-        }
-        ControlFlow::Continue(())
-    }
-}
-
-impl SqlStatementRewriteRule for RewriteRegclassCastToSubquery {
-    fn rewrite(&self, mut s: Statement) -> Statement {
-        let mut visitor = RewriteRegclassCastToSubqueryVisitor::new(self.0.clone());
-        let _ = s.visit(&mut visitor);
-        s
     }
 }
 
@@ -1195,7 +1050,6 @@ mod tests {
             Arc::new(RemoveQualifier),
             Arc::new(RemoveUnsupportedTypes::new()),
         ];
-
         assert_rewrite!(
             &rules,
             "SELECT n.* FROM pg_catalog.pg_namespace n WHERE n.nspname = 'pg_catalog'::regclass ORDER BY n.nspname",
@@ -1229,35 +1083,21 @@ mod tests {
     WHERE c.oid = '16386'",
             "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, c.relhastriggers, c.relrowsecurity, c.relforcerowsecurity, false AS relhasoids, c.relispartition, '', c.reltablespace, CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::TEXT END, c.relpersistence, c.relreplident, am.amname FROM pg_catalog.pg_class c LEFT JOIN pg_catalog.pg_class tc ON (c.reltoastrelid = tc.oid) LEFT JOIN pg_catalog.pg_am am ON (c.relam = am.oid) WHERE c.oid = '16386'"
         );
-    }
 
-    #[test]
-    fn test_rewrite_regclass_cast_to_subquery() {
-        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
-            vec![Arc::new(RewriteRegclassCastToSubquery::new())];
-
-        assert_rewrite!(
-            &rules,
-            "SELECT $1::regclass::oid",
-            "SELECT (SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
-        );
-
-        assert_rewrite!(
-            &rules,
-            "SELECT $1::pg_catalog.regclass::oid",
-            "SELECT (SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
-        );
-
-        assert_rewrite!(
-            &rules,
-            "SELECT $1::pg_catalog.regclass::pg_catalog.oid",
-            "SELECT (SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
-        );
-
+        // Regression: nested casts must peel to a fixed point so that
+        // `'x'::regclass::oid` -> `'x'` (not the partial `'x'::regclass`,
+        // which DataFusion rejects as an unsupported SQL type at plan time).
+        // The oid-coercion analyzer rule then resolves the bare name against
+        // any oid-alias column it is compared with.
         assert_rewrite!(
             &rules,
             "SELECT * FROM pg_catalog.pg_class WHERE oid = 't'::pg_catalog.regclass::pg_catalog.oid",
-            "SELECT * FROM pg_catalog.pg_class WHERE oid = (SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace CROSS JOIN (SELECT parse_ident('t'::TEXT) AS parts) p WHERE n.nspname = COALESCE(CASE WHEN array_length(p.parts, 1) > 1 THEN p.parts[1] END, current_schema()) AND c.relname = p.parts[-1])"
+            "SELECT * FROM pg_catalog.pg_class WHERE oid = 't'"
+        );
+        assert_rewrite!(
+            &rules,
+            "SELECT 'pg_namespace'::regclass::oid",
+            "SELECT 'pg_namespace'"
         );
     }
 
