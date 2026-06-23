@@ -1114,11 +1114,7 @@ mod tests {
         // every oid-alias type -- not just the original hardcoded six -- is
         // peeled. Verify a representative newly-covered one (regrole) plus the
         // array variant (regtype[], used by pgcli's proallargtypes).
-        assert_rewrite!(
-            &rules,
-            "SELECT 'postgres'::regrole",
-            "SELECT 'postgres'"
-        );
+        assert_rewrite!(&rules, "SELECT 'postgres'::regrole", "SELECT 'postgres'");
         assert_rewrite!(
             &rules,
             "SELECT proallargtypes::regtype[] FROM pg_proc",
