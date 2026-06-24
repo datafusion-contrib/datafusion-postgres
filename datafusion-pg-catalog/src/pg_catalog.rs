@@ -26,11 +26,15 @@ use crate::pg_catalog::catalog_info::CatalogInfo;
 use crate::pg_catalog::context::PgCatalogContextProvider;
 use crate::pg_catalog::empty_table::EmptyTable;
 
+pub mod array_bounds_udf;
 pub mod catalog_info;
 pub mod context;
 pub mod empty_table;
 pub mod format_type;
 pub mod has_privilege_udf;
+pub mod oid_coercion_rule;
+pub mod oid_field;
+pub mod oid_type_planner;
 pub mod pg_attribute;
 pub mod pg_class;
 pub mod pg_database;
@@ -221,6 +225,19 @@ impl<C: CatalogInfo, P: PgCatalogContextProvider> SchemaProvider for PgCatalogSc
 
     fn table_exist(&self, name: &str) -> bool {
         PG_CATALOG_TABLES.contains(&name.to_ascii_lowercase().as_str())
+    }
+}
+
+/// Backs the oid-coercion analyzer rule: build a pg_catalog table provider
+/// synchronously so the rule can construct name->oid lookup subqueries at
+/// plan time (data is fetched lazily at execution).
+impl<C: CatalogInfo, P: PgCatalogContextProvider> oid_coercion_rule::OidLookupProvider
+    for PgCatalogSchemaProvider<C, P>
+{
+    fn build_table_provider(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+        self.build_table_by_name(name)?
+            .map(|t| t.try_into_table_provider())
+            .transpose()
     }
 }
 
@@ -1428,11 +1445,11 @@ where
     P: PgCatalogContextProvider,
 {
     let static_tables = Arc::new(PgCatalogStaticTables::try_new()?);
-    let pg_catalog = PgCatalogSchemaProvider::try_new(
+    let pg_catalog = Arc::new(PgCatalogSchemaProvider::try_new(
         session_context.state().catalog_list().clone(),
         static_tables.clone(),
         context_provider,
-    )?;
+    )?);
     session_context
         .catalog(catalog_name)
         .ok_or_else(|| {
@@ -1440,7 +1457,7 @@ where
                 "Catalog not found when registering pg_catalog: {catalog_name}"
             ))
         })?
-        .register_schema("pg_catalog", Arc::new(pg_catalog))?;
+        .register_schema("pg_catalog", pg_catalog.clone())?;
 
     session_context.register_udf(create_current_database_udf());
     session_context.register_udf(create_current_schema_udf());
@@ -1476,6 +1493,33 @@ where
     session_context.register_udf(create_pg_get_partition_ancestors_udf());
     session_context.register_udf(quote_ident_udf::create_quote_ident_udf());
     session_context.register_udf(quote_ident_udf::create_parse_ident_udf());
+    // Postgres array bounds. DataFusion ships array_length but not array_upper /
+    // array_lower; without these, client queries (psql/dbeaver/grafan) that use
+    // them were only "supported" via hardcoded blacklist token substitution.
+    session_context.register_udf(array_bounds_udf::create_array_upper_udf());
+    session_context.register_udf(array_bounds_udf::create_array_lower_udf());
+
+    // Make oid / oid-alias columns (relnamespace, atttypid, ...) compare
+    // against string literals the way Postgres does. Requires the schema
+    // provider handle (kept above) to resolve names -> oids at plan time.
+    session_context.add_analyzer_rule(Arc::new(oid_coercion_rule::OidStringCoercion::new(
+        pg_catalog.clone() as Arc<dyn oid_coercion_rule::OidLookupProvider>,
+    )));
+
+    // Teach the SQL planner to accept Postgres oid-alias type names
+    // (`regclass`, `regproc`, ...) -- DataFusion rejects them as unsupported
+    // otherwise. Each maps to int4 carrying `pg.oid_alias` metadata, which the
+    // analyzer rule above then reads to resolve name strings -> oids. This
+    // replaces the former SQL-layer cast-stripping / cast-rewriting rules.
+    {
+        use datafusion::execution::session_state::SessionStateBuilder;
+        let state = session_context.state_ref();
+        let existing = state.read().clone();
+        let new_state = SessionStateBuilder::new_from_existing(existing)
+            .with_type_planner(Arc::new(oid_type_planner::PgOidTypePlanner))
+            .build();
+        *state.write() = new_state;
+    }
 
     Ok(())
 }
