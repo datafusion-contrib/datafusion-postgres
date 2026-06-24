@@ -34,6 +34,7 @@ pub mod format_type;
 pub mod has_privilege_udf;
 pub mod oid_coercion_rule;
 pub mod oid_field;
+pub mod oid_type_planner;
 pub mod pg_attribute;
 pub mod pg_class;
 pub mod pg_database;
@@ -1504,6 +1505,21 @@ where
     session_context.add_analyzer_rule(Arc::new(oid_coercion_rule::OidStringCoercion::new(
         pg_catalog.clone() as Arc<dyn oid_coercion_rule::OidLookupProvider>,
     )));
+
+    // Teach the SQL planner to accept Postgres oid-alias type names
+    // (`regclass`, `regproc`, ...) -- DataFusion rejects them as unsupported
+    // otherwise. Each maps to int4 carrying `pg.oid_alias` metadata, which the
+    // analyzer rule above then reads to resolve name strings -> oids. This
+    // replaces the former SQL-layer cast-stripping / cast-rewriting rules.
+    {
+        use datafusion::execution::session_state::SessionStateBuilder;
+        let state = session_context.state_ref();
+        let existing = state.read().clone();
+        let new_state = SessionStateBuilder::new_from_existing(existing)
+            .with_type_planner(Arc::new(oid_type_planner::PgOidTypePlanner))
+            .build();
+        *state.write() = new_state;
+    }
 
     Ok(())
 }

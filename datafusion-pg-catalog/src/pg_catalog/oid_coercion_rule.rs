@@ -37,8 +37,7 @@ use datafusion::common::{DFSchemaRef, ExprSchema, Result, ScalarValue, Spans};
 use datafusion::datasource::{TableProvider, provider_as_source};
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
-    BinaryExpr, Cast, Expr, Filter, Join, LogicalPlan, LogicalPlanBuilder, Operator, Subquery,
-    TryCast,
+    BinaryExpr, Cast, Expr, LogicalPlan, LogicalPlanBuilder, Operator, Subquery, TryCast,
 };
 use datafusion::optimizer::analyzer::AnalyzerRule;
 
@@ -91,54 +90,20 @@ impl<'a> TreeNodeRewriter for PlanRewriter<'a> {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-        if let LogicalPlan::Filter(filter) = plan {
-            let input = filter.input.clone();
-            let mut expr_rewriter = ExprOidRewriter {
-                schema: input.schema().clone(),
-                provider: self.provider,
-            };
-            let new_predicate = filter.predicate.rewrite(&mut expr_rewriter)?.data;
-            let new_filter = Filter::try_new(new_predicate, input)?;
-            return Ok(Transformed::yes(LogicalPlan::Filter(new_filter)));
-        }
-        if let LogicalPlan::Join(join) = plan {
-            // Rewrite the non-equi join `filter` (e.g.
-            // `d.classoid = 'pg_namespace'`), where an oid-alias column from
-            // either input is compared against a string. The join's combined
-            // schema carries the `pg.oid_alias` metadata from both sides.
-            let Some(filter_expr) = join.filter else {
-                return Ok(Transformed::no(LogicalPlan::Join(join)));
-            };
-            let Join {
-                left,
-                right,
-                on,
-                filter: _,
-                join_type,
-                join_constraint,
-                schema,
-                null_equality,
-                null_aware,
-            } = join;
-            let mut expr_rewriter = ExprOidRewriter {
+        // Rewrite every expression in every plan node (filters, join ON
+        // filters, projections, ...) using that node's schema. The
+        // schema-free cast arm (which carries its own kind via the
+        // PgOidTypePlanner metadata) is what makes projections and
+        // oid-column casts like `classoid = 'pg_namespace'::regclass` work;
+        // the schema is only consulted by the bare `col = 'str'` path.
+        let schema = plan.schema().clone();
+        plan.map_expressions(|expr| {
+            let mut rewriter = ExprOidRewriter {
                 schema: schema.clone(),
                 provider: self.provider,
             };
-            let new_filter = filter_expr.rewrite(&mut expr_rewriter)?.data;
-            let new_join = Join {
-                left,
-                right,
-                on,
-                filter: Some(new_filter),
-                join_type,
-                join_constraint,
-                schema,
-                null_equality,
-                null_aware,
-            };
-            return Ok(Transformed::yes(LogicalPlan::Join(new_join)));
-        }
-        Ok(Transformed::no(plan))
+            expr.rewrite(&mut rewriter)
+        })
     }
 }
 
@@ -230,6 +195,26 @@ fn rewrite_expr_shallow(
                 Ok(None)
             }
         }
+        // An explicit oid-alias cast whose kind is stamped on its target Field
+        // by `PgOidTypePlanner` -- e.g. `'public'::regnamespace`,
+        // `typinput = 'array_in'::regproc`, or `classoid = 'pg_namespace'::regclass`
+        // (where `classoid` is a plain `oid`, so only the CAST declares the kind).
+        // Resolve the cast operand to an oid (literal for numeric strings,
+        // name-lookup subquery otherwise), in ANY plan position (this arm is
+        // reached via `map_expressions`, so projections / filters / joins all
+        // benefit). Returning `None` here for a non-string operand lets the
+        // rewriter descend into nested casts (e.g. `'x'::regclass::oid`).
+        Expr::Cast(Cast { expr: operand, field })
+        | Expr::TryCast(TryCast { expr: operand, field })
+            if kind_from_field(field).is_some() =>
+        {
+            let kind = kind_from_field(field).unwrap();
+            if let Some(s) = immediate_str_literal(operand) {
+                resolve_operand(&kind, s, provider)
+            } else {
+                Ok(None)
+            }
+        }
         _ => Ok(None),
     }
 }
@@ -258,6 +243,27 @@ fn oid_kind(col: &Column, schema: &DFSchemaRef) -> Option<String> {
         .metadata()
         .get(OID_ALIAS_KEY)
         .cloned()
+}
+
+/// The oid-alias kind stamped on a cast's target [`Field`] by the
+/// `PgOidTypePlanner`, if any (e.g. `'x'::regclass` -> `"regclass"`).
+fn kind_from_field(field: &datafusion::arrow::datatypes::Field) -> Option<String> {
+    field.metadata().get(OID_ALIAS_KEY).cloned()
+}
+
+/// The string value of `e` if it is an *immediate* string literal (NOT peeking
+/// through a cast), else `None`. Used to recognize the operand of an oid-alias
+/// cast (`'name'::regclass`) without conflating it with a nested inner cast.
+fn immediate_str_literal(e: &Expr) -> Option<&str> {
+    if let Expr::Literal(s, _) = e {
+        match s {
+            ScalarValue::Utf8(Some(s)) | ScalarValue::LargeUtf8(Some(s)) => Some(s.as_str()),
+            ScalarValue::Utf8View(Some(s)) => Some(s.as_str()),
+            _ => None,
+        }
+    } else {
+        None
+    }
 }
 
 /// If `e` is a string literal -- possibly wrapped in a `CAST`/`TRY_CAST` to an
@@ -292,6 +298,7 @@ fn lookup_target(kind: &str) -> Option<(&'static str, &'static str)> {
     match kind {
         oid_field::kind::REGNAMESPACE => Some(("pg_namespace", "nspname")),
         oid_field::kind::REGCLASS => Some(("pg_class", "relname")),
+        oid_field::kind::REGTYPE => Some(("pg_type", "typname")),
         oid_field::kind::REGPROC => Some(("pg_proc", "proname")),
         _ => None,
     }
@@ -364,9 +371,8 @@ mod tests {
             lookup_target(oid_field::kind::REGPROC),
             Some(("pg_proc", "proname"))
         );
-        // bare oid and regtype have no backing table -> name resolution unsupported
+        // bare oid has no backing table -> name resolution unsupported
         assert_eq!(lookup_target(oid_field::kind::OID), None);
-        assert_eq!(lookup_target(oid_field::kind::REGTYPE), None);
     }
 
     #[test]
