@@ -297,7 +297,6 @@ impl SqlStatementRewriteRule for ResolveUnqualifiedIdentifer {
     }
 }
 
-
 /// Cast `array_upper`/`array_lower` results to `bigint` when used as
 /// `generate_series` arguments.
 ///

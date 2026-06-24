@@ -19,7 +19,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::Result;
 use datafusion::logical_expr::planner::TypePlanner;
-use datafusion::sql::sqlparser::ast::{DataType as SQLDataType,ObjectNamePart};
+use datafusion::sql::sqlparser::ast::{DataType as SQLDataType, ObjectNamePart};
 
 use crate::pg_catalog::oid_field::{self, OID_ALIAS_KEY, OID_ALIAS_TYPE_NAMES};
 
@@ -31,13 +31,9 @@ pub struct PgOidTypePlanner;
 impl PgOidTypePlanner {
     /// Build the int4 oid field for a given kind (`regclass`, `oid`, ...).
     fn oid_field(kind: &str) -> Arc<Field> {
-        Arc::new(
-            Field::new("", DataType::Int32, true)
-                .with_metadata(std::collections::HashMap::from([(
-                    OID_ALIAS_KEY.to_string(),
-                    kind.to_string(),
-                )])),
-        )
+        Arc::new(Field::new("", DataType::Int32, true).with_metadata(
+            std::collections::HashMap::from([(OID_ALIAS_KEY.to_string(), kind.to_string())]),
+        ))
     }
 
     /// Lowercase last identifier of a `Custom(...)` type name, if any.

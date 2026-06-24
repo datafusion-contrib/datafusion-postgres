@@ -204,10 +204,14 @@ fn rewrite_expr_shallow(
         // reached via `map_expressions`, so projections / filters / joins all
         // benefit). Returning `None` here for a non-string operand lets the
         // rewriter descend into nested casts (e.g. `'x'::regclass::oid`).
-        Expr::Cast(Cast { expr: operand, field })
-        | Expr::TryCast(TryCast { expr: operand, field })
-            if kind_from_field(field).is_some() =>
-        {
+        Expr::Cast(Cast {
+            expr: operand,
+            field,
+        })
+        | Expr::TryCast(TryCast {
+            expr: operand,
+            field,
+        }) if kind_from_field(field).is_some() => {
             let kind = kind_from_field(field).unwrap();
             if let Some(s) = immediate_str_literal(operand) {
                 resolve_operand(&kind, s, provider)
@@ -385,7 +389,11 @@ mod tests {
 
         let cast = Expr::Cast(Cast {
             expr: Box::new(Expr::Column(Column::new_unqualified("relnamespace"))),
-            field: std::sync::Arc::new(datafusion::arrow::datatypes::Field::new("", DataType::Utf8, true)),
+            field: std::sync::Arc::new(datafusion::arrow::datatypes::Field::new(
+                "",
+                DataType::Utf8,
+                true,
+            )),
         });
         assert_eq!(
             unwrap_column(&cast).map(|c| c.name().to_string()),
@@ -394,7 +402,11 @@ mod tests {
 
         let trycast = Expr::TryCast(TryCast {
             expr: Box::new(Expr::Column(Column::new_unqualified("oid"))),
-            field: std::sync::Arc::new(datafusion::arrow::datatypes::Field::new("", DataType::Utf8, true)),
+            field: std::sync::Arc::new(datafusion::arrow::datatypes::Field::new(
+                "",
+                DataType::Utf8,
+                true,
+            )),
         });
         assert_eq!(
             unwrap_column(&trycast).map(|c| c.name().to_string()),
@@ -404,7 +416,11 @@ mod tests {
         // a cast around something that isn't a column is not unwrapped
         let nested = Expr::Cast(Cast {
             expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(1)), None)),
-            field: std::sync::Arc::new(datafusion::arrow::datatypes::Field::new("", DataType::Utf8, true)),
+            field: std::sync::Arc::new(datafusion::arrow::datatypes::Field::new(
+                "",
+                DataType::Utf8,
+                true,
+            )),
         });
         assert_eq!(unwrap_column(&nested), None);
     }
@@ -429,9 +445,11 @@ mod tests {
                 ScalarValue::Utf8(Some("public".to_string())),
                 None,
             )),
-            field: std::sync::Arc::new(
-                datafusion::arrow::datatypes::Field::new("", DataType::Int32, true),
-            ),
+            field: std::sync::Arc::new(datafusion::arrow::datatypes::Field::new(
+                "",
+                DataType::Int32,
+                true,
+            )),
         });
         assert_eq!(as_str_literal(&cast), Some("public"));
     }
@@ -632,4 +650,3 @@ mod tests {
         );
     }
 }
-

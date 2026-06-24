@@ -165,27 +165,6 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
  WHERE false"
     ),
 
-    // dbeaver relation-size lookup. Historically blocked by
-    // `c.relnamespace = 'public'`: relnamespace is an oid (Int32) column, and
-    // comparing it to a bare string requires Postgres' implicit string->oid
-    // coercion. The oid-coercion analyzer rule now handles exactly this (it
-    // resolves `'public'` to the namespace oid via a pg_namespace lookup), so
-    // this entry's original blocker is gone -- verify it can be dropped.
-    // (Hardcoding pg_catalog column names at the AST layer like `relnamespace`
-    // would risk regressing user tables with same-named text columns, so it was
-    // never done there; the analyzer rule avoids that by consulting schema
-    // metadata.)
-    (
-"select c.oid,pg_catalog.pg_total_relation_size(c.oid) as total_rel_size,pg_catalog.pg_relation_size(c.oid) as rel_size
-     FROM pg_class c
-     WHERE c.relnamespace='public'",
-"SELECT
-   NULL::INT AS oid,
-   NULL::INT AS total_rel_size,
-   NULL::INT AS rel_size
- WHERE false"
-    ),
-
     // grafana array index magic
     (r#"SELECT
             CASE WHEN trim(s[i]) = '"$user"' THEN user ELSE trim(s[i]) END
