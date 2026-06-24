@@ -37,7 +37,8 @@ use datafusion::common::{DFSchemaRef, ExprSchema, Result, ScalarValue, Spans};
 use datafusion::datasource::{TableProvider, provider_as_source};
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
-    BinaryExpr, Cast, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Operator, Subquery, TryCast,
+    BinaryExpr, Cast, Expr, Filter, Join, LogicalPlan, LogicalPlanBuilder, Operator, Subquery,
+    TryCast,
 };
 use datafusion::optimizer::analyzer::AnalyzerRule;
 
@@ -90,17 +91,54 @@ impl<'a> TreeNodeRewriter for PlanRewriter<'a> {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-        let LogicalPlan::Filter(filter) = plan else {
-            return Ok(Transformed::no(plan));
-        };
-        let input = filter.input.clone();
-        let mut expr_rewriter = ExprOidRewriter {
-            schema: input.schema().clone(),
-            provider: self.provider,
-        };
-        let new_predicate = filter.predicate.rewrite(&mut expr_rewriter)?.data;
-        let new_filter = Filter::try_new(new_predicate, input)?;
-        Ok(Transformed::yes(LogicalPlan::Filter(new_filter)))
+        if let LogicalPlan::Filter(filter) = plan {
+            let input = filter.input.clone();
+            let mut expr_rewriter = ExprOidRewriter {
+                schema: input.schema().clone(),
+                provider: self.provider,
+            };
+            let new_predicate = filter.predicate.rewrite(&mut expr_rewriter)?.data;
+            let new_filter = Filter::try_new(new_predicate, input)?;
+            return Ok(Transformed::yes(LogicalPlan::Filter(new_filter)));
+        }
+        if let LogicalPlan::Join(join) = plan {
+            // Rewrite the non-equi join `filter` (e.g.
+            // `d.classoid = 'pg_namespace'`), where an oid-alias column from
+            // either input is compared against a string. The join's combined
+            // schema carries the `pg.oid_alias` metadata from both sides.
+            let Some(filter_expr) = join.filter else {
+                return Ok(Transformed::no(LogicalPlan::Join(join)));
+            };
+            let Join {
+                left,
+                right,
+                on,
+                filter: _,
+                join_type,
+                join_constraint,
+                schema,
+                null_equality,
+                null_aware,
+            } = join;
+            let mut expr_rewriter = ExprOidRewriter {
+                schema: schema.clone(),
+                provider: self.provider,
+            };
+            let new_filter = filter_expr.rewrite(&mut expr_rewriter)?.data;
+            let new_join = Join {
+                left,
+                right,
+                on,
+                filter: Some(new_filter),
+                join_type,
+                join_constraint,
+                schema,
+                null_equality,
+                null_aware,
+            };
+            return Ok(Transformed::yes(LogicalPlan::Join(new_join)));
+        }
+        Ok(Transformed::no(plan))
     }
 }
 
@@ -222,9 +260,20 @@ fn oid_kind(col: &Column, schema: &DFSchemaRef) -> Option<String> {
         .cloned()
 }
 
-/// If `e` is a string literal, return its value; otherwise `None`.
+/// If `e` is a string literal -- possibly wrapped in a `CAST`/`TRY_CAST` to an
+/// integer type that DataFusion's type-coercion analyzer produces when it sees
+/// an `Int32` oid column compared against a string -- return its value;
+/// otherwise `None`.
+///
+/// Peeking through the cast keeps this rule order-independent: whether our
+/// rule runs before type coercion (bare `'str'`) or after it
+/// (`CAST('str' AS Int32)`), the same string is recovered.
 fn as_str_literal(e: &Expr) -> Option<&str> {
-    if let Expr::Literal(s, _) = e {
+    let inner = match e {
+        Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => expr.as_ref(),
+        other => other,
+    };
+    if let Expr::Literal(s, _) = inner {
         match s {
             ScalarValue::Utf8(Some(s)) | ScalarValue::LargeUtf8(Some(s)) => Some(s.as_str()),
             ScalarValue::Utf8View(Some(s)) => Some(s.as_str()),
@@ -330,7 +379,7 @@ mod tests {
 
         let cast = Expr::Cast(Cast {
             expr: Box::new(Expr::Column(Column::new_unqualified("relnamespace"))),
-            data_type: DataType::Utf8,
+            field: std::sync::Arc::new(datafusion::arrow::datatypes::Field::new("", DataType::Utf8, true)),
         });
         assert_eq!(
             unwrap_column(&cast).map(|c| c.name().to_string()),
@@ -339,7 +388,7 @@ mod tests {
 
         let trycast = Expr::TryCast(TryCast {
             expr: Box::new(Expr::Column(Column::new_unqualified("oid"))),
-            data_type: DataType::Utf8,
+            field: std::sync::Arc::new(datafusion::arrow::datatypes::Field::new("", DataType::Utf8, true)),
         });
         assert_eq!(
             unwrap_column(&trycast).map(|c| c.name().to_string()),
@@ -349,7 +398,7 @@ mod tests {
         // a cast around something that isn't a column is not unwrapped
         let nested = Expr::Cast(Cast {
             expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(1)), None)),
-            data_type: DataType::Utf8,
+            field: std::sync::Arc::new(datafusion::arrow::datatypes::Field::new("", DataType::Utf8, true)),
         });
         assert_eq!(unwrap_column(&nested), None);
     }
@@ -364,6 +413,21 @@ mod tests {
         assert_eq!(as_str_literal(&lu), Some("public"));
         assert_eq!(as_str_literal(&uv), Some("public"));
         assert_eq!(as_str_literal(&n), None);
+
+        // DataFusion's type-coercion analyzer wraps the literal in a cast to the
+        // column's Int32 type (`col = CAST('public' AS Int32)`) when it runs
+        // before this rule. The string must still be recoverable so the rule
+        // stays order-independent.
+        let cast = Expr::Cast(Cast {
+            expr: Box::new(Expr::Literal(
+                ScalarValue::Utf8(Some("public".to_string())),
+                None,
+            )),
+            field: std::sync::Arc::new(
+                datafusion::arrow::datatypes::Field::new("", DataType::Int32, true),
+            ),
+        });
+        assert_eq!(as_str_literal(&cast), Some("public"));
     }
 
     // --- end-to-end: a real pg_catalog with the analyzer rule installed ---
@@ -562,3 +626,4 @@ mod tests {
         );
     }
 }
+

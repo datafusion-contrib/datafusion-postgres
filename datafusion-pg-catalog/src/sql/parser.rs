@@ -20,6 +20,7 @@ use super::rules::RemoveQualifier;
 use super::rules::RemoveSubqueryFromProjection;
 use super::rules::ResolveUnqualifiedIdentifer;
 use super::rules::RewriteArrayAnyAllOperation;
+use super::rules::RewriteRegCastToSubquery;
 use super::rules::SqlStatementRewriteRule;
 
 const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
@@ -166,15 +167,16 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
  WHERE false"
     ),
 
-    // dbeaver relation-size lookup. Blocked by `c.relnamespace = 'public'`:
-    // relnamespace is an oid (Int32) column, and comparing it to a bare string
-    // requires Postgres' implicit string->oid coercion, which DataFusion can't
-    // do (it tries string -> Int32 and fails). The explicit form
-    // `'public'::regnamespace` IS handled by RewriteRegCastToSubquery, but
-    // detecting that a *bare* string should be coerced requires knowing the
-    // column is an oid column -- schema awareness the AST-rewrite layer lacks.
-    // (Hardcoding pg_catalog column names like `relnamespace` would risk
-    // regressing user tables with same-named text columns, so it's not done.)
+    // dbeaver relation-size lookup. Historically blocked by
+    // `c.relnamespace = 'public'`: relnamespace is an oid (Int32) column, and
+    // comparing it to a bare string requires Postgres' implicit string->oid
+    // coercion. The oid-coercion analyzer rule now handles exactly this (it
+    // resolves `'public'` to the namespace oid via a pg_namespace lookup), so
+    // this entry's original blocker is gone -- verify it can be dropped.
+    // (Hardcoding pg_catalog column names at the AST layer like `relnamespace`
+    // would risk regressing user tables with same-named text columns, so it was
+    // never done there; the analyzer rule avoids that by consulting schema
+    // metadata.)
     (
 "select c.oid,pg_catalog.pg_total_relation_size(c.oid) as total_rel_size,pg_catalog.pg_relation_size(c.oid) as rel_size
      FROM pg_class c
@@ -251,6 +253,7 @@ impl PostgresCompatibilityParser {
                 Arc::new(PrependUnqualifiedPgTableName),
                 Arc::new(RemoveQualifier),
                 Arc::new(CastArrayBoundsForGenerateSeries),
+                Arc::new(RewriteRegCastToSubquery::new()),
                 Arc::new(RemoveOidTypeCast::new()),
                 Arc::new(FixArrayLiteral),
                 Arc::new(CurrentUserVariableToSessionUserFunctionCall),
