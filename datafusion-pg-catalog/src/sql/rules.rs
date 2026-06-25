@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow;
 
-use crate::pg_catalog::oid_field;
+use crate::pg_catalog::{PG_CATALOG_TABLES, oid_field};
 
 use datafusion::sql::sqlparser::ast::Array;
 use datafusion::sql::sqlparser::ast::ArrayElemTypeDef;
@@ -512,9 +512,18 @@ impl SqlStatementRewriteRule for RewriteArrayAnyAllOperation {
 /// Prepend qualifier to table_name
 ///
 /// Postgres has pg_catalog in search_path by default so it allow access to
-/// `pg_namespace` without `pg_catalog.` qualifier
+/// `pg_namespace` without `pg_catalog.` qualifier.
+///
+/// Only names of known pg_catalog relations are qualified. A simple `pg_`
+/// prefix check would also rewrite user tables such as `pg_compat_test`.
 #[derive(Debug)]
 pub struct PrependUnqualifiedPgTableName;
+
+fn is_pg_catalog_table(name: &str) -> bool {
+    PG_CATALOG_TABLES
+        .iter()
+        .any(|table| table.eq_ignore_ascii_case(name))
+}
 
 struct PrependUnqualifiedPgTableNameVisitor;
 
@@ -530,7 +539,7 @@ impl VisitorMut for PrependUnqualifiedPgTableNameVisitor {
             if args.is_none()
                 && name.0.len() == 1
                 && let ObjectNamePart::Identifier(ident) = &name.0[0]
-                && ident.value.starts_with("pg_")
+                && is_pg_catalog_table(&ident.value)
             {
                 *name = ObjectName(vec![
                     ObjectNamePart::Identifier(Ident::new("pg_catalog")),
@@ -1171,8 +1180,26 @@ mod tests {
 
         assert_rewrite!(
             &rules,
+            "SELECT * FROM pg_type",
+            "SELECT * FROM pg_catalog.pg_type"
+        );
+
+        assert_rewrite!(
+            &rules,
             "SELECT typtype, typname, pg_type.oid FROM pg_catalog.pg_type LEFT JOIN pg_namespace as ns ON ns.oid = oid",
             "SELECT typtype, typname, pg_type.oid FROM pg_catalog.pg_type LEFT JOIN pg_catalog.pg_namespace AS ns ON ns.oid = oid"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT * FROM pg_compat_test",
+            "SELECT * FROM pg_compat_test"
+        );
+
+        assert_rewrite!(
+            &rules,
+            "SELECT * FROM pg_custom_table",
+            "SELECT * FROM pg_custom_table"
         );
     }
 
