@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow;
 
-use crate::pg_catalog::{PG_CATALOG_TABLES, oid_field};
+use crate::pg_catalog::PG_CATALOG_TABLES;
 
 use datafusion::sql::sqlparser::ast::Array;
 use datafusion::sql::sqlparser::ast::ArrayElemTypeDef;
@@ -605,10 +605,16 @@ impl SqlStatementRewriteRule for FixArrayLiteral {
 
 /// Remove qualifier from unsupported items
 ///
-/// This rewriter removes qualifier from following items:
-/// 1. type cast: for example: `pg_catalog.text`
-/// 2. function name: for example: `pg_catalog.array_to_string`,
-/// 3. table function name
+/// This rewriter removes the `pg_catalog.` qualifier from:
+/// 1. function names, for example `pg_catalog.array_to_string`
+/// 2. table function names
+///
+/// Type-cast qualifiers such as `pg_catalog.text` / `pg_catalog.int2[]` used
+/// to be handled here too, but are now resolved by the [`PgOidTypePlanner`]
+/// type planner (which sees the cast target type at planning time and maps the
+/// pg name to its Arrow type).
+///
+/// [`PgOidTypePlanner`]: crate::pg_catalog::oid_type_planner::PgOidTypePlanner
 #[derive(Debug)]
 pub struct RemoveQualifier;
 
@@ -636,34 +642,14 @@ impl VisitorMut for RemoveQualifierVisitor {
     }
 
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-        match expr {
-            Expr::Cast { data_type, .. } => {
-                // rewrite custom pg_catalog. qualified types
-                let data_type_str = data_type.to_string();
-                match data_type_str.as_str() {
-                    "pg_catalog.text" => {
-                        *data_type = DataType::Text;
-                    }
-                    "pg_catalog.int2[]" => {
-                        *data_type = DataType::Array(ArrayElemTypeDef::SquareBracket(
-                            Box::new(DataType::Int16),
-                            None,
-                        ));
-                    }
-                    _ => {}
-                }
+        // remove qualifier from pg_catalog.function
+        if let Expr::Function(function) = expr {
+            let name = &mut function.name;
+            if name.0.len() > 1
+                && let Some(last_ident) = name.0.pop()
+            {
+                *name = ObjectName(vec![last_ident]);
             }
-            Expr::Function(function) => {
-                // remove qualifier from pg_catalog.function
-                let name = &mut function.name;
-                if name.0.len() > 1
-                    && let Some(last_ident) = name.0.pop()
-                {
-                    *name = ObjectName(vec![last_ident]);
-                }
-            }
-
-            _ => {}
         }
         ControlFlow::Continue(())
     }
