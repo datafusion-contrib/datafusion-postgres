@@ -9,12 +9,12 @@ use datafusion::sql::sqlparser::tokenizer::Token;
 use datafusion::sql::sqlparser::tokenizer::TokenWithSpan;
 
 use super::rules::AliasDuplicatedProjectionRewrite;
+use super::rules::CastArrayBoundsForGenerateSeries;
 use super::rules::CurrentUserVariableToSessionUserFunctionCall;
 use super::rules::FixArrayLiteral;
 use super::rules::FixCollate;
 use super::rules::FixVersionColumnName;
 use super::rules::PrependUnqualifiedPgTableName;
-use super::rules::RemoveOidTypeCast;
 use super::rules::RemoveQualifier;
 use super::rules::RemoveSubqueryFromProjection;
 use super::rules::ResolveUnqualifiedIdentifer;
@@ -229,7 +229,7 @@ impl PostgresCompatibilityParser {
                 Arc::new(RewriteArrayAnyAllOperation),
                 Arc::new(PrependUnqualifiedPgTableName),
                 Arc::new(RemoveQualifier),
-                Arc::new(RemoveOidTypeCast::new()),
+                Arc::new(CastArrayBoundsForGenerateSeries),
                 Arc::new(FixArrayLiteral),
                 Arc::new(CurrentUserVariableToSessionUserFunctionCall),
                 Arc::new(FixCollate),

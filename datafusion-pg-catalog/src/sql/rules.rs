@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow;
 
-use crate::pg_catalog::{PG_CATALOG_TABLES, oid_field};
+use crate::pg_catalog::PG_CATALOG_TABLES;
 
 use datafusion::sql::sqlparser::ast::Array;
 use datafusion::sql::sqlparser::ast::ArrayElemTypeDef;
@@ -27,8 +27,8 @@ use datafusion::sql::sqlparser::ast::SelectItemQualifiedWildcardKind;
 use datafusion::sql::sqlparser::ast::SetExpr;
 use datafusion::sql::sqlparser::ast::Statement;
 use datafusion::sql::sqlparser::ast::TableFactor;
+use datafusion::sql::sqlparser::ast::TableFunctionArgs;
 use datafusion::sql::sqlparser::ast::TableWithJoins;
-use datafusion::sql::sqlparser::ast::TypedString;
 use datafusion::sql::sqlparser::ast::UnaryOperator;
 use datafusion::sql::sqlparser::ast::Value;
 use datafusion::sql::sqlparser::ast::ValueWithSpan;
@@ -299,106 +299,76 @@ impl SqlStatementRewriteRule for ResolveUnqualifiedIdentifer {
     }
 }
 
-/// Strip oid-alias cast type names (`::regclass`, `::regtype`, `::oid`, ...)
-/// that DataFusion rejects as unsupported SQL types during `sql_to_plan`.
+/// Cast `array_upper`/`array_lower` results to `bigint` when used as
+/// `generate_series` arguments.
 ///
-/// This runs at the SQL/AST layer -- *before* `sql_to_plan` -- because the
-/// oid-coercion analyzer rule lives at the logical-plan layer and never gets a
-/// chance to see these casts (planning fails first). The set of stripped type
-/// names is derived from [`oid_field::OID_ALIAS_TYPE_NAMES`] so there is a
-/// single source of truth shared with the oid-alias column metadata.
-///
-/// Casts are peeled to a fixed point so nested forms like
-/// `'x'::regclass::oid` fully unwind to `'x'` (the bare value, which the
-/// oid-coercion rule then resolves against any oid-alias column it is compared
-/// with) rather than stopping at the intermediate `'x'::regclass` that would
-/// itself be rejected.
+/// DataFusion's `generate_series` requires Int64 bounds, but our
+/// `array_upper`/`array_lower` UDFs return Int32 (correct Postgres semantics --
+/// Postgres `array_upper` returns `int4`). Postgres implicitly coerces int4 to
+/// int8 for `generate_series`; DataFusion does not, so without this rule
+/// `generate_series(1, array_upper(current_schemas(false), 1))` fails with
+/// "Argument #2 must be an INTEGER". This rule performs the coercion the way
+/// Postgres would, removing the need to blacklist such client queries.
 #[derive(Debug)]
-pub struct RemoveOidTypeCast {
-    unsupported_types: HashSet<String>,
-}
+pub struct CastArrayBoundsForGenerateSeries;
 
-impl Default for RemoveOidTypeCast {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+struct CastArrayBoundsForGenerateSeriesVisitor;
 
-impl RemoveOidTypeCast {
-    pub fn new() -> Self {
-        let mut unsupported_types = HashSet::new();
-        // Single source of truth: every oid-alias type name, in four spellings
-        // (bare, `pg_catalog.`-qualified, array, and qualified-array) to match
-        // however sqlparser stringifies the cast's target type.
-        for name in oid_field::OID_ALIAS_TYPE_NAMES {
-            unsupported_types.insert((*name).to_string());
-            unsupported_types.insert(format!("pg_catalog.{name}"));
-            unsupported_types.insert(format!("{name}[]"));
-            unsupported_types.insert(format!("pg_catalog.{name}[]"));
+impl CastArrayBoundsForGenerateSeriesVisitor {
+    /// True when `expr` is a call to `array_upper`/`array_lower` (optionally
+    /// `pg_catalog.`-qualified) -- the Int32-returning UDFs that collide with
+    /// `generate_series`'s Int64 requirement.
+    fn is_array_bounds_call(expr: &Expr) -> bool {
+        if let Expr::Function(f) = expr
+            && let Some(ObjectNamePart::Identifier(ident)) = f.name.0.last()
+        {
+            let v = ident.value.to_lowercase();
+            return v == "array_upper" || v == "array_lower";
         }
-        Self { unsupported_types }
+        false
+    }
+
+    /// Wrap `expr` in `::bigint` if it's an array_bounds call.
+    fn maybe_cast(expr: &mut Expr) {
+        if Self::is_array_bounds_call(expr) {
+            let inner = std::mem::replace(expr, Expr::Value(Value::Null.with_empty_span()));
+            *expr = Expr::Cast {
+                expr: Box::new(inner),
+                kind: CastKind::DoubleColon,
+                data_type: DataType::BigInt(None),
+                array: false,
+                format: None,
+            };
+        }
     }
 }
 
-struct RemoveOidTypeCastVisitor<'a> {
-    unsupported_types: &'a HashSet<String>,
-}
-
-impl VisitorMut for RemoveOidTypeCastVisitor<'_> {
+impl VisitorMut for CastArrayBoundsForGenerateSeriesVisitor {
     type Break = ();
 
-    fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-        match expr {
-            // This is the key part: identify constants with type annotations.
-            Expr::TypedString(TypedString {
-                data_type,
-                value,
-                uses_odbc_syntax: _,
-            }) if self
-                .unsupported_types
-                .contains(data_type.to_string().to_lowercase().as_str()) =>
-            {
-                *expr = Expr::Value(Value::SingleQuotedString(value.to_string()).with_empty_span());
+    fn pre_visit_table_factor(&mut self, tf: &mut TableFactor) -> ControlFlow<Self::Break> {
+        if let TableFactor::Table { name, args, .. } = tf
+            && let Some(ObjectNamePart::Identifier(ident)) = name.0.last()
+            && ident.value.to_lowercase() == "generate_series"
+            && let Some(TableFunctionArgs {
+                args: func_args, ..
+            }) = args
+        {
+            for fa in func_args {
+                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) = fa {
+                    Self::maybe_cast(e);
+                }
             }
-            Expr::Cast {
-                data_type,
-                expr: value,
-                ..
-            } if self
-                .unsupported_types
-                .contains(data_type.to_string().to_lowercase().as_str()) =>
-            {
-                // Replace with the inner expression. The single-pass visitor
-                // won't re-visit this replacement, so the rule driver loops to
-                // a fixed point to fully peel nested casts like
-                // `'x'::regclass::oid` -> `'x'`.
-                *expr = *value.clone();
-            }
-
-            // Add more match arms for other expression types (e.g., `Function`, `InList`) as needed.
-            _ => {}
         }
-
         ControlFlow::Continue(())
     }
 }
 
-impl SqlStatementRewriteRule for RemoveOidTypeCast {
-    fn rewrite(&self, mut statement: Statement) -> Statement {
-        // The cast-peeling visitor may need multiple passes to fully unwind
-        // nested casts (`'x'::regclass::oid`); loop until a fixed point.
-        loop {
-            let mut visitor = RemoveOidTypeCastVisitor {
-                unsupported_types: &self.unsupported_types,
-            };
-            let before = statement.to_string();
-            let _ = statement.visit(&mut visitor);
-            let after = statement.to_string();
-            if before == after {
-                break;
-            }
-        }
-        statement
+impl SqlStatementRewriteRule for CastArrayBoundsForGenerateSeries {
+    fn rewrite(&self, mut s: Statement) -> Statement {
+        let mut visitor = CastArrayBoundsForGenerateSeriesVisitor;
+        let _ = s.visit(&mut visitor);
+        s
     }
 }
 
@@ -635,10 +605,16 @@ impl SqlStatementRewriteRule for FixArrayLiteral {
 
 /// Remove qualifier from unsupported items
 ///
-/// This rewriter removes qualifier from following items:
-/// 1. type cast: for example: `pg_catalog.text`
-/// 2. function name: for example: `pg_catalog.array_to_string`,
-/// 3. table function name
+/// This rewriter removes the `pg_catalog.` qualifier from:
+/// 1. function names, for example `pg_catalog.array_to_string`
+/// 2. table function names
+///
+/// Type-cast qualifiers such as `pg_catalog.text` / `pg_catalog.int2[]` used
+/// to be handled here too, but are now resolved by the [`PgOidTypePlanner`]
+/// type planner (which sees the cast target type at planning time and maps the
+/// pg name to its Arrow type).
+///
+/// [`PgOidTypePlanner`]: crate::pg_catalog::oid_type_planner::PgOidTypePlanner
 #[derive(Debug)]
 pub struct RemoveQualifier;
 
@@ -666,34 +642,14 @@ impl VisitorMut for RemoveQualifierVisitor {
     }
 
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-        match expr {
-            Expr::Cast { data_type, .. } => {
-                // rewrite custom pg_catalog. qualified types
-                let data_type_str = data_type.to_string();
-                match data_type_str.as_str() {
-                    "pg_catalog.text" => {
-                        *data_type = DataType::Text;
-                    }
-                    "pg_catalog.int2[]" => {
-                        *data_type = DataType::Array(ArrayElemTypeDef::SquareBracket(
-                            Box::new(DataType::Int16),
-                            None,
-                        ));
-                    }
-                    _ => {}
-                }
+        // remove qualifier from pg_catalog.function
+        if let Expr::Function(function) = expr {
+            let name = &mut function.name;
+            if name.0.len() > 1
+                && let Some(last_ident) = name.0.pop()
+            {
+                *name = ObjectName(vec![last_ident]);
             }
-            Expr::Function(function) => {
-                // remove qualifier from pg_catalog.function
-                let name = &mut function.name;
-                if name.0.len() > 1
-                    && let Some(last_ident) = name.0.pop()
-                {
-                    *name = ObjectName(vec![last_ident]);
-                }
-            }
-
-            _ => {}
         }
         ControlFlow::Continue(())
     }
@@ -972,8 +928,7 @@ impl SqlStatementRewriteRule for FixVersionColumnName {
 mod tests {
     use super::*;
     use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
-    use datafusion::sql::sqlparser::parser::Parser;
-    use datafusion::sql::sqlparser::parser::ParserError;
+    use datafusion::sql::sqlparser::parser::{Parser, ParserError};
     use std::sync::Arc;
 
     fn parse(sql: &str) -> Result<Vec<Statement>, ParserError> {
@@ -1064,70 +1019,34 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_oid_type_cast() {
-        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![
-            Arc::new(RemoveQualifier),
-            Arc::new(RemoveOidTypeCast::new()),
-        ];
-        assert_rewrite!(
-            &rules,
-            "SELECT n.* FROM pg_catalog.pg_namespace n WHERE n.nspname = 'pg_catalog'::regclass ORDER BY n.nspname",
-            "SELECT n.* FROM pg_catalog.pg_namespace n WHERE n.nspname = 'pg_catalog' ORDER BY n.nspname"
-        );
+    fn test_cast_array_bounds_for_generate_series() {
+        // array_upper/array_lower return Int32; generate_series wants Int64.
+        // The rule wraps those calls in ::bigint when used as generate_series args.
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(CastArrayBoundsForGenerateSeries)];
 
         assert_rewrite!(
             &rules,
-            "SELECT n.* FROM pg_catalog.pg_namespace n WHERE n.oid = 1 AND n.nspname = 'pg_catalog'::regclass ORDER BY n.nspname",
-            "SELECT n.* FROM pg_catalog.pg_namespace n WHERE n.oid = 1 AND n.nspname = 'pg_catalog' ORDER BY n.nspname"
+            "SELECT s.r FROM generate_series(1, array_upper(current_schemas(false), 1)) as s(r)",
+            "SELECT s.r FROM generate_series(1, array_upper(current_schemas(false), 1)::BIGINT) AS s (r)"
+        );
+        assert_rewrite!(
+            &rules,
+            "SELECT s.r FROM generate_series(array_lower(x, 1), array_upper(x, 1)) as s(r)",
+            "SELECT s.r FROM generate_series(array_lower(x, 1)::BIGINT, array_upper(x, 1)::BIGINT) AS s (r)"
         );
 
+        // Non-array-bounds args are left alone (literal ints already work).
         assert_rewrite!(
             &rules,
-            "SELECT n.oid, n.*, d.description FROM pg_catalog.pg_namespace n LEFT OUTER JOIN pg_catalog.pg_description d ON d.objoid = n.oid AND d.objsubid = 0 AND d.classoid = 'pg_namespace'::regclass ORDER BY nspname",
-            "SELECT n.oid, n.*, d.description FROM pg_catalog.pg_namespace n LEFT OUTER JOIN pg_catalog.pg_description d ON d.objoid = n.oid AND d.objsubid = 0 AND d.classoid = 'pg_namespace' ORDER BY nspname"
+            "SELECT s.r FROM generate_series(1, 10) as s(r)",
+            "SELECT s.r FROM generate_series(1, 10) AS s (r)"
         );
-
+        // array_upper used outside generate_series is NOT touched.
         assert_rewrite!(
             &rules,
-            "SELECT n.* FROM pg_catalog.pg_namespace n WHERE n.nspname = 'pg_catalog' ORDER BY n.nspname",
-            "SELECT n.* FROM pg_catalog.pg_namespace n WHERE n.nspname = 'pg_catalog' ORDER BY n.nspname"
-        );
-
-        assert_rewrite!(
-            &rules,
-            "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, c.relhastriggers, c.relrowsecurity, c.relforcerowsecurity, false AS relhasoids, c.relispartition, '', c.reltablespace, CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::pg_catalog.regtype::pg_catalog.text END, c.relpersistence, c.relreplident, am.amname
-    FROM pg_catalog.pg_class c
-     LEFT JOIN pg_catalog.pg_class tc ON (c.reltoastrelid = tc.oid)
-    LEFT JOIN pg_catalog.pg_am am ON (c.relam = am.oid)
-    WHERE c.oid = '16386'",
-            "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, c.relhastriggers, c.relrowsecurity, c.relforcerowsecurity, false AS relhasoids, c.relispartition, '', c.reltablespace, CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::TEXT END, c.relpersistence, c.relreplident, am.amname FROM pg_catalog.pg_class c LEFT JOIN pg_catalog.pg_class tc ON (c.reltoastrelid = tc.oid) LEFT JOIN pg_catalog.pg_am am ON (c.relam = am.oid) WHERE c.oid = '16386'"
-        );
-
-        // Regression: nested casts must peel to a fixed point so that
-        // `'x'::regclass::oid` -> `'x'` (not the partial `'x'::regclass`,
-        // which DataFusion rejects as an unsupported SQL type at plan time).
-        // The oid-coercion analyzer rule then resolves the bare name against
-        // any oid-alias column it is compared with.
-        assert_rewrite!(
-            &rules,
-            "SELECT * FROM pg_catalog.pg_class WHERE oid = 't'::pg_catalog.regclass::pg_catalog.oid",
-            "SELECT * FROM pg_catalog.pg_class WHERE oid = 't'"
-        );
-        assert_rewrite!(
-            &rules,
-            "SELECT 'pg_namespace'::regclass::oid",
-            "SELECT 'pg_namespace'"
-        );
-
-        // The stripped set is derived from oid_field::OID_ALIAS_TYPE_NAMES, so
-        // every oid-alias type -- not just the original hardcoded six -- is
-        // peeled. Verify a representative newly-covered one (regrole) plus the
-        // array variant (regtype[], used by pgcli's proallargtypes).
-        assert_rewrite!(&rules, "SELECT 'postgres'::regrole", "SELECT 'postgres'");
-        assert_rewrite!(
-            &rules,
-            "SELECT proallargtypes::regtype[] FROM pg_proc",
-            "SELECT proallargtypes FROM pg_proc"
+            "SELECT array_upper(x, 1)",
+            "SELECT array_upper(x, 1)"
         );
     }
 

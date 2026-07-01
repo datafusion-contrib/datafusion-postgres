@@ -65,10 +65,6 @@ impl ScalarUDFImpl for PgGetExprUDF {
 
         Ok(ColumnarValue::Array(array))
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 pub fn create_pg_get_expr_udf() -> ScalarUDF {

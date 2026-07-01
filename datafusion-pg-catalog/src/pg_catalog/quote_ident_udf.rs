@@ -81,10 +81,6 @@ impl Default for ParseIdentUDF {
 }
 
 impl ScalarUDFImpl for ParseIdentUDF {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn signature(&self) -> &Signature {
         &self.signature
     }

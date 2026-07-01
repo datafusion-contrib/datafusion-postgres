@@ -82,6 +82,7 @@ impl PermissionsHook {
             Statement::Set { .. }
                 | Statement::ShowVariable { .. }
                 | Statement::ShowStatus { .. }
+                | Statement::ShowCatalogs { .. }
                 | Statement::StartTransaction { .. }
                 | Statement::Commit { .. }
                 | Statement::Rollback { .. }

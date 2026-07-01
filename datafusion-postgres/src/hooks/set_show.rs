@@ -37,7 +37,9 @@ impl QueryHook for SetShowHook {
             Statement::Set { .. } => {
                 try_respond_set_statements(client, statement, session_context).await
             }
-            Statement::ShowVariable { .. } | Statement::ShowStatus { .. } => {
+            Statement::ShowVariable { .. }
+            | Statement::ShowStatus { .. }
+            | Statement::ShowCatalogs { .. } => {
                 try_respond_show_statements(client, statement, session_context).await
             }
             _ => None,
@@ -64,7 +66,9 @@ impl QueryHook for SetShowHook {
                     .map_err(|e| PgWireError::ApiError(Box::new(e)));
                 Some(result)
             }
-            Statement::ShowVariable { .. } | Statement::ShowStatus { .. } => {
+            Statement::ShowVariable { .. }
+            | Statement::ShowStatus { .. }
+            | Statement::ShowCatalogs { .. } => {
                 let show_schema =
                     Arc::new(Schema::new(vec![Field::new("show", DataType::Utf8, false)]));
                 let result = show_schema
@@ -94,7 +98,9 @@ impl QueryHook for SetShowHook {
             Statement::Set { .. } => {
                 try_respond_set_statements(client, statement, session_context).await
             }
-            Statement::ShowVariable { .. } | Statement::ShowStatus { .. } => {
+            Statement::ShowVariable { .. }
+            | Statement::ShowStatus { .. }
+            | Statement::ShowCatalogs { .. } => {
                 try_respond_show_statements(client, statement, session_context).await
             }
             _ => None,
@@ -279,6 +285,13 @@ async fn try_respond_show_statements(
     statement: &Statement,
     session_context: &SessionContext,
 ) -> Option<PgWireResult<Response>> {
+    // Handle SHOW CATALOGS separately since it's its own variant in sqlparser 0.62+
+    if let Statement::ShowCatalogs { .. } = statement {
+        let catalogs = session_context.catalog_names();
+        let value = catalogs.join(", ");
+        return Some(mock_show_response("Catalogs", &value).map(Response::Query));
+    }
+
     let Statement::ShowVariable { variable } = statement else {
         return None;
     };
@@ -596,6 +609,8 @@ mod tests {
             let show_response =
                 try_respond_show_statements(&client, &statement, &session_context).await;
 
+            dbg!(query);
+            dbg!(&show_response);
             let Some(Ok(Response::Query(show_response))) = show_response else {
                 panic!("unexpected show response");
             };
