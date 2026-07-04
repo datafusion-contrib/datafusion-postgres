@@ -708,42 +708,119 @@ impl SqlStatementRewriteRule for RemoveQualifier {
     }
 }
 
-/// Replace `current_user` with `session_user()`
+/// Rewrite postgres built-in special registers that may be referenced
+/// without parentheses into the function-call form DataFusion understands.
+///
+/// Postgres allows several built-in special registers to be used without
+/// parentheses -- e.g. `current_user`, `current_catalog`, `current_schema`.
+/// DataFusion only exposes these as function calls, so this rule rewrites the
+/// parenthesis-less forms. sqlparser represents them in two different ways,
+/// so the rule handles both:
+///
+///   * `current_user` and `current_catalog` are sqlparser-special-cased
+///     keywords that already parse as a zero-argument `Function` (with
+///     `FunctionArguments::None`). They only need renaming, because DataFusion
+///     exposes them under different names: `current_user` -> `session_user`,
+///     `current_catalog` -> `current_database`.
+///   * `current_schema` parses as a bare identifier and is wrapped into a
+///     zero-argument function call: `current_schema` -> `current_schema()`.
+///
+/// Because the rewritten AST is re-serialised and re-parsed by DataFusion
+/// (see `handlers.rs`), the emitted form must round-trip through the postgres
+/// dialect. sqlparser only accepts the parenthesis-less spelling for the
+/// special-cased keywords [`PARENTHESIS_LESS_KEYWORDS`]; every other target
+/// (e.g. `current_database`) must be emitted with explicit `()`.
+///
+/// Note: `version` is deliberately NOT handled here -- in postgres it is a
+/// regular function, not a special register, so `SELECT version` (no parens)
+/// is invalid and never reaches this rule.
 #[derive(Debug)]
 pub struct CurrentUserVariableToSessionUserFunctionCall;
 
+/// `(postgres function name, target function name)` for the parenthesis-less
+/// `Function` nodes produced by sqlparser that need renaming.
+const BUILTIN_FUNCTION_RENAME: &[(&str, &str)] = &[
+    ("current_user", "session_user"),
+    ("current_catalog", "current_database"),
+];
+
+/// sqlparser special-cases these keywords into a parenthesis-less zero-argument
+/// `Function` (see sqlparser's `Parser::parse_word`). They -- and only they --
+/// may be emitted without parentheses; `name()` does not re-parse for them, so
+/// any other target must be serialised as an explicit `name()` call.
+const PARENTHESIS_LESS_KEYWORDS: &[&str] =
+    &["current_catalog", "current_user", "session_user", "user"];
+
+/// `(identifier, target function name)` for bare identifiers that must be
+/// wrapped into a zero-argument function call.
+const BARE_IDENTIFIER_TO_FUNCTION: &[(&str, &str)] = &[("current_schema", "current_schema")];
+
+fn empty_function_call(name: &str) -> Expr {
+    Expr::Function(Function {
+        name: ObjectName::from(vec![Ident::new(name)]),
+        args: FunctionArguments::List(FunctionArgumentList {
+            args: vec![],
+            duplicate_treatment: None,
+            clauses: vec![],
+        }),
+        uses_odbc_syntax: false,
+        parameters: FunctionArguments::None,
+        filter: None,
+        null_treatment: None,
+        over: None,
+        within_group: vec![],
+    })
+}
+
 struct CurrentUserVariableToSessionUserFunctionCallVisitor;
+
+impl CurrentUserVariableToSessionUserFunctionCallVisitor {
+    fn last_ident_lower(name: &ObjectName) -> Option<String> {
+        name.0
+            .last()
+            .and_then(|part| part.as_ident())
+            .map(|ident| ident.value.to_lowercase())
+    }
+}
 
 impl VisitorMut for CurrentUserVariableToSessionUserFunctionCallVisitor {
     type Break = ();
 
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
+        // Bare identifier -> zero-argument function call.
         if let Expr::Identifier(ident) = expr
             && ident.quote_style.is_none()
-            && ident.value.to_lowercase() == "current_user"
         {
-            *expr = Expr::Function(Function {
-                name: ObjectName::from(vec![Ident::new("session_user")]),
-                args: FunctionArguments::None,
-                uses_odbc_syntax: false,
-                parameters: FunctionArguments::None,
-                filter: None,
-                null_treatment: None,
-                over: None,
-                within_group: vec![],
-            });
+            let lower = ident.value.to_lowercase();
+            if let Some(&(_, target)) = BARE_IDENTIFIER_TO_FUNCTION
+                .iter()
+                .find(|(name, _)| *name == lower)
+            {
+                *expr = empty_function_call(target);
+            }
         }
 
-        if let Expr::Function(func) = expr {
-            let fname = func
-                .name
-                .0
+        // Parenthesis-less `Function` (or explicit call) -> rename where needed.
+        // A parenthesis-less `FunctionArguments::None` is only kept as-is when
+        // the *target* is itself a parenthesis-less special keyword; otherwise
+        // it is normalised to an empty argument list so the rewritten SQL
+        // re-parses as a real `name()` call (the parenthesis-less spelling does
+        // not round-trip for non-special names such as `current_database`).
+        if let Expr::Function(func) = expr
+            && let Some(fname) = Self::last_ident_lower(&func.name)
+            && let Some(&(_, target)) = BUILTIN_FUNCTION_RENAME
                 .iter()
-                .map(|ident| ident.to_string())
-                .collect::<Vec<String>>()
-                .join(".");
-            if fname.to_lowercase() == "current_user" {
-                func.name = ObjectName::from(vec![Ident::new("session_user")])
+                .find(|(name, _)| *name == fname)
+        {
+            func.name = ObjectName::from(vec![Ident::new(target)]);
+            if matches!(func.args, FunctionArguments::None)
+                && !PARENTHESIS_LESS_KEYWORDS.contains(&target)
+            {
+                func.args = FunctionArguments::List(FunctionArgumentList {
+                    args: vec![],
+                    duplicate_treatment: None,
+                    clauses: vec![],
+                });
             }
         }
 
@@ -1242,15 +1319,33 @@ mod tests {
         let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
             vec![Arc::new(CurrentUserVariableToSessionUserFunctionCall)];
 
+        // current_user -> session_user. `session_user` is a sqlparser-special
+        // keyword, so it must stay parenthesis-less to round-trip through the
+        // postgres dialect (re-parsed by DataFusion downstream).
         assert_rewrite!(&rules, "SELECT current_user", "SELECT session_user");
-
         assert_rewrite!(&rules, "SELECT CURRENT_USER", "SELECT session_user");
-
         assert_rewrite!(
             &rules,
             "SELECT is_null(current_user)",
             "SELECT is_null(session_user)"
         );
+
+        // current_catalog -> current_database. `current_database` is NOT a
+        // special keyword, so it needs explicit `()` to re-parse as a call.
+        assert_rewrite!(
+            &rules,
+            "SELECT current_catalog",
+            "SELECT current_database()"
+        );
+
+        // version is deliberately not rewritten: in postgres it is a regular
+        // function, not a special register, so `SELECT version` (no parens) is
+        // invalid and `SELECT version()` is already the canonical form.
+        assert_rewrite!(&rules, "SELECT version", "SELECT version");
+        assert_rewrite!(&rules, "SELECT version()", "SELECT version()");
+
+        // current_schema -> current_schema()
+        assert_rewrite!(&rules, "SELECT current_schema", "SELECT current_schema()");
     }
 
     #[test]
