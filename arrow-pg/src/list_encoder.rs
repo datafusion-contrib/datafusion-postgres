@@ -624,7 +624,7 @@ pub fn encode_list<T: Encoder>(
         // TODO: add support for more advanced types (fixed size lists, etc.)
         list_type => Err(PgWireError::ApiError(ToSqlError::from(format!(
             "Unsupported List Datatype {} and array {:?}",
-            list_type, &arr
+            list_type, arr
         )))),
     }
 }

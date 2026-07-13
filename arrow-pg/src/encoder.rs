@@ -525,7 +525,7 @@ pub fn encode_value<T: Encoder>(
             return Err(PgWireError::ApiError(ToSqlError::from(format!(
                 "Unsupported Datatype {} and array {:?}",
                 arr.data_type(),
-                &arr
+                arr
             ))));
         }
     }
