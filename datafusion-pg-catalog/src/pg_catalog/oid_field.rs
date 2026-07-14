@@ -40,12 +40,13 @@ pub mod kind {
 /// This is the **single source of truth** for:
 ///  * the `pg.oid_alias` metadata value stamped on Int32 catalog columns (see
 ///    [`oid_field`]) and embedded in the pg_catalog feather exports, and
-///  * the set of oid-alias cast type names that the `RemoveOidTypeCast`
-///    rewrite rule must strip before DataFusion's `sql_to_plan` (which rejects
-///    them as unsupported SQL types).
+///  * the set of oid-alias cast type names accepted by the `PgOidTypePlanner`
+///    SQL type planner (so DataFusion's `sql_to_plan` maps them to int4 oids
+///    carrying this metadata instead of rejecting them as unsupported types).
 ///
-/// All of these are stored as `Int32` (the raw object identifier); the
-/// oid-coercion analyzer rule resolves string comparisons against them. The
+/// The oid-coercion analyzer rule then reads the metadata (on the column or
+/// on the cast's target field) to resolve string comparisons the way Postgres
+/// does. The
 /// [`kind`] named constants anchor the subset that the dynamic catalog tables
 /// use and that have name-lookup support (`regclass`/`regnamespace`/`regproc`);
 /// the remainder are numeric-resolution-only.

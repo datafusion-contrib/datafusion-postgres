@@ -26,6 +26,7 @@ use crate::pg_catalog::catalog_info::CatalogInfo;
 use crate::pg_catalog::context::PgCatalogContextProvider;
 use crate::pg_catalog::empty_table::EmptyTable;
 
+pub mod array_bounds_udf;
 pub mod catalog_info;
 pub mod context;
 pub mod empty_table;
@@ -33,6 +34,7 @@ pub mod format_type;
 pub mod has_privilege_udf;
 pub mod oid_coercion_rule;
 pub mod oid_field;
+pub mod oid_type_planner;
 pub mod pg_attribute;
 pub mod pg_class;
 pub mod pg_database;
@@ -208,10 +210,6 @@ pub struct PgCatalogSchemaProvider<C, P> {
 
 #[async_trait]
 impl<C: CatalogInfo, P: PgCatalogContextProvider> SchemaProvider for PgCatalogSchemaProvider<C, P> {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         PG_CATALOG_TABLES.iter().map(ToString::to_string).collect()
     }
@@ -1384,10 +1382,6 @@ pub fn create_pg_get_constraintdef() -> ScalarUDF {
     }
 
     impl ScalarUDFImpl for GetConstraintDefUDF {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn name(&self) -> &str {
             "pg_get_constraintdef"
         }
@@ -1499,6 +1493,11 @@ where
     session_context.register_udf(create_pg_get_partition_ancestors_udf());
     session_context.register_udf(quote_ident_udf::create_quote_ident_udf());
     session_context.register_udf(quote_ident_udf::create_parse_ident_udf());
+    // Postgres array bounds. DataFusion ships array_length but not array_upper /
+    // array_lower; without these, client queries (psql/dbeaver/grafan) that use
+    // them were only "supported" via hardcoded blacklist token substitution.
+    session_context.register_udf(array_bounds_udf::create_array_upper_udf());
+    session_context.register_udf(array_bounds_udf::create_array_lower_udf());
 
     // Make oid / oid-alias columns (relnamespace, atttypid, ...) compare
     // against string literals the way Postgres does. Requires the schema
@@ -1506,6 +1505,21 @@ where
     session_context.add_analyzer_rule(Arc::new(oid_coercion_rule::OidStringCoercion::new(
         pg_catalog.clone() as Arc<dyn oid_coercion_rule::OidLookupProvider>,
     )));
+
+    // Teach the SQL planner to accept Postgres oid-alias type names
+    // (`regclass`, `regproc`, ...) -- DataFusion rejects them as unsupported
+    // otherwise. Each maps to int4 carrying `pg.oid_alias` metadata, which the
+    // analyzer rule above then reads to resolve name strings -> oids. This
+    // replaces the former SQL-layer cast-stripping / cast-rewriting rules.
+    {
+        use datafusion::execution::session_state::SessionStateBuilder;
+        let state = session_context.state_ref();
+        let existing = state.read().clone();
+        let new_state = SessionStateBuilder::new_from_existing(existing)
+            .with_type_planner(Arc::new(oid_type_planner::PgOidTypePlanner))
+            .build();
+        *state.write() = new_state;
+    }
 
     Ok(())
 }
