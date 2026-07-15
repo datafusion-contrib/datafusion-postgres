@@ -1080,12 +1080,16 @@ pub fn create_current_schema_udf() -> ScalarUDF {
     )
 }
 
-pub fn create_current_database_udf() -> ScalarUDF {
+pub fn create_current_database_udf(database_name: &str) -> ScalarUDF {
+    // `current_database()` is fixed for the life of a connection in
+    // PostgreSQL, so capture the catalog name the session was set up
+    // with and return it verbatim.
+    let database_name = database_name.to_string();
     // Define the function implementation
     let func = move |_args: &[ColumnarValue]| {
         // Create a UTF8 array with a single value
         let mut builder = StringBuilder::new();
-        builder.append_value("datafusion");
+        builder.append_value(&database_name);
         let array: ArrayRef = Arc::new(builder.finish());
 
         Ok(ColumnarValue::Array(array))
@@ -1459,7 +1463,7 @@ where
         })?
         .register_schema("pg_catalog", pg_catalog.clone())?;
 
-    session_context.register_udf(create_current_database_udf());
+    session_context.register_udf(create_current_database_udf(catalog_name));
     session_context.register_udf(create_current_schema_udf());
     session_context.register_udf(create_current_schemas_udf());
     //    session_context.register_udf(create_version_udf());
@@ -1527,6 +1531,36 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[tokio::test]
+    async fn current_database_returns_the_configured_catalog_name() {
+        use crate::pg_catalog::context::EmptyContextProvider;
+        use datafusion::arrow::array::StringArray;
+        use datafusion::prelude::{SessionConfig, SessionContext};
+
+        // Regression: `current_database()` used to return the hardcoded
+        // literal "datafusion" regardless of the catalog the session was
+        // set up with. It must reflect the configured catalog name.
+        let config = SessionConfig::new().with_default_catalog_and_schema("my_database", "public");
+        let ctx = SessionContext::new_with_config(config);
+        setup_pg_catalog(&ctx, "my_database", EmptyContextProvider).unwrap();
+
+        let batches = ctx
+            .sql("SELECT current_database()")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let value = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("current_database() returns a Utf8 column")
+            .value(0);
+        assert_eq!(value, "my_database");
+    }
 
     #[test]
     fn test_load_arrow_data() {
