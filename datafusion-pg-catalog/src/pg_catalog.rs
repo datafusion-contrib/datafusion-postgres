@@ -31,6 +31,7 @@ pub mod catalog_info;
 pub mod context;
 pub mod empty_table;
 pub mod format_type;
+pub mod generate_series_arg_coercion;
 pub mod has_privilege_udf;
 pub mod oid_coercion_rule;
 pub mod oid_field;
@@ -1520,6 +1521,14 @@ where
             .build();
         *state.write() = new_state;
     }
+
+    // Widen Postgres int4 bounds to int8 for `generate_series`/`range`. Their
+    // stock implementations require int8 *literals*, and DataFusion invokes the
+    // table function (after constant-folding args) at planning time -- before
+    // any analyzer rule runs -- so a planner-layer fix is the only option.
+    // Covers every int4-returning argument (array_upper/array_lower/...),
+    // replacing the former CastArrayBoundsForGenerateSeries SQL rewrite.
+    generate_series_arg_coercion::CoerceIntArgsToBigInt::widen(session_context);
 
     Ok(())
 }
