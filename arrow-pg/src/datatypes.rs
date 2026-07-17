@@ -52,6 +52,10 @@ pub fn into_pg_type(arrow_type: &DataType) -> PgWireResult<Type> {
         | DataType::LargeList(field)
         | DataType::ListView(field)
         | DataType::LargeListView(field) => match field.data_type() {
+            // Align with PostgreSQL: an array literal without type
+            // information such as `ARRAY[NULL]` has a `Null` element type and
+            // is reported as `text[]` by postgres.
+            DataType::Null => Type::TEXT_ARRAY,
             DataType::Boolean => Type::BOOL_ARRAY,
             DataType::Int8 => Type::INT2_ARRAY,
             DataType::Int16 | DataType::UInt8 => Type::INT2_ARRAY,
@@ -185,4 +189,17 @@ pub fn encode_recordbatch(
 ) -> Box<impl Iterator<Item = PgWireResult<DataRow>>> {
     let mut row_stream = RowEncoder::new(record_batch, fields);
     Box::new(std::iter::from_fn(move || row_stream.next_row()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn null_list_is_text_array() {
+        // Align with PostgreSQL: `ARRAY[NULL]` has no element type
+        // information and is reported as `text[]`.
+        let ty = DataType::List(Arc::new(Field::new_list_field(DataType::Null, true)));
+        assert_eq!(into_pg_type(&ty).unwrap(), Type::TEXT_ARRAY);
+    }
 }

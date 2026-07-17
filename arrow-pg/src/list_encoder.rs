@@ -106,7 +106,12 @@ pub fn encode_list<T: Encoder>(
 ) -> PgWireResult<()> {
     match arr.data_type() {
         DataType::Null => {
-            encoder.encode_field(&None::<i8>, pg_field)?;
+            // The element type is unknown (e.g. `ARRAY[NULL]`). Align with
+            // PostgreSQL and treat the list as `text[]`, preserving the
+            // number of (null) elements so that `ARRAY[NULL]` yields `{NULL}`
+            // rather than a SQL NULL.
+            let value: Vec<Option<&str>> = (0..arr.len()).map(|_| None).collect();
+            encoder.encode_field(&value, pg_field)?;
             Ok(())
         }
         DataType::Boolean => {

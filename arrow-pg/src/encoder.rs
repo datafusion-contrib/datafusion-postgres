@@ -643,6 +643,67 @@ mod tests {
     }
 
     #[test]
+    fn encodes_null_list_as_text_array() {
+        // Regression: `ARRAY[NULL]` (a List whose element type is Null) must
+        // be encoded as a `text[]` value `{NULL}`, aligning with postgres
+        // rather than emitting a SQL NULL.
+        #[derive(Default)]
+        struct TextEncoder {
+            encoded_value: String,
+        }
+
+        impl Encoder for TextEncoder {
+            type Item = String;
+
+            fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
+            where
+                T: ToSql + ToSqlText + Sized,
+            {
+                let mut bytes = BytesMut::new();
+                value
+                    .to_sql_text(
+                        pg_field.datatype(),
+                        &mut bytes,
+                        &FormatOptions::default(),
+                    )
+                    .unwrap();
+                self.encoded_value = String::from_utf8(bytes.to_vec()).unwrap();
+                Ok(())
+            }
+
+            fn take_row(&mut self) -> Self::Item {
+                std::mem::take(&mut self.encoded_value)
+            }
+        }
+
+        // Build a single-row ListArray whose element type is Null, mirroring
+        // DataFusion's `array[null]` output.
+        let list_field = Arc::new(Field::new_list_field(DataType::Null, true));
+        let offsets = arrow::buffer::OffsetBuffer::<i32>::from_lengths([1]);
+        let values = Arc::new(NullArray::new(1)) as Arc<dyn Array>;
+        let list_arr: Arc<dyn Array> = Arc::new(ListArray::new(
+            list_field.clone(),
+            offsets,
+            values,
+            None,
+        ));
+
+        let arrow_field = Field::new("c", DataType::List(list_field), true);
+        let pg_field = FieldInfo::new(
+            "c".to_string(),
+            None,
+            None,
+            Type::TEXT_ARRAY,
+            FieldFormat::Text,
+        );
+
+        let mut encoder = TextEncoder::default();
+        let result = encode_value(&mut encoder, &list_arr, 0, &arrow_field, &pg_field);
+        assert!(result.is_ok());
+        assert_eq!(encoder.encoded_value, "{NULL}");
+    }
+
+    #[test]
     fn test_get_time32_second_value() {
         let array = Time32SecondArray::from_iter_values([3723_i32]);
         let array: Arc<dyn Array> = Arc::new(array);
