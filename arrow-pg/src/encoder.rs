@@ -661,11 +661,7 @@ mod tests {
             {
                 let mut bytes = BytesMut::new();
                 value
-                    .to_sql_text(
-                        pg_field.datatype(),
-                        &mut bytes,
-                        &FormatOptions::default(),
-                    )
+                    .to_sql_text(pg_field.datatype(), &mut bytes, &FormatOptions::default())
                     .unwrap();
                 self.encoded_value = String::from_utf8(bytes.to_vec()).unwrap();
                 Ok(())
@@ -681,12 +677,8 @@ mod tests {
         let list_field = Arc::new(Field::new_list_field(DataType::Null, true));
         let offsets = arrow::buffer::OffsetBuffer::<i32>::from_lengths([1]);
         let values = Arc::new(NullArray::new(1)) as Arc<dyn Array>;
-        let list_arr: Arc<dyn Array> = Arc::new(ListArray::new(
-            list_field.clone(),
-            offsets,
-            values,
-            None,
-        ));
+        let list_arr: Arc<dyn Array> =
+            Arc::new(ListArray::new(list_field.clone(), offsets, values, None));
 
         let arrow_field = Field::new("c", DataType::List(list_field), true);
         let pg_field = FieldInfo::new(
