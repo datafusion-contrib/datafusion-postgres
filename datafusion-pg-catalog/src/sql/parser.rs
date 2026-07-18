@@ -11,17 +11,53 @@ use datafusion::sql::sqlparser::tokenizer::TokenWithSpan;
 use super::rules::AliasDuplicatedProjectionRewrite;
 use super::rules::CurrentUserVariableToSessionUserFunctionCall;
 use super::rules::FixArrayLiteral;
-use super::rules::FixCollate;
 use super::rules::FixVersionColumnName;
 use super::rules::PrependUnqualifiedPgTableName;
-use super::rules::RemoveQualifier;
 use super::rules::RemoveSubqueryFromProjection;
-use super::rules::ResolveUnqualifiedIdentifer;
+use super::rules::ResolveUnqualifiedIdentifier;
 use super::rules::RewriteArrayAnyAllOperation;
+use super::rules::RewritePgCatalogOperator;
 use super::rules::SqlStatementRewriteRule;
+use super::rules::StripCallableQualifier;
+use super::rules::StripCollate;
 
+/// Last-resort replacements for whole client queries that DataFusion cannot
+/// execute and cannot be fixed by a SQL rewrite rule.
+///
+/// Each entry is a `(client_sql, replacement_sql)` pair. The parser tokenizes
+/// both at construction time (see [`PostgresCompatibilityParser::new`]) and the
+/// input token stream is scanned for the client pattern; on a match the matched
+/// tokens are replaced wholesale, before any rewrite rule runs.
+///
+/// # How matching works
+///
+/// * **Token-level, whitespace-insensitive:** only non-whitespace, non-`;`
+///   tokens are compared, so formatting differences (indentation, newlines,
+///   spacing) do not matter.
+/// * **Substring match:** patterns are scanned at *every* token position, so a
+///   pattern matches as a contiguous sub-sequence of the input. Most entries
+///   are whole statements and therefore only match at a statement boundary;
+///   the grafana entry below is intentionally a *partial* replacement (it
+///   substitutes just an inner subquery).
+/// * **`$N` placeholders are wildcards:** a `Token::Placeholder` in the pattern
+///   (e.g. `$1`) matches any single non-`;` token in the input, so the psql
+///   `\d` entries match regardless of whether the client binds a parameter or
+///   sends a literal oid string.
+///
+/// # When to add or remove an entry
+///
+/// These entries exist solely because of a specific DataFusion limitation.
+/// Each entry's comment names the limitation and a removal condition. Before
+/// adding a new entry, check whether a general SQL rewrite rule (or better, an
+/// analyzer rule / type planner, as was done for oid resolution) can handle it
+/// instead -- those are preferred because they are metadata-aware and
+/// order-independent.
 const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
-    // pgcli startup query
+    // pgcli -- foreign-key column lookup
+    //
+    // Blocked by: `unnest(<scalar subquery>)` -- DataFusion cannot unnest the
+    //   result of a subquery (here, `array_agg(...)` over a correlated join).
+    // Remove when: DF supports unnesting arbitrary subquery results.
     (
 "SELECT s_p.nspname AS parentschema,
                                t_p.relname AS parenttable,
@@ -58,7 +94,12 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
    NULL::TEXT AS childcolumn
  WHERE false"),
 
-    // pgcli startup query
+    // pgcli -- user-defined type lookup
+    //
+    // Blocked by: correlated scalar subquery in the WHERE clause --
+    //   `SELECT c.relkind = 'c' FROM pg_catalog.pg_class c
+    //    WHERE c.oid = t.typrelid` references the outer `t`.
+    // Remove when: DF plans correlated scalar subqueries in predicates.
     (
 "SELECT n.nspname schema_name,
                                        t.typname type_name
@@ -83,7 +124,12 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
 "SELECT NULL::TEXT AS schema_name, NULL::TEXT AS type_name WHERE false"
     ),
 
-// psql \d <table> queries
+    // psql \d <table> -- row policies (polrelid bound via the $1 wildcard)
+    //
+    // Blocked by: the `array(SELECT ...)` array constructor (here over a
+    //   join on `any(pol.polroles)`). DataFusion lacks the array-from-subquery
+    //   constructor syntax.
+    // Remove when: DF supports the `array(SELECT ...)` constructor.
     (
 "SELECT pol.polname, pol.polpermissive,
           CASE WHEN pol.polroles = '{0}' THEN NULL ELSE pg_catalog.array_to_string(array(select rolname from pg_catalog.pg_roles where oid = any (pol.polroles) order by 1),',') END,
@@ -107,6 +153,15 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
  WHERE false"
     ),
 
+    // psql \d <table> -- extended statistics (stxrelid bound via $1)
+    //
+    // Blocked by: `<char-literal> = any(<array-column>)` -- `stxkind` is a
+    //   `char[2]`; DataFusion's `array_has` expects matching element types and
+    //   rejects the char-vs-string comparison, so all three `any(stxkind)`
+    //   predicates fail to plan.
+    // Remove when: DF coerces element types in `any(array_col)` comparisons,
+    //   or an analyzer rule lowers `lit = ANY(array_col)` to a proper element
+    //   comparison.
     (
 "SELECT oid, stxrelid::pg_catalog.regclass, stxnamespace::pg_catalog.regnamespace::pg_catalog.text AS nsp, stxname,
         pg_catalog.pg_get_statisticsobjdef_columns(oid) AS columns,
@@ -130,6 +185,14 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
  WHERE false"
     ),
 
+    // psql \d <table> -- publications (prrelid / oid bound via $1)
+    //
+    // Blocked by: the three UNION branches each project two unnamed `NULL`
+    //   columns, yielding duplicate/empty projection names that DataFusion
+    //   rejects. (The `generate_series(0, array_upper(...))` over a correlated
+    //   `int2[]` would also fail, but the duplicate-name error fires first.)
+    // Remove when: DF tolerates duplicate/unnamed NULL projection columns,
+    //   or an aliasing rule can assign synthetic names.
     (
 "SELECT pubname
              , NULL
@@ -164,7 +227,16 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
  WHERE false"
     ),
 
-    // grafana array index magic
+    // grafana -- search_path membership lookup. NOTE: this is the only entry
+    // that is a *partial* replacement -- it matches just the inner subquery and
+    // substitutes the empty string `''`, so the surrounding `IN (...)` simply
+    // matches nothing and the query returns zero rows.
+    //
+    // Blocked by: missing `current_setting()` UDF -- the query resolves the
+    //   session `search_path` at runtime via `current_setting('search_path')`.
+    //   (generate_series over dynamic array bounds now works via the
+    //   CoerceIntArgsToBigInt wrapper; current_setting is the remaining gap.)
+    // Remove when: a `current_setting()` UDF is registered.
     (r#"SELECT
             CASE WHEN trim(s[i]) = '"$user"' THEN user ELSE trim(s[i]) END
         FROM
@@ -179,8 +251,9 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
 /// A parser with Postgres Compatibility for Datafusion
 ///
 /// This parser will try its best to rewrite postgres SQL into a form that
-/// datafuiosn supports. It also maintains a blacklist that will transform the
-/// statement to a similar version if rewrite doesn't worth the effort for now.
+/// DataFusion supports. It also maintains a blacklist that will transform the
+/// statement to a similar version if rewriting it is not worth the effort for
+/// now.
 #[derive(Debug)]
 pub struct PostgresCompatibilityParser {
     blacklist: Vec<(Vec<Token>, Vec<Token>)>,
@@ -221,16 +294,18 @@ impl PostgresCompatibilityParser {
         Self {
             blacklist: mapping,
             rewrite_rules: vec![
-                // make sure blacklist based rewriter it on the top to prevent sql
-                // being rewritten from other rewriters
+                // The blacklist substitution in `parse()` runs before any of
+                // these rules, so by the time they see the statement any
+                // blacklisted fragment has already been replaced.
                 Arc::new(AliasDuplicatedProjectionRewrite),
-                Arc::new(ResolveUnqualifiedIdentifer),
+                Arc::new(ResolveUnqualifiedIdentifier),
                 Arc::new(RewriteArrayAnyAllOperation),
                 Arc::new(PrependUnqualifiedPgTableName),
-                Arc::new(RemoveQualifier),
+                Arc::new(StripCallableQualifier),
                 Arc::new(FixArrayLiteral),
                 Arc::new(CurrentUserVariableToSessionUserFunctionCall),
-                Arc::new(FixCollate),
+                Arc::new(StripCollate),
+                Arc::new(RewritePgCatalogOperator),
                 Arc::new(RemoveSubqueryFromProjection),
                 Arc::new(FixVersionColumnName),
             ],
@@ -242,22 +317,21 @@ impl PostgresCompatibilityParser {
         let parser = Parser::new(&PostgreSqlDialect {});
         let tokens = parser.try_with_sql(input)?.into_tokens();
 
-        // Get token values (without spans) and filter out only whitespace
-        // Keep semicolons as they separate statements
-        // Also rewrite ABORT to ROLLBACK for postgres compatibility
-        // remove this when https://github.com/apache/datafusion-sqlparser-rs/pull/2332 is ready
+        // Drop whitespace tokens; keep semicolons as they separate statements.
         let filtered_tokens: Vec<Token> = tokens
             .iter()
             .map(|t| t.token.clone())
             .filter(|t| !matches!(t, Token::Whitespace(_)))
-            .map(|t| {
-                if matches!(&t, Token::Word(w) if w.keyword == Keyword::ABORT) {
-                    Token::make_keyword("ROLLBACK")
-                } else {
-                    t
-                }
-            })
             .collect();
+
+        // Rewrite the Postgres `ABORT` statement to `ROLLBACK` (they are
+        // synonyms). This must happen at the token level because sqlparser does
+        // not parse `ABORT` as a statement, so it cannot be a post-parse
+        // [`SqlStatementRewriteRule`].
+        //
+        // TODO: remove when https://github.com/apache/datafusion-sqlparser-rs/pull/2332
+        //   is released in the version of sqlparser we depend on.
+        let filtered_tokens = Self::rewrite_abort_to_rollback(filtered_tokens);
 
         // Handle empty input
         if filtered_tokens.is_empty() {
@@ -328,6 +402,21 @@ impl PostgresCompatibilityParser {
         }
 
         Ok(result)
+    }
+
+    /// Replace every `ABORT` keyword token with `ROLLBACK` (see
+    /// [`Self::maybe_replace_tokens`] for rationale).
+    fn rewrite_abort_to_rollback(tokens: Vec<Token>) -> Vec<Token> {
+        tokens
+            .into_iter()
+            .map(|t| {
+                if matches!(&t, Token::Word(w) if w.keyword == Keyword::ABORT) {
+                    Token::make_keyword("ROLLBACK")
+                } else {
+                    t
+                }
+            })
+            .collect()
     }
 
     fn parse_tokens(&self, tokens: Vec<Token>) -> Result<Vec<Statement>, ParserError> {
@@ -606,5 +695,27 @@ mod tests {
             .collect();
 
         assert_eq!(actual_tokens, expected_token_values);
+    }
+
+    #[test]
+    fn test_abort_rewritten_to_rollback() {
+        // ABORT is a Postgres synonym for ROLLBACK; sqlparser does not parse it
+        // as a statement, so the token-level rewrite_abort_to_rollback turns
+        // it into ROLLBACK before parsing.
+        let parser = PostgresCompatibilityParser::new();
+        let stmts = parser.parse("ABORT").expect("failed to parse");
+        assert_eq!(stmts.len(), 1);
+        assert_eq!(stmts[0].to_string(), "ROLLBACK");
+
+        // `ABORT AND CHAIN` -> `ROLLBACK AND CHAIN`.
+        let stmts = parser.parse("ABORT AND CHAIN").expect("failed to parse");
+        assert_eq!(stmts[0].to_string(), "ROLLBACK AND CHAIN");
+
+        // A column named `abort` (quoted) must NOT be rewritten -- only the
+        // bare keyword form is a statement.
+        let stmts = parser
+            .parse("SELECT \"abort\" FROM t")
+            .expect("failed to parse");
+        assert!(stmts[0].to_string().contains("\"abort\""));
     }
 }
