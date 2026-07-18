@@ -27,7 +27,6 @@ use datafusion::sql::sqlparser::ast::SelectItemQualifiedWildcardKind;
 use datafusion::sql::sqlparser::ast::SetExpr;
 use datafusion::sql::sqlparser::ast::Statement;
 use datafusion::sql::sqlparser::ast::TableFactor;
-use datafusion::sql::sqlparser::ast::TableFunctionArgs;
 use datafusion::sql::sqlparser::ast::TableWithJoins;
 use datafusion::sql::sqlparser::ast::UnaryOperator;
 use datafusion::sql::sqlparser::ast::Value;
@@ -296,79 +295,6 @@ impl SqlStatementRewriteRule for ResolveUnqualifiedIdentifer {
         }
 
         statement
-    }
-}
-
-/// Cast `array_upper`/`array_lower` results to `bigint` when used as
-/// `generate_series` arguments.
-///
-/// DataFusion's `generate_series` requires Int64 bounds, but our
-/// `array_upper`/`array_lower` UDFs return Int32 (correct Postgres semantics --
-/// Postgres `array_upper` returns `int4`). Postgres implicitly coerces int4 to
-/// int8 for `generate_series`; DataFusion does not, so without this rule
-/// `generate_series(1, array_upper(current_schemas(false), 1))` fails with
-/// "Argument #2 must be an INTEGER". This rule performs the coercion the way
-/// Postgres would, removing the need to blacklist such client queries.
-#[derive(Debug)]
-pub struct CastArrayBoundsForGenerateSeries;
-
-struct CastArrayBoundsForGenerateSeriesVisitor;
-
-impl CastArrayBoundsForGenerateSeriesVisitor {
-    /// True when `expr` is a call to `array_upper`/`array_lower` (optionally
-    /// `pg_catalog.`-qualified) -- the Int32-returning UDFs that collide with
-    /// `generate_series`'s Int64 requirement.
-    fn is_array_bounds_call(expr: &Expr) -> bool {
-        if let Expr::Function(f) = expr
-            && let Some(ObjectNamePart::Identifier(ident)) = f.name.0.last()
-        {
-            let v = ident.value.to_lowercase();
-            return v == "array_upper" || v == "array_lower";
-        }
-        false
-    }
-
-    /// Wrap `expr` in `::bigint` if it's an array_bounds call.
-    fn maybe_cast(expr: &mut Expr) {
-        if Self::is_array_bounds_call(expr) {
-            let inner = std::mem::replace(expr, Expr::Value(Value::Null.with_empty_span()));
-            *expr = Expr::Cast {
-                expr: Box::new(inner),
-                kind: CastKind::DoubleColon,
-                data_type: DataType::BigInt(None),
-                array: false,
-                format: None,
-            };
-        }
-    }
-}
-
-impl VisitorMut for CastArrayBoundsForGenerateSeriesVisitor {
-    type Break = ();
-
-    fn pre_visit_table_factor(&mut self, tf: &mut TableFactor) -> ControlFlow<Self::Break> {
-        if let TableFactor::Table { name, args, .. } = tf
-            && let Some(ObjectNamePart::Identifier(ident)) = name.0.last()
-            && ident.value.to_lowercase() == "generate_series"
-            && let Some(TableFunctionArgs {
-                args: func_args, ..
-            }) = args
-        {
-            for fa in func_args {
-                if let FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) = fa {
-                    Self::maybe_cast(e);
-                }
-            }
-        }
-        ControlFlow::Continue(())
-    }
-}
-
-impl SqlStatementRewriteRule for CastArrayBoundsForGenerateSeries {
-    fn rewrite(&self, mut s: Statement) -> Statement {
-        let mut visitor = CastArrayBoundsForGenerateSeriesVisitor;
-        let _ = s.visit(&mut visitor);
-        s
     }
 }
 
@@ -1092,38 +1018,6 @@ mod tests {
             &rules,
             "SELECT i.*,i.indkey as keys,c.relname,c.relnamespace,c.relam,c.reltablespace,tc.relname as tabrelname,dsc.description FROM pg_catalog.pg_index i INNER JOIN pg_catalog.pg_class c ON c.oid=i.indexrelid INNER JOIN pg_catalog.pg_class tc ON tc.oid=i.indrelid LEFT OUTER JOIN pg_catalog.pg_description dsc ON i.indexrelid=dsc.objoid WHERE i.indrelid=1 ORDER BY tabrelname, c.relname",
             "SELECT i.*, i.indkey AS keys, c.relname, c.relnamespace, c.relam, c.reltablespace, tc.relname AS tabrelname, dsc.description FROM pg_catalog.pg_index i INNER JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid INNER JOIN pg_catalog.pg_class tc ON tc.oid = i.indrelid LEFT OUTER JOIN pg_catalog.pg_description dsc ON i.indexrelid = dsc.objoid WHERE i.indrelid = 1 ORDER BY tabrelname, c.relname"
-        );
-    }
-
-    #[test]
-    fn test_cast_array_bounds_for_generate_series() {
-        // array_upper/array_lower return Int32; generate_series wants Int64.
-        // The rule wraps those calls in ::bigint when used as generate_series args.
-        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
-            vec![Arc::new(CastArrayBoundsForGenerateSeries)];
-
-        assert_rewrite!(
-            &rules,
-            "SELECT s.r FROM generate_series(1, array_upper(current_schemas(false), 1)) as s(r)",
-            "SELECT s.r FROM generate_series(1, array_upper(current_schemas(false), 1)::BIGINT) AS s (r)"
-        );
-        assert_rewrite!(
-            &rules,
-            "SELECT s.r FROM generate_series(array_lower(x, 1), array_upper(x, 1)) as s(r)",
-            "SELECT s.r FROM generate_series(array_lower(x, 1)::BIGINT, array_upper(x, 1)::BIGINT) AS s (r)"
-        );
-
-        // Non-array-bounds args are left alone (literal ints already work).
-        assert_rewrite!(
-            &rules,
-            "SELECT s.r FROM generate_series(1, 10) as s(r)",
-            "SELECT s.r FROM generate_series(1, 10) AS s (r)"
-        );
-        // array_upper used outside generate_series is NOT touched.
-        assert_rewrite!(
-            &rules,
-            "SELECT array_upper(x, 1)",
-            "SELECT array_upper(x, 1)"
         );
     }
 
