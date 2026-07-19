@@ -36,7 +36,13 @@ fn main() {
         aggregates.len(),
         windows.len(),
         table_functions.len(),
-        scalars.iter().chain(aggregates.iter()).chain(windows.iter()).chain(table_functions.iter()).collect::<BTreeSet<_>>().len(),
+        scalars
+            .iter()
+            .chain(aggregates.iter())
+            .chain(windows.iter())
+            .chain(table_functions.iter())
+            .collect::<BTreeSet<_>>()
+            .len(),
     );
 
     println!("# scalar UDFs");
