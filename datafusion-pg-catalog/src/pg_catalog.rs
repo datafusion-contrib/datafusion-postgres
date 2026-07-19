@@ -12,12 +12,10 @@ use datafusion::arrow::ipc::reader::FileReader;
 use datafusion::catalog::streaming::StreamingTable;
 use datafusion::catalog::{MemTable, SchemaProvider, TableFunctionImpl};
 use datafusion::common::utils::SingleRowListArrayBuilder;
-use datafusion::common::{Column, ScalarValue, Spans};
-use datafusion::datasource::{TableProvider, provider_as_source};
+use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{
-    BinaryExpr, ColumnarValue, LogicalPlanBuilder, Operator, ScalarUDF, ScalarUDFImpl, Signature,
-    Subquery, TypeSignature, Volatility,
+    ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::prelude::{Expr, SessionContext, create_udf};
@@ -35,7 +33,6 @@ pub mod empty_table;
 pub mod format_type;
 pub mod generate_series_arg_coercion;
 pub mod has_privilege_udf;
-pub mod oid_coercion_rule;
 pub mod oid_field;
 pub mod oid_type_planner;
 pub mod pg_attribute;
@@ -228,73 +225,6 @@ impl<C: CatalogInfo, P: PgCatalogContextProvider> SchemaProvider for PgCatalogSc
 
     fn table_exist(&self, name: &str) -> bool {
         PG_CATALOG_TABLES.contains(&name.to_ascii_lowercase().as_str())
-    }
-}
-
-/// The `(table, name-column)` backing a name->oid lookup for each oid-alias
-/// kind, or `None` for kinds without name-resolution support (e.g. bare `oid`).
-fn oid_lookup_target(kind: &str) -> Option<(&'static str, &'static str)> {
-    match kind {
-        oid_field::kind::REGNAMESPACE => Some((PG_CATALOG_TABLE_PG_NAMESPACE, "nspname")),
-        oid_field::kind::REGCLASS => Some((PG_CATALOG_TABLE_PG_CLASS, "relname")),
-        oid_field::kind::REGTYPE => Some((PG_CATALOG_TABLE_PG_TYPE, "typname")),
-        oid_field::kind::REGPROC => Some((PG_CATALOG_TABLE_PG_PROC, "proname")),
-        _ => None,
-    }
-}
-
-/// Build a scalar subquery `(SELECT oid FROM <table> WHERE <name_col> = '<name>')`
-/// that resolves a name to its oid at execution time. Data is fetched lazily
-/// by the table's stream, so oids assigned at execution (dynamic tables like
-/// `pg_namespace`) resolve correctly.
-///
-/// Returns `None` if the kind has no backing table or the provider cannot
-/// build it, in which case the coercion rule leaves the comparison untouched.
-fn build_oid_name_subquery(
-    kind: &str,
-    name: &str,
-    build_table: impl Fn(&str) -> Result<Option<Arc<dyn TableProvider>>>,
-) -> Result<Option<Expr>> {
-    let Some((table, name_col)) = oid_lookup_target(kind) else {
-        return Ok(None);
-    };
-    let Some(provider) = build_table(table)? else {
-        return Ok(None);
-    };
-
-    let source = provider_as_source(provider);
-    let plan = LogicalPlanBuilder::scan(table.to_string(), source, None)?
-        .filter(Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(Expr::Column(Column::new_unqualified(name_col))),
-            op: Operator::Eq,
-            right: Box::new(Expr::Literal(
-                ScalarValue::Utf8(Some(name.to_string())),
-                None,
-            )),
-        }))?
-        .project(vec![Expr::Column(Column::new_unqualified("oid"))])?
-        .build()?;
-    Ok(Some(Expr::ScalarSubquery(Subquery {
-        subquery: Arc::new(plan),
-        outer_ref_columns: vec![],
-        spans: Spans::default(),
-    })))
-}
-
-/// Backs the oid-coercion analyzer rule: resolve a name string to an
-/// oid-valued expression by looking it up in the matching pg_catalog table.
-/// The lookup logic (which table backs which kind, and the subquery
-/// construction) lives here rather than in the rule, so the rule stays a pure
-/// expression-rewriter with no dependency on `TableProvider` or plan building.
-impl<C: CatalogInfo, P: PgCatalogContextProvider> oid_coercion_rule::OidLookupProvider
-    for PgCatalogSchemaProvider<C, P>
-{
-    fn resolve_name_expr(&self, kind: &str, name: &str) -> Result<Option<Expr>> {
-        build_oid_name_subquery(kind, name, |table| {
-            self.build_table_by_name(table)?
-                .map(|t| t.try_into_table_provider())
-                .transpose()
-        })
     }
 }
 
@@ -1560,18 +1490,13 @@ where
     session_context.register_udf(array_bounds_udf::create_array_upper_udf());
     session_context.register_udf(array_bounds_udf::create_array_lower_udf());
 
-    // Make oid / oid-alias columns (relnamespace, atttypid, ...) compare
-    // against string literals the way Postgres does. Requires the schema
-    // provider handle (kept above) to resolve names -> oids at plan time.
-    session_context.add_analyzer_rule(Arc::new(oid_coercion_rule::OidStringCoercion::new(
-        pg_catalog.clone() as Arc<dyn oid_coercion_rule::OidLookupProvider>,
-    )));
-
     // Teach the SQL planner to accept Postgres oid-alias type names
     // (`regclass`, `regproc`, ...) -- DataFusion rejects them as unsupported
-    // otherwise. Each maps to int4 carrying `pg.oid_alias` metadata, which the
-    // analyzer rule above then reads to resolve name strings -> oids. This
-    // replaces the former SQL-layer cast-stripping / cast-rewriting rules.
+    // otherwise. Each maps to int4 so reverse-direction / column-operand casts
+    // like `prorettype::regtype::text` (oid -> name for display) still parse.
+    // Forward name->oid casts (`'x'::regclass`) are resolved earlier, at the
+    // SQL-rewrite layer, by RewriteRegCastToSubquery; the TypePlanner only
+    // needs to make the residual cast types parse.
     {
         use datafusion::execution::session_state::SessionStateBuilder;
         let state = session_context.state_ref();
@@ -1596,30 +1521,6 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-
-    #[test]
-    fn oid_lookup_target_maps_kinds_to_backing_tables() {
-        // Each name-resolvable oid-alias kind maps to the pg_catalog table
-        // (and name column) that backs its name->oid lookup.
-        assert_eq!(
-            oid_lookup_target(oid_field::kind::REGNAMESPACE),
-            Some((PG_CATALOG_TABLE_PG_NAMESPACE, "nspname"))
-        );
-        assert_eq!(
-            oid_lookup_target(oid_field::kind::REGCLASS),
-            Some((PG_CATALOG_TABLE_PG_CLASS, "relname"))
-        );
-        assert_eq!(
-            oid_lookup_target(oid_field::kind::REGTYPE),
-            Some((PG_CATALOG_TABLE_PG_TYPE, "typname"))
-        );
-        assert_eq!(
-            oid_lookup_target(oid_field::kind::REGPROC),
-            Some((PG_CATALOG_TABLE_PG_PROC, "proname"))
-        );
-        // bare `oid` has no backing table -> name resolution unsupported.
-        assert_eq!(oid_lookup_target(oid_field::kind::OID), None);
-    }
 
     #[tokio::test]
     async fn current_database_returns_the_configured_catalog_name() {

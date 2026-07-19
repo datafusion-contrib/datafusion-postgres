@@ -17,6 +17,7 @@ use super::rules::RemoveSubqueryFromProjection;
 use super::rules::ResolveUnqualifiedIdentifier;
 use super::rules::RewriteArrayAnyAllOperation;
 use super::rules::RewritePgCatalogOperator;
+use super::rules::RewriteRegCastToSubquery;
 use super::rules::SqlStatementRewriteRule;
 use super::rules::StripCallableQualifier;
 use super::rules::StripCollate;
@@ -227,6 +228,23 @@ const BLACKLIST_SQL_MAPPING: &[(&str, &str)] = &[
  WHERE false"
     ),
 
+    // dbeaver -- relation size lookup. NOTE: re-blacklisted because resolving
+    // the implicit `c.relnamespace = 'public'` comparison (bare string vs an
+    // oid column) requires schema awareness, which the SQL-rewrite layer does
+    // not have. The explicit `'...'::regclass` casts elsewhere are handled by
+    // RewriteRegCastToSubquery; only this implicit form needs the stub. The rest
+    // of the query (pg_total_relation_size / pg_relation_size) works.
+    //
+    // Blocked by: implicit `<oid-col> = '<name>'` needs the column's oid-alias
+    //   metadata, only available at the analyzer layer.
+    // Remove when: an analyzer rule resolves implicit string-vs-oid-column
+    //   comparisons (the former OidStringCoercion rule did this), or the client
+    //   switches to the explicit `'...'::regnamespace` cast form.
+    (
+"select c.oid,pg_catalog.pg_total_relation_size(c.oid) as total_rel_size,pg_catalog.pg_relation_size(c.oid) as rel_size\n     FROM pg_class c\n     WHERE c.relnamespace='public'",
+"SELECT\n   NULL::INT AS oid,\n   NULL::INT AS total_rel_size,\n   NULL::INT AS rel_size\n WHERE false"
+    ),
+
     // grafana -- search_path membership lookup. NOTE: this is the only entry
     // that is a *partial* replacement -- it matches just the inner subquery and
     // substitutes the empty string `''`, so the surrounding `IN (...)` simply
@@ -306,6 +324,10 @@ impl PostgresCompatibilityParser {
                 Arc::new(CurrentUserVariableToSessionUserFunctionCall),
                 Arc::new(StripCollate),
                 Arc::new(RewritePgCatalogOperator),
+                // Resolve forward oid-alias casts (`'x'::regclass`, ...) to oid
+                // values BEFORE RemoveSubqueryFromProjection runs, so the
+                // emitted scalar subqueries it produces get its LIMIT 1 stamp.
+                Arc::new(RewriteRegCastToSubquery::new()),
                 Arc::new(RemoveSubqueryFromProjection),
                 Arc::new(FixVersionColumnName),
             ],
