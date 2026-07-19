@@ -150,9 +150,9 @@ impl SqlStatementRewriteRule for AliasDuplicatedProjectionRewrite {
 /// Postgres allows unqualified identifier in ORDER BY and FILTER but it's not
 /// accepted by datafusion.
 #[derive(Debug)]
-pub struct ResolveUnqualifiedIdentifer;
+pub struct ResolveUnqualifiedIdentifier;
 
-impl ResolveUnqualifiedIdentifer {
+impl ResolveUnqualifiedIdentifier {
     fn rewrite_unqualified_identifiers(query: &mut Box<Query>) {
         if let SetExpr::Select(select) = query.body.as_mut() {
             // Step 1: Find all table aliases from FROM and JOIN clauses.
@@ -288,7 +288,7 @@ impl ResolveUnqualifiedIdentifer {
     }
 }
 
-impl SqlStatementRewriteRule for ResolveUnqualifiedIdentifer {
+impl SqlStatementRewriteRule for ResolveUnqualifiedIdentifier {
     fn rewrite(&self, mut statement: Statement) -> Statement {
         if let Statement::Query(query) = &mut statement {
             Self::rewrite_unqualified_identifiers(query);
@@ -298,14 +298,46 @@ impl SqlStatementRewriteRule for ResolveUnqualifiedIdentifer {
     }
 }
 
-/// Rewrite Postgres's ANY operator to array_contains
+/// Rewrite the Postgres `ANY`/`ALL` quantified comparison operators over
+/// arrays into DataFusion's `array_contains` function.
+///
+/// Postgres `x <op> ANY (arr)` / `x <op> ALL (arr)` have no direct DataFusion
+/// equivalent, so this rule lowers the two cases that map cleanly onto
+/// membership:
+///
+/// * `x =  ANY(arr)`  -> `array_contains(arr, x)`  (x equals some element)
+/// * `x <> ALL(arr)`  -> `NOT array_contains(arr, x)` (x differs from every
+///   element, i.e. is not a member)
+///
+/// The other two combinations are **not** handled, because `array_contains`
+/// only expresses membership, not universal quantification:
+///
+/// * `x <> ANY(arr)` (x differs from *some* element) is true for essentially
+///   every non-empty array and has no faithful lowering to membership.
+/// * `x =  ALL(arr)` (x equals *every* element) needs "all elements are x",
+///   which membership cannot express without an additional length/count check.
+///
+/// These are left untouched; if a client query uses them, DataFusion reports
+/// the unsupported operator rather than silently producing wrong results.
+///
+/// # String-literal array form
+///
+/// Postgres allows an array as a single-quoted string literal, e.g.
+/// `x = ANY('{r, l, e}')`. When the right operand is such a literal this rule
+/// parses it into an `ARRAY[...]` expression first. The parsing is **naive**:
+/// it splits on commas and treats every element as a string. That is correct
+/// for the string-array case clients actually send (privilege/role char arrays,
+/// `contyp`/`stxkind` style columns), but it does not handle quoted elements
+/// containing commas, and it assumes string element types for non-string array
+/// literals. A non-string-literal right operand (a column, `ARRAY[...]`, or a
+/// function call) is passed through unchanged.
 #[derive(Debug)]
 pub struct RewriteArrayAnyAllOperation;
 
 struct RewriteArrayAnyAllOperationVisitor;
 
 impl RewriteArrayAnyAllOperationVisitor {
-    fn any_to_array_cofntains(&self, left: &Expr, right: &Expr) -> Expr {
+    fn any_to_array_contains(&self, left: &Expr, right: &Expr) -> Expr {
         let array = if let Expr::Value(ValueWithSpan {
             value: Value::SingleQuotedString(array_literal),
             ..
@@ -316,7 +348,10 @@ impl RewriteArrayAnyAllOperationVisitor {
                 let items = array_literal.trim_matches(|c| c == '{' || c == '}' || c == ' ');
                 let items = items.split(',').map(|s| s.trim()).filter(|s| !s.is_empty());
 
-                // For now, we assume the data type is string
+                // Elements are treated as strings -- see the rule-level doc
+                // comment for why this naive split is sufficient for the array
+                // literals clients actually send (string-typed arrays) but does
+                // not handle quoted elements containing commas.
                 let elems = items
                     .map(|s| {
                         Expr::Value(Value::SingleQuotedString(s.to_string()).with_empty_span())
@@ -365,10 +400,13 @@ impl VisitorMut for RewriteArrayAnyAllOperationVisitor {
                 ..
             } => match compare_op {
                 BinaryOperator::Eq => {
-                    *expr = self.any_to_array_cofntains(left.as_ref(), right.as_ref());
+                    *expr = self.any_to_array_contains(left.as_ref(), right.as_ref());
                 }
                 BinaryOperator::NotEq => {
-                    // TODO:left not equals to any element in array
+                    // x <> ANY(arr): true if x differs from SOME element. That
+                    // is true for almost every non-empty array and cannot be
+                    // lowered to `array_contains`; leave it for DataFusion to
+                    // report as unsupported.
                 }
                 _ => {}
             },
@@ -378,12 +416,14 @@ impl VisitorMut for RewriteArrayAnyAllOperationVisitor {
                 right,
             } => match compare_op {
                 BinaryOperator::Eq => {
-                    // TODO: left equals to every element in array
+                    // x = ALL(arr): true if EVERY element equals x. Membership
+                    // alone cannot express this; leave it for DataFusion to
+                    // report as unsupported.
                 }
                 BinaryOperator::NotEq => {
                     *expr = Expr::UnaryOp {
                         op: UnaryOperator::Not,
-                        expr: Box::new(self.any_to_array_cofntains(left.as_ref(), right.as_ref())),
+                        expr: Box::new(self.any_to_array_contains(left.as_ref(), right.as_ref())),
                     }
                 }
                 _ => {}
@@ -529,11 +569,15 @@ impl SqlStatementRewriteRule for FixArrayLiteral {
     }
 }
 
-/// Remove qualifier from unsupported items
+/// Strip the schema qualifier from callable names.
 ///
-/// This rewriter removes the `pg_catalog.` qualifier from:
-/// 1. function names, for example `pg_catalog.array_to_string`
-/// 2. table function names
+/// DataFusion resolves functions (including table functions) by bare name in
+/// a flat namespace -- it has no notion of a schema-qualified function path.
+/// Postgres clients routinely write the qualifier explicitly, most often
+/// `pg_catalog.` (e.g. `pg_catalog.array_to_string(...)`,
+/// `pg_catalog.pg_get_keywords()`), so this rule drops the leading
+/// identifier(s) from any multi-part function or table-function name and
+/// keeps only the last segment.
 ///
 /// Type-cast qualifiers such as `pg_catalog.text` / `pg_catalog.int2[]` used
 /// to be handled here too, but are now resolved by the [`PgOidTypePlanner`]
@@ -542,22 +586,23 @@ impl SqlStatementRewriteRule for FixArrayLiteral {
 ///
 /// [`PgOidTypePlanner`]: crate::pg_catalog::oid_type_planner::PgOidTypePlanner
 #[derive(Debug)]
-pub struct RemoveQualifier;
+pub struct StripCallableQualifier;
 
-struct RemoveQualifierVisitor;
+struct StripCallableQualifierVisitor;
 
-impl VisitorMut for RemoveQualifierVisitor {
+impl VisitorMut for StripCallableQualifierVisitor {
     type Break = ();
 
     fn pre_visit_table_factor(
         &mut self,
         table_factor: &mut TableFactor,
     ) -> ControlFlow<Self::Break> {
-        // remove table function qualifier
+        // Strip qualifier from table function names (any schema, not just
+        // pg_catalog): DF resolves table functions by bare name.
         if let TableFactor::Table { name, args, .. } = table_factor
             && args.is_some()
         {
-            //  multiple idents in name, which means it's a qualified table name
+            // multiple idents in name means it's a qualified table name
             if name.0.len() > 1
                 && let Some(last_ident) = name.0.pop()
             {
@@ -568,7 +613,8 @@ impl VisitorMut for RemoveQualifierVisitor {
     }
 
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-        // remove qualifier from pg_catalog.function
+        // Strip qualifier from function names (any schema, not just
+        // pg_catalog): DF resolves functions by bare name.
         if let Expr::Function(function) = expr {
             let name = &mut function.name;
             if name.0.len() > 1
@@ -581,9 +627,9 @@ impl VisitorMut for RemoveQualifierVisitor {
     }
 }
 
-impl SqlStatementRewriteRule for RemoveQualifier {
+impl SqlStatementRewriteRule for StripCallableQualifier {
     fn rewrite(&self, mut s: Statement) -> Statement {
-        let mut visitor = RemoveQualifierVisitor;
+        let mut visitor = StripCallableQualifierVisitor;
 
         let _ = s.visit(&mut visitor);
         s
@@ -719,38 +765,89 @@ impl SqlStatementRewriteRule for CurrentUserVariableToSessionUserFunctionCall {
     }
 }
 
-/// Fix collate and regex calls
+/// Strip Postgres `COLLATE` clauses.
+///
+/// Postgres allows trailing `COLLATE <schema>.<collation>` on expressions
+/// (e.g. `c.relname COLLATE pg_catalog.default`). DataFusion has no notion of
+/// collation and rejects this syntax at parse time, so strip the clause and
+/// keep the inner expression. The collation is irrelevant to DataFusion's
+/// byte-wise string comparison anyway.
 #[derive(Debug)]
-pub struct FixCollate;
+pub struct StripCollate;
 
-struct FixCollateVisitor;
+struct StripCollateVisitor;
 
-impl VisitorMut for FixCollateVisitor {
+impl VisitorMut for StripCollateVisitor {
     type Break = ();
 
     fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
-        match expr {
-            Expr::Collate { expr: inner, .. } => {
-                *expr = inner.as_ref().clone();
-            }
-            Expr::BinaryOp { op, .. } => {
-                if let BinaryOperator::PGCustomBinaryOperator(ops) = op
-                    && *ops == ["pg_catalog", "~"]
-                {
-                    *op = BinaryOperator::PGRegexMatch;
-                }
-            }
-            _ => {}
+        if let Expr::Collate { expr: inner, .. } = expr {
+            *expr = inner.as_ref().clone();
         }
-
         ControlFlow::Continue(())
     }
 }
 
-impl SqlStatementRewriteRule for FixCollate {
+impl SqlStatementRewriteRule for StripCollate {
     fn rewrite(&self, mut s: Statement) -> Statement {
-        let mut visitor = FixCollateVisitor;
+        let mut visitor = StripCollateVisitor;
+        let _ = s.visit(&mut visitor);
+        s
+    }
+}
 
+/// Rewrite Postgres `OPERATOR(schema.name)` call syntax to the bare operator.
+///
+/// Postgres lets clients force an operator's schema with
+/// `lhs OPERATOR(pg_catalog.~) rhs`. sqlparser represents this as a
+/// [`BinaryOperator::PGCustomBinaryOperator`]; DataFusion only understands the
+/// built-in operator variants, so map every `pg_catalog.<regex-op>` we see
+/// back to its builtin form:
+///
+/// | pg_catalog name | builtin operator            |
+/// | --------------- | --------------------------- |
+/// | `~`             | `PGRegexMatch`    (`~`)     |
+/// | `~*`            | `PGRegexIMatch`   (`~*`)    |
+/// | `!~`            | `PGRegexNotMatch` (`!~`)    |
+/// | `!~*`           | `PGRegexNotIMatch`(`!~*`)   |
+///
+/// Only the four regex operators are mapped, because those are the ones
+/// clients emit via `OPERATOR(...)` in practice (psql's `\d` queries use
+/// `OPERATOR(pg_catalog.~)`). Any other operator name is left untouched for
+/// DataFusion to report.
+#[derive(Debug)]
+pub struct RewritePgCatalogOperator;
+
+struct RewritePgCatalogOperatorVisitor;
+
+impl VisitorMut for RewritePgCatalogOperatorVisitor {
+    type Break = ();
+
+    fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
+        if let Expr::BinaryOp { op, .. } = expr
+            && let BinaryOperator::PGCustomBinaryOperator(ops) = op
+            && ops.first().is_some_and(|s| s == "pg_catalog")
+            && let Some(name) = ops.last().map(String::as_str)
+        {
+            // Map every `OPERATOR(pg_catalog.<regex-op>)` to its builtin form.
+            // Match on the operator name (last segment); the schema is checked
+            // above. Only the four regex ops have a builtin equivalent
+            // DataFusion understands, so any other name is left untouched.
+            *op = match name {
+                "~" => BinaryOperator::PGRegexMatch,
+                "~*" => BinaryOperator::PGRegexIMatch,
+                "!~" => BinaryOperator::PGRegexNotMatch,
+                "!~*" => BinaryOperator::PGRegexNotIMatch,
+                _ => return ControlFlow::Continue(()),
+            };
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+impl SqlStatementRewriteRule for RewritePgCatalogOperator {
+    fn rewrite(&self, mut s: Statement) -> Statement {
+        let mut visitor = RewritePgCatalogOperatorVisitor;
         let _ = s.visit(&mut visitor);
         s
     }
@@ -994,7 +1091,7 @@ mod tests {
     #[test]
     fn test_qualifier_prepend() {
         let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
-            vec![Arc::new(ResolveUnqualifiedIdentifer)];
+            vec![Arc::new(ResolveUnqualifiedIdentifier)];
 
         assert_rewrite!(
             &rules,
@@ -1117,8 +1214,8 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_qualifier_from_table_function() {
-        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![Arc::new(RemoveQualifier)];
+    fn test_strip_callable_qualifier_from_table_function() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![Arc::new(StripCallableQualifier)];
 
         assert_rewrite!(
             &rules,
@@ -1162,13 +1259,56 @@ mod tests {
     }
 
     #[test]
-    fn test_collate_fix() {
-        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![Arc::new(FixCollate)];
+    fn test_strip_collate() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![Arc::new(StripCollate)];
 
         assert_rewrite!(
             &rules,
-            "SELECT c.oid, c.relname FROM pg_catalog.pg_class c WHERE c.relname OPERATOR(pg_catalog.~) '^(tablename)$' COLLATE pg_catalog.default AND pg_catalog.pg_table_is_visible(c.oid) ORDER BY 2, 3;",
-            "SELECT c.oid, c.relname FROM pg_catalog.pg_class c WHERE c.relname ~ '^(tablename)$' AND pg_catalog.pg_table_is_visible(c.oid) ORDER BY 2, 3"
+            "SELECT c.oid, c.relname FROM pg_catalog.pg_class c WHERE c.relname COLLATE pg_catalog.default = 'foo'",
+            "SELECT c.oid, c.relname FROM pg_catalog.pg_class c WHERE c.relname = 'foo'"
+        );
+
+        // Combined with OPERATOR(...) syntax: only COLLATE is stripped here;
+        // the operator is left for RewritePgCatalogOperator (next test).
+        assert_rewrite!(
+            &rules,
+            "SELECT c.oid, c.relname FROM pg_catalog.pg_class c WHERE c.relname OPERATOR(pg_catalog.~) '^(tablename)$' COLLATE pg_catalog.default ORDER BY 2, 3;",
+            "SELECT c.oid, c.relname FROM pg_catalog.pg_class c WHERE c.relname OPERATOR(pg_catalog.~) '^(tablename)$' ORDER BY 2, 3"
+        );
+    }
+
+    #[test]
+    fn test_rewrite_pg_catalog_operator() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![Arc::new(RewritePgCatalogOperator)];
+
+        // All four pg_catalog regex operators map to their builtin forms.
+        assert_rewrite!(
+            &rules,
+            "SELECT 'a' OPERATOR(pg_catalog.~) 'b'",
+            "SELECT 'a' ~ 'b'"
+        );
+        assert_rewrite!(
+            &rules,
+            "SELECT 'a' OPERATOR(pg_catalog.~*) 'b'",
+            "SELECT 'a' ~* 'b'"
+        );
+        assert_rewrite!(
+            &rules,
+            "SELECT 'a' OPERATOR(pg_catalog.!~) 'b'",
+            "SELECT 'a' !~ 'b'"
+        );
+        assert_rewrite!(
+            &rules,
+            "SELECT 'a' OPERATOR(pg_catalog.!~*) 'b'",
+            "SELECT 'a' !~* 'b'"
+        );
+
+        // The original psql \d shape: OPERATOR + COLLATE together. The operator
+        // arm fires; COLLATE is left for StripCollate.
+        assert_rewrite!(
+            &rules,
+            "SELECT c.oid, c.relname FROM pg_catalog.pg_class c WHERE c.relname OPERATOR(pg_catalog.~) '^(tablename)$' COLLATE pg_catalog.default ORDER BY 2, 3;",
+            "SELECT c.oid, c.relname FROM pg_catalog.pg_class c WHERE c.relname ~ '^(tablename)$' COLLATE pg_catalog.default ORDER BY 2, 3"
         );
     }
 

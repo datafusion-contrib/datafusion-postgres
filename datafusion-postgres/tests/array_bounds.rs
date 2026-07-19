@@ -12,7 +12,7 @@ use datafusion_postgres::testing::*;
 const QUERIES: &[&str] = &[
     // Bare UDFs over an array literal.
     "SELECT array_upper(ARRAY[1, 2, 3], 1), array_lower(ARRAY[1, 2, 3], 1)",
-    // pg_catalog-qualified form (qualifier stripped by RemoveQualifier rule).
+    // pg_catalog-qualified form (qualifier stripped by StripCallableQualifier rule).
     "SELECT pg_catalog.array_upper(ARRAY['a', 'b'], 1)",
     "SELECT pg_catalog.array_lower(ARRAY['a', 'b'], 1)",
     // Typical usage pattern: generate_series over array bounds, mirroring the
