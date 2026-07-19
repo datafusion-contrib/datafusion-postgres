@@ -19,10 +19,11 @@
 //! against a string literal, the string is resolved to an oid using Postgres
 //! semantics:
 //!
-//! * a **numeric** string (`'16417'`) becomes a literal `Int32` oid;
-//! * a **name** string (`'public'`) becomes a scalar subquery that looks the
-//!   name up in the backing catalog table (`pg_namespace`, `pg_class`,
-//!   `pg_proc`).
+//! * a **numeric** string (`'16417'`) becomes a literal `Int32` oid (handled
+//!   inline -- no catalog access needed);
+//! * a **name** string (`'public'`) is resolved by the [`OidLookupProvider`]
+//!   (e.g. into a scalar subquery against the backing catalog table). The rule
+//!   itself stays free of any data-access concerns.
 //!
 //! The rule is order-independent: it handles both the pre-coercion form
 //! `col = 'x'` and the post-coercion form `CAST(col AS Utf8) = 'x'`.
@@ -33,25 +34,26 @@ use std::sync::Arc;
 use datafusion::common::Column;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
-use datafusion::common::{DFSchemaRef, ExprSchema, Result, ScalarValue, Spans};
-use datafusion::datasource::{TableProvider, provider_as_source};
+use datafusion::common::{DFSchemaRef, ExprSchema, Result, ScalarValue};
 use datafusion::logical_expr::expr::InList;
-use datafusion::logical_expr::{
-    BinaryExpr, Cast, Expr, LogicalPlan, LogicalPlanBuilder, Operator, Subquery, TryCast,
-};
+use datafusion::logical_expr::{BinaryExpr, Cast, Expr, LogicalPlan, Operator, TryCast};
 use datafusion::optimizer::analyzer::AnalyzerRule;
 
-use crate::pg_catalog::oid_field::{self, OID_ALIAS_KEY};
+use crate::pg_catalog::oid_field::OID_ALIAS_KEY;
 
-/// Synchronous accessor for the pg_catalog tables backing name->oid lookups.
+/// Resolves name strings to oids for the [`OidStringCoercion`] analyzer rule.
 ///
-/// Implemented by `PgCatalogSchemaProvider`, which can build a table provider
-/// without async I/O (dynamic tables defer data fetch to execution time via a
-/// streaming source).
+/// Implemented by the pg_catalog provider, which owns the catalog tables
+/// backing each name->oid lookup. Encapsulating the lookup behind this trait
+/// keeps the rule a pure expression-rewriter -- it has no direct dependency on
+/// `TableProvider` or logical-plan construction, and the rule does not need to
+/// know which pg_catalog table backs a given oid-alias kind.
 pub trait OidLookupProvider: Send + Sync + Debug {
-    /// Build the named pg_catalog table as a [`TableProvider`], or `None` if it
-    /// does not exist.
-    fn build_table_provider(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>>;
+    /// Resolve `name` to an oid-valued [`Expr`] for the given oid-alias
+    /// `kind` (`regnamespace`, `regclass`, `regtype`, `regproc`). Returns
+    /// `None` when the kind has no backing catalog table or the table is not
+    /// available, so the rule leaves the comparison untouched.
+    fn resolve_name_expr(&self, kind: &str, name: &str) -> Result<Option<Expr>>;
 }
 
 /// Rewrite oid / oid-alias column comparisons against string literals to use
@@ -294,26 +296,12 @@ fn as_str_literal(e: &Expr) -> Option<&str> {
     }
 }
 
-/// The `(table, name_column)` used to resolve a name to an oid for a given
-/// oid-alias kind. Returns `None` for kinds without a backing catalog table
-/// (e.g. bare `oid`, or `regtype` where `pg_type` is unavailable) -- those only
-/// support numeric resolution.
-fn lookup_target(kind: &str) -> Option<(&'static str, &'static str)> {
-    match kind {
-        oid_field::kind::REGNAMESPACE => Some(("pg_namespace", "nspname")),
-        oid_field::kind::REGCLASS => Some(("pg_class", "relname")),
-        oid_field::kind::REGTYPE => Some(("pg_type", "typname")),
-        oid_field::kind::REGPROC => Some(("pg_proc", "proname")),
-        _ => None,
-    }
-}
-
 /// Resolve a string operand to an oid-valued expression.
 ///
-/// * numeric strings -> literal `Int32` (Postgres behavior for every
-///   oid-alias type);
-/// * names -> a scalar subquery `SELECT oid FROM <table> WHERE <namecol> = $s`
-///   for kinds that have a backing table.
+/// * numeric strings -> a literal `Int32` oid (valid for every oid-alias
+///   kind, and the only form of "coercion" that needs no catalog access);
+/// * name strings -> delegated to the [`OidLookupProvider`], which owns the
+///   name->oid lookup and may return a subquery / literal / etc.
 fn resolve_operand(
     kind: &str,
     s: &str,
@@ -327,57 +315,15 @@ fn resolve_operand(
             .map(|n| Expr::Literal(ScalarValue::Int32(Some(n)), None)));
     }
 
-    // Name -> oid lookup subquery (only for kinds with a backing table).
-    let Some((table, name_col)) = lookup_target(kind) else {
-        return Ok(None);
-    };
-    let Some(provider) = provider.build_table_provider(table)? else {
-        return Ok(None);
-    };
-
-    let source = provider_as_source(provider);
-    let plan = LogicalPlanBuilder::scan(table.to_string(), source, None)?
-        .filter(eq_str(name_col, s))?
-        .project(vec![Expr::Column(Column::new_unqualified("oid"))])?
-        .build()?;
-    Ok(Some(Expr::ScalarSubquery(Subquery {
-        subquery: Arc::new(plan),
-        outer_ref_columns: vec![],
-        spans: Spans::default(),
-    })))
-}
-
-/// Build `<name_col> = '<s>'` against a freshly-scanned table.
-fn eq_str(name_col: &str, s: &str) -> Expr {
-    Expr::BinaryExpr(BinaryExpr {
-        left: Box::new(Expr::Column(Column::new_unqualified(name_col))),
-        op: Operator::Eq,
-        right: Box::new(Expr::Literal(ScalarValue::Utf8(Some(s.to_string())), None)),
-    })
+    // Name string -> the provider resolves it. The rule deliberately does not
+    // know which catalog table backs each kind.
+    provider.resolve_name_expr(kind, s)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use datafusion::arrow::datatypes::DataType;
-
-    #[test]
-    fn lookup_target_only_for_backed_kinds() {
-        assert_eq!(
-            lookup_target(oid_field::kind::REGNAMESPACE),
-            Some(("pg_namespace", "nspname"))
-        );
-        assert_eq!(
-            lookup_target(oid_field::kind::REGCLASS),
-            Some(("pg_class", "relname"))
-        );
-        assert_eq!(
-            lookup_target(oid_field::kind::REGPROC),
-            Some(("pg_proc", "proname"))
-        );
-        // bare oid has no backing table -> name resolution unsupported
-        assert_eq!(lookup_target(oid_field::kind::OID), None);
-    }
 
     #[test]
     fn unwrap_column_handles_bare_and_cast_forms() {
