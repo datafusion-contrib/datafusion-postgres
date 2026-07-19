@@ -1594,6 +1594,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-pg-functions"
+version = "0.1.0"
+dependencies = [
+ "datafusion",
+ "tokio",
+]
+
+[[package]]
 name = "datafusion-physical-expr"
 version = "54.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
