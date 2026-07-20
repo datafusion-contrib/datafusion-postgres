@@ -1,0 +1,19 @@
+[package]
+name = "datafusion-pg-functions"
+description = "PostgreSQL built-in functions implemented as DataFusion UDFs"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+keywords.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+datafusion = { workspace = true, features = ["nested_expressions"] }
+
+[dev-dependencies]
+datafusion = { workspace = true, features = ["nested_expressions"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
