@@ -1564,8 +1564,7 @@ mod test {
         use crate::pg_catalog::context::EmptyContextProvider;
         use datafusion::prelude::{SessionConfig, SessionContext};
 
-        let config =
-            SessionConfig::new().with_default_catalog_and_schema("my_database", "public");
+        let config = SessionConfig::new().with_default_catalog_and_schema("my_database", "public");
         let ctx = SessionContext::new_with_config(config);
         setup_pg_catalog(&ctx, "my_database", EmptyContextProvider).unwrap();
 
