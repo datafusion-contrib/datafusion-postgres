@@ -1552,6 +1552,50 @@ mod test {
         assert_eq!(value, "my_database");
     }
 
+    #[tokio::test]
+    async fn pg_type_regproc_columns_display_as_names() {
+        // Regression for issue #384: `pg_type.typinput`/`typoutput` are
+        // `regproc` columns. Postgres displays a regproc value as the function
+        // NAME (`textin`/`textout`), not the raw oid integer. Commit 0300310
+        // had stored the integer via a `::oid` export cast, so a plain
+        // `SELECT typinput` returned a number. The feather export now stores
+        // the display name (string) instead, so the bare select returns the
+        // name again.
+        use crate::pg_catalog::context::EmptyContextProvider;
+        use datafusion::prelude::{SessionConfig, SessionContext};
+
+        let config =
+            SessionConfig::new().with_default_catalog_and_schema("my_database", "public");
+        let ctx = SessionContext::new_with_config(config);
+        setup_pg_catalog(&ctx, "my_database", EmptyContextProvider).unwrap();
+
+        // oid 25 == the `text` type, whose input/output procs are textin/textout.
+        let batches = ctx
+            .sql("SELECT typinput, typoutput FROM pg_catalog.pg_type WHERE oid = 25")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 1);
+        let typinput = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("typinput is a Utf8 column holding the regproc display name")
+            .value(0);
+        let typoutput = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("typoutput is a Utf8 column holding the regproc display name")
+            .value(0);
+        assert_eq!(typinput, "textin");
+        assert_eq!(typoutput, "textout");
+    }
+
     #[test]
     fn test_load_arrow_data() {
         let table = ArrowTable::from_ipc_data(

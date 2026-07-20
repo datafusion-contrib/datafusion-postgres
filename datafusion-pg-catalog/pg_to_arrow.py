@@ -15,10 +15,18 @@ import sys
 def map_postgresql_to_arrow_type(type_oid: int) -> pa.DataType:
     """Map PostgreSQL data types to Arrow data types.
 
-    Every oid-alias type (oid, regproc, regtype, regclass, regnamespace, ...)
-    is stored as int32 (the raw object identifier) so the
-    `datafusion-pg-catalog` oid-coercion analyzer rule can resolve name/numeric
-    string comparisons uniformly.
+    oid-alias type storage:
+
+    * `oid` (OID 26) is stored as int32 -- the raw object identifier, which
+      Postgres displays as the integer.
+    * the `reg*` aliases (regproc=24, regtype=2206, ...) are intentionally NOT
+      listed here, so they fall through to the `pa.string()` default: they are
+      stored as their **name (display) string**, the form Postgres returns on a
+      plain SELECT. This exporter fetches without a `::oid` cast, so a regproc
+      column e.g. holds "textin", not its oid.
+
+    `pg.oid_alias=<kind>` field metadata is attached separately (see
+    is_oid_alias) so the wire layer reports the right Postgres alias type.
     """
     # Map OIDs to Arrow types
     type_mapping = {
@@ -67,9 +75,10 @@ def map_postgresql_to_arrow_type(type_oid: int) -> pa.DataType:
 
     return type_mapping.get(type_oid, pa.string())  # Fallback to string
 
-# PostgreSQL `reg*` type names (and `oid`). Their OIDs are version-stable but
-# kept here as (oid, name) pairs so we can both map them to int32 and stamp
-# `pg.oid_alias=<name>` field metadata for the catalog analyzer rule.
+# PostgreSQL `reg*` type names (and `oid`). Used to stamp
+# `pg.oid_alias=<name>` field metadata on those columns so the wire layer
+# (`arrow-pg`) reports the correct Postgres alias type. Storage itself is
+# decided by map_postgresql_to_arrow_type: `oid` -> int32, `reg*` -> string.
 OID_ALIAS_TYPES_BY_NAME = {
     'oid',
     'regproc', 'regprocedure',

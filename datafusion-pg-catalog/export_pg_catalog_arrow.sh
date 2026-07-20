@@ -9,7 +9,11 @@ DB_NAME="postgres"
 DB_USER="postgres"
 DB_PASSWORD="postgres"
 EXPORT_DIR="./pg_catalog_arrow_exports"
-POSTGRES_PORT="5432"
+# Host port to publish. The export Python runs *inside* the container and
+# connects to the container's own postgres over `localhost`, so this host-side
+# mapping is only needed for ad-hoc inspection. Override via env if 5432 is in
+# use on the host (e.g. rootless docker's `passt` proxy).
+POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 
 # Export mode: "static" or "all"
 EXPORT_MODE="${1:-static}"
@@ -160,12 +164,22 @@ import json
 import numpy as np
 
 def pg_type_to_arrow_type(pg_type, is_nullable=True):
-    """Map PostgreSQL types to Arrow types
+    """Map PostgreSQL types to Arrow types.
 
-    Every oid-alias type (oid, regproc, regtype, regclass, regnamespace, ...)
-    is stored as int32: the underlying object identifier. This lets the
-    `datafusion-pg-catalog` oid-coercion analyzer rule resolve name/numeric
-    string comparisons uniformly across all such columns.
+    oid-alias type storage (see OID_ALIAS_TYPES below):
+
+    * `oid` columns are stored as int32 -- the raw object identifier. Postgres
+      displays `oid` as the integer, so the value round-trips faithfully.
+    * the `reg*` aliases (regproc, regtype, regclass, ...) are stored as their
+      **name (display) string** -- the form Postgres returns on a plain
+      `SELECT` (e.g. `pg_type.typinput` holds `textin`, not its oid). This
+      preserves the catalog's display semantics, which commit 0300310 had
+      inadvertently broken by casting `reg*` to `::oid`.
+
+    Both families still carry `pg.oid_alias=<pg_type>` field metadata so the
+    wire layer (`arrow-pg`) reports the correct Postgres alias type in
+    RowDescription (e.g. REGPROC, OID 24); for `reg*` the text-protocol value
+    is then the name, matching real Postgres.
     """
     type_mapping = {
         'bigint': pa.int64(),
@@ -179,19 +193,23 @@ def pg_type_to_arrow_type(pg_type, is_nullable=True):
         'character varying': pa.string(),
         'character': pa.string(),
         'name': pa.string(),
-        # --- oid-alias family: all stored as int32 (the raw oid) ---
+        # --- oid-alias family ---
+        # `oid` is the raw integer identifier (Postgres displays it as int).
         'oid': pa.int32(),
-        'regproc': pa.int32(),
-        'regprocedure': pa.int32(),
-        'regoper': pa.int32(),
-        'regoperator': pa.int32(),
-        'regclass': pa.int32(),
-        'regtype': pa.int32(),
-        'regnamespace': pa.int32(),
-        'regrole': pa.int32(),
-        'regconfig': pa.int32(),
-        'regdictionary': pa.int32(),
-        'regcollation': pa.int32(),
+        # `reg*` aliases are stored as their NAME (display) string -- the form
+        # Postgres returns on a plain SELECT. We do NOT cast `::oid` (see
+        # select_expr), so e.g. pg_type.typinput holds "textin", not its oid.
+        'regproc': pa.string(),
+        'regprocedure': pa.string(),
+        'regoper': pa.string(),
+        'regoperator': pa.string(),
+        'regclass': pa.string(),
+        'regtype': pa.string(),
+        'regnamespace': pa.string(),
+        'regrole': pa.string(),
+        'regconfig': pa.string(),
+        'regdictionary': pa.string(),
+        'regcollation': pa.string(),
         # --- end oid-alias family ---
         'timestamp': pa.timestamp('us'),
         'timestamp without time zone': pa.timestamp('us'),
@@ -224,8 +242,15 @@ def pg_type_to_arrow_type(pg_type, is_nullable=True):
     return arrow_type
 
 # PostgreSQL types that are object-identifier aliases. For these we stamp Arrow
-# field metadata `pg.oid_alias=<pg_type>` so the catalog's oid-coercion analyzer
-# rule can resolve name/numeric string comparisons the way Postgres does.
+# field metadata `pg.oid_alias=<pg_type>` so the wire layer (`arrow-pg`) reports
+# the correct Postgres alias type in RowDescription (e.g. REGPROC, OID 24).
+#
+# Storage split (see pg_type_to_arrow_type above):
+#   * `oid`  -> int32  (Postgres displays `oid` as the integer itself)
+#   * `reg*` -> string (the Postgres display NAME, e.g. "textin")
+# We do NOT cast `reg*` to `::oid` (the former 0300310 approach): the display
+# form is exactly the value we want to persist, so clients see `textin`, not
+# the underlying oid integer.
 OID_ALIAS_TYPES = {
     'oid',
     'regproc', 'regprocedure',
@@ -235,17 +260,17 @@ OID_ALIAS_TYPES = {
     'regconfig', 'regdictionary', 'regcollation',
 }
 
-# reg* aliases need an explicit `::oid` cast at SELECT time because Postgres
-# returns their display (name) form, not the integer, on a plain SELECT.
-REG_OID_TYPES = OID_ALIAS_TYPES - {'oid'}
-
 
 def select_expr(col_name, data_type):
-    """Build a SELECT column expression, casting reg* columns to oid."""
-    quoted = '"' + col_name.replace('"', '""') + '"'
-    if data_type in REG_OID_TYPES:
-        return f'{quoted}::oid AS {quoted}'
-    return quoted
+    """Build a SELECT column expression for a column.
+
+    Columns are selected verbatim. `reg*` oid-alias columns are deliberately
+    NOT cast to `::oid`: Postgres returns their display (name) form on a plain
+    SELECT, which is the value we store (see pg_type_to_arrow_type). `oid`
+    columns are already integers, so no cast is needed for them either.
+    """
+    _ = data_type  # all columns are selected verbatim now
+    return '"' + col_name.replace('"', '""') + '"'
 
 def convert_value(value, arrow_type):
     """Convert PostgreSQL value to Arrow-compatible value"""
@@ -389,8 +414,9 @@ def export_table_to_arrow(conn, schema_name, table_name, output_dir):
 
         arrow_schema = pa.schema(arrow_fields)
 
-        # Fetch all data. reg* oid-alias columns are cast to oid at SELECT time
-        # so they are returned as integers (matching their stored Arrow type).
+        # Fetch all data. Columns are selected verbatim; reg* oid-alias columns
+        # keep their Postgres display (name) form, matching their stored Arrow
+        # string type (see select_expr / pg_type_to_arrow_type).
         select_cols = ", ".join(
             select_expr(name, dtype)
             for (name, dtype, _, _, _) in columns
