@@ -245,11 +245,10 @@ mod tests {
     fn oid_alias_field(kind: &str) -> Arc<Field> {
         use std::collections::HashMap;
         Arc::new(
-            Field::new("c", DataType::Int32, false)
-                .with_metadata(HashMap::from([(
-                    PG_OID_ALIAS_KEY.to_string(),
-                    kind.to_string(),
-                )])),
+            Field::new("c", DataType::Int32, false).with_metadata(HashMap::from([(
+                PG_OID_ALIAS_KEY.to_string(),
+                kind.to_string(),
+            )])),
         )
     }
 
@@ -264,7 +263,10 @@ mod tests {
     #[test]
     fn oid_alias_metadata_maps_to_alias_pg_type() {
         // The kinds enumerated in issue #384:
-        assert_eq!(field_into_pg_type(&oid_alias_field("oid")).unwrap(), Type::OID);
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("oid")).unwrap(),
+            Type::OID
+        );
         assert_eq!(
             field_into_pg_type(&oid_alias_field("regproc")).unwrap(),
             Type::REGPROC
@@ -317,14 +319,34 @@ mod tests {
     fn oid_alias_metadata_reports_correct_oid() {
         // Issue #384: clients key off the RowDescription type OID, not just the
         // Type variant. Pin the OIDs called out explicitly in the issue.
-        assert_eq!(field_into_pg_type(&oid_alias_field("regtype")).unwrap().oid(), 2206);
         assert_eq!(
-            field_into_pg_type(&oid_alias_field("regclass")).unwrap().oid(),
+            field_into_pg_type(&oid_alias_field("regtype"))
+                .unwrap()
+                .oid(),
+            2206
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regclass"))
+                .unwrap()
+                .oid(),
             2205
         );
-        assert_eq!(field_into_pg_type(&oid_alias_field("regprocedure")).unwrap().oid(), 2202);
-        assert_eq!(field_into_pg_type(&oid_alias_field("regproc")).unwrap().oid(), 24);
-        assert_eq!(field_into_pg_type(&oid_alias_field("oid")).unwrap().oid(), 26);
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regprocedure"))
+                .unwrap()
+                .oid(),
+            2202
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regproc"))
+                .unwrap()
+                .oid(),
+            24
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("oid")).unwrap().oid(),
+            26
+        );
     }
 
     #[test]
