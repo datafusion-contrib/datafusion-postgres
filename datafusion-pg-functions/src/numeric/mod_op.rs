@@ -19,12 +19,10 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{
-    ArrayRef, AsArray, PrimitiveBuilder,
-};
 use datafusion::arrow::array::Array;
+use datafusion::arrow::array::{ArrayRef, AsArray, PrimitiveBuilder};
 use datafusion::arrow::datatypes::{
-    DataType, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    DataType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
 };
 use datafusion::common::{Result, exec_err};
 use datafusion::logical_expr::{
@@ -107,16 +105,14 @@ impl ScalarUDFImpl for ModUDF {
             DataType::Int16 => Arc::new(mod_int::<Int16Type>(y, x)?.finish()),
             DataType::Int32 => Arc::new(mod_int::<Int32Type>(y, x)?.finish()),
             DataType::Int64 => Arc::new(mod_int::<Int64Type>(y, x)?.finish()),
-            DataType::Float32 => Arc::new(mod_float::<Float32Type, _>(y, x, |a, b| {
-                a - b * (a / b).trunc()
-            })?.finish()),
-            DataType::Float64 => Arc::new(mod_float::<Float64Type, _>(y, x, |a, b| {
-                a - b * (a / b).trunc()
-            })?.finish()),
+            DataType::Float32 => Arc::new(
+                mod_float::<Float32Type, _>(y, x, |a, b| a - b * (a / b).trunc())?.finish(),
+            ),
+            DataType::Float64 => Arc::new(
+                mod_float::<Float64Type, _>(y, x, |a, b| a - b * (a / b).trunc())?.finish(),
+            ),
             other => {
-                return exec_err!(
-                    "mod only supports integer/float operands, got {other:?}"
-                );
+                return exec_err!("mod only supports integer/float operands, got {other:?}");
             }
         };
         Ok(ColumnarValue::Array(out))
@@ -182,9 +178,24 @@ mod tests {
         let col = batches[0].column(0);
         use datafusion::arrow::array::Array;
         match col.data_type() {
-            DataType::Int8 => col.as_primitive::<Int8Type>().iter().next().unwrap().map(|v| v as i64),
-            DataType::Int16 => col.as_primitive::<Int16Type>().iter().next().unwrap().map(|v| v as i64),
-            DataType::Int32 => col.as_primitive::<Int32Type>().iter().next().unwrap().map(|v| v as i64),
+            DataType::Int8 => col
+                .as_primitive::<Int8Type>()
+                .iter()
+                .next()
+                .unwrap()
+                .map(|v| v as i64),
+            DataType::Int16 => col
+                .as_primitive::<Int16Type>()
+                .iter()
+                .next()
+                .unwrap()
+                .map(|v| v as i64),
+            DataType::Int32 => col
+                .as_primitive::<Int32Type>()
+                .iter()
+                .next()
+                .unwrap()
+                .map(|v| v as i64),
             DataType::Int64 => col.as_primitive::<Int64Type>().iter().next().unwrap(),
             _ => panic!("unexpected integer type {:?}", col.data_type()),
         }
@@ -192,7 +203,12 @@ mod tests {
 
     async fn run_f64(ctx: &SessionContext, sql: &str) -> Option<f64> {
         let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
-        batches[0].column(0).as_primitive::<Float64Type>().iter().next().unwrap()
+        batches[0]
+            .column(0)
+            .as_primitive::<Float64Type>()
+            .iter()
+            .next()
+            .unwrap()
     }
 
     #[tokio::test]

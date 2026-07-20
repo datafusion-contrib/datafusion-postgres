@@ -30,11 +30,9 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, AsArray, PrimitiveBuilder};
 use datafusion::arrow::array::Array;
-use datafusion::arrow::datatypes::{
-    DataType, Float32Type, Float64Type,
-};
+use datafusion::arrow::array::{ArrayRef, AsArray, PrimitiveBuilder};
+use datafusion::arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion::common::{Result, exec_err};
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
@@ -114,10 +112,7 @@ macro_rules! degree_unary_udf {
     };
 }
 
-fn unary_f64(
-    arr: &ArrayRef,
-    op: fn(f64) -> f64,
-) -> Result<PrimitiveBuilder<Float64Type>> {
+fn unary_f64(arr: &ArrayRef, op: fn(f64) -> f64) -> Result<PrimitiveBuilder<Float64Type>> {
     let a = arr.as_primitive::<Float64Type>();
     let mut out = PrimitiveBuilder::<Float64Type>::with_capacity(a.len());
     for i in 0..a.len() {
@@ -130,10 +125,7 @@ fn unary_f64(
     Ok(out)
 }
 
-fn unary_f32(
-    arr: &ArrayRef,
-    op: fn(f32) -> f32,
-) -> Result<PrimitiveBuilder<Float32Type>> {
+fn unary_f32(arr: &ArrayRef, op: fn(f32) -> f32) -> Result<PrimitiveBuilder<Float32Type>> {
     let a = arr.as_primitive::<Float32Type>();
     let mut out = PrimitiveBuilder::<Float32Type>::with_capacity(a.len());
     for i in 0..a.len() {
@@ -256,12 +248,12 @@ impl ScalarUDFImpl for Atan2dUDF {
             return exec_err!("atan2d expects 2 arguments, got {}", args.len());
         }
         let out: ArrayRef = match args[0].data_type() {
-            DataType::Float64 => Arc::new(
-                binary_f64(&args[0], &args[1], |y, x| y.atan2(x).to_degrees())?.finish(),
-            ),
-            DataType::Float32 => Arc::new(
-                binary_f32(&args[0], &args[1], |y, x| y.atan2(x).to_degrees())?.finish(),
-            ),
+            DataType::Float64 => {
+                Arc::new(binary_f64(&args[0], &args[1], |y, x| y.atan2(x).to_degrees())?.finish())
+            }
+            DataType::Float32 => {
+                Arc::new(binary_f32(&args[0], &args[1], |y, x| y.atan2(x).to_degrees())?.finish())
+            }
             other => return exec_err!("atan2d requires float operands, got {other:?}"),
         };
         Ok(ColumnarValue::Array(out))
@@ -349,7 +341,12 @@ mod tests {
 
     async fn run_f64(ctx: &SessionContext, sql: &str) -> Option<f64> {
         let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
-        batches[0].column(0).as_primitive::<Float64Type>().iter().next().unwrap()
+        batches[0]
+            .column(0)
+            .as_primitive::<Float64Type>()
+            .iter()
+            .next()
+            .unwrap()
     }
 
     fn ctx_with_all() -> SessionContext {
@@ -400,7 +397,13 @@ mod tests {
     #[tokio::test]
     async fn null_input_returns_null() {
         let ctx = ctx_with_all();
-        assert_eq!(run_f64(&ctx, "SELECT sind(CAST(NULL AS DOUBLE))").await, None);
-        assert_eq!(run_f64(&ctx, "SELECT atan2d(CAST(NULL AS DOUBLE), 1.0)").await, None);
+        assert_eq!(
+            run_f64(&ctx, "SELECT sind(CAST(NULL AS DOUBLE))").await,
+            None
+        );
+        assert_eq!(
+            run_f64(&ctx, "SELECT atan2d(CAST(NULL AS DOUBLE), 1.0)").await,
+            None
+        );
     }
 }

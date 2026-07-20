@@ -22,8 +22,8 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, AsArray, PrimitiveBuilder};
 use datafusion::arrow::array::Array;
+use datafusion::arrow::array::{ArrayRef, AsArray, PrimitiveBuilder};
 use datafusion::arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion::common::{Result, exec_err};
 use datafusion::logical_expr::{
@@ -166,7 +166,12 @@ mod tests {
 
     async fn run_f64(ctx: &SessionContext, sql: &str) -> Option<f64> {
         let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
-        batches[0].column(0).as_primitive::<Float64Type>().iter().next().unwrap()
+        batches[0]
+            .column(0)
+            .as_primitive::<Float64Type>()
+            .iter()
+            .next()
+            .unwrap()
     }
 
     fn ctx_with_all() -> SessionContext {
@@ -199,6 +204,9 @@ mod tests {
     #[tokio::test]
     async fn null_propagates() {
         let ctx = ctx_with_all();
-        assert_eq!(run_f64(&ctx, "SELECT erf(CAST(NULL AS DOUBLE))").await, None);
+        assert_eq!(
+            run_f64(&ctx, "SELECT erf(CAST(NULL AS DOUBLE))").await,
+            None
+        );
     }
 }

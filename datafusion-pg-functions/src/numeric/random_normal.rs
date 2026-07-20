@@ -22,10 +22,8 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{
-    ArrayRef, AsArray, Float64Builder,
-};
 use datafusion::arrow::array::Array;
+use datafusion::arrow::array::{ArrayRef, AsArray, Float64Builder};
 use datafusion::arrow::datatypes::{DataType, Float64Type};
 use datafusion::common::{Result, exec_err};
 use datafusion::logical_expr::{
@@ -167,9 +165,7 @@ mod tests {
         // are not just returning 0 (the probability of all 100 being within
         // 0.001 of 0 is essentially zero).
         assert!(
-            vals.iter()
-                .filter_map(|v| *v)
-                .any(|v| v.abs() > 0.001),
+            vals.iter().filter_map(|v| *v).any(|v| v.abs() > 0.001),
             "samples suspiciously close to zero"
         );
     }
@@ -201,6 +197,9 @@ mod tests {
             .unwrap()
             .collect()
             .await;
-        assert!(res.is_err(), "negative stddev should be rejected at execution");
+        assert!(
+            res.is_err(),
+            "negative stddev should be rejected at execution"
+        );
     }
 }

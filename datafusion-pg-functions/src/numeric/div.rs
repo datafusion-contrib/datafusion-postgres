@@ -10,11 +10,9 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, AsArray, PrimitiveBuilder};
 use datafusion::arrow::array::Array;
-use datafusion::arrow::datatypes::{
-    DataType, Int16Type, Int32Type, Int64Type, Int8Type,
-};
+use datafusion::arrow::array::{ArrayRef, AsArray, PrimitiveBuilder};
+use datafusion::arrow::datatypes::{DataType, Int8Type, Int16Type, Int32Type, Int64Type};
 use datafusion::common::{Result, exec_err};
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
@@ -131,9 +129,24 @@ mod tests {
         let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
         let col = batches[0].column(0);
         match col.data_type() {
-            DataType::Int8 => col.as_primitive::<Int8Type>().iter().next().unwrap().map(|v| v as i64),
-            DataType::Int16 => col.as_primitive::<Int16Type>().iter().next().unwrap().map(|v| v as i64),
-            DataType::Int32 => col.as_primitive::<Int32Type>().iter().next().unwrap().map(|v| v as i64),
+            DataType::Int8 => col
+                .as_primitive::<Int8Type>()
+                .iter()
+                .next()
+                .unwrap()
+                .map(|v| v as i64),
+            DataType::Int16 => col
+                .as_primitive::<Int16Type>()
+                .iter()
+                .next()
+                .unwrap()
+                .map(|v| v as i64),
+            DataType::Int32 => col
+                .as_primitive::<Int32Type>()
+                .iter()
+                .next()
+                .unwrap()
+                .map(|v| v as i64),
             DataType::Int64 => col.as_primitive::<Int64Type>().iter().next().unwrap(),
             _ => panic!("unexpected type {:?}", col.data_type()),
         }

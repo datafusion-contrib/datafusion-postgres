@@ -20,7 +20,7 @@ use datafusion::arrow::array::{ArrayRef, AsArray, PrimitiveBuilder};
 
 use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::{
-    DataType, Field, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    DataType, Field, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
 };
 use datafusion::common::{Result, exec_err};
 use datafusion::logical_expr::{
@@ -144,9 +144,11 @@ fn equal_width_form(args: &[ArrayRef]) -> Result<ColumnarValue> {
 
     let mut out: PrimitiveBuilder<Int32Type> = PrimitiveBuilder::with_capacity(operand.len());
     for i in 0..operand.len() {
-        let (Some(op), Some(lo), Some(hi)) =
-            (scalar_f64(operand, i), scalar_f64(low, 0), scalar_f64(high, 0))
-        else {
+        let (Some(op), Some(lo), Some(hi)) = (
+            scalar_f64(operand, i),
+            scalar_f64(low, 0),
+            scalar_f64(high, 0),
+        ) else {
             out.append_null();
             continue;
         };
@@ -243,7 +245,12 @@ mod tests {
 
     async fn run_i32(ctx: &SessionContext, sql: &str) -> Option<i32> {
         let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
-        batches[0].column(0).as_primitive::<Int32Type>().iter().next().unwrap()
+        batches[0]
+            .column(0)
+            .as_primitive::<Int32Type>()
+            .iter()
+            .next()
+            .unwrap()
     }
 
     #[tokio::test]
