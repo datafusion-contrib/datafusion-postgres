@@ -59,7 +59,7 @@ implementation strategy in DataFusion.
 | [Conditional Expressions](#functions-conditional) | 7 | 6 | 0 | 0 | 0 | 1 | 0+0 | 0 |
 | [Subquery Expressions](#functions-subquery) | 0 | 0 | 0 | 0 | 0 | 0 | 0+0 | 0 |
 | [Row and Array Comparisons](#functions-comparisons) | 0 | 0 | 0 | 0 | 0 | 0 | 0+0 | 0 |
-| [Mathematical](#functions-math) | 55 | 32 | 0 | 4 | 11 | 8 | 0+0 | 0 |
+| [Mathematical](#functions-math) | 55 | 33 | 18 | 0 | 0 | 4 | 0+0 | 0 |
 | [String](#functions-string) | 61 | 42 | 2 | 0 | 17 | 0 | 0+4 | 0 |
 | [Binary String](#functions-binarystring) | 30 | 20 | 0 | 0 | 10 | 0 | 0+4 | 0 |
 | [Bit String](#functions-bitstring) | 9 | 6 | 0 | 0 | 0 | 0 | 0+3 | 3 |
@@ -85,7 +85,7 @@ implementation strategy in DataFusion.
 | [System Administration](#functions-admin) | 105 | 0 | 2 | 0 | 5 | 0 | 0+0 | 98 |
 | [Trigger](#functions-trigger) | 3 | 0 | 0 | 0 | 0 | 0 | 0+0 | 3 |
 | [Event Trigger](#functions-event-triggers) | 5 | 0 | 0 | 0 | 0 | 0 | 0+0 | 5 |
-| **TOTAL** | **768** | **197** | **22** | **8** | **96** | **69** | **21** | **371** |
+| **TOTAL** | **768** | **198** | **40** | **4** | **85** | **65** | **21** | **371** |
 
 ---
 
@@ -154,59 +154,59 @@ implementation strategy in DataFusion.
 |---|:---:|:---:|:---:|---:|---|---|
 | `abs` | fn | ✅ | — | 6 | absolute value | Native DataFusion |
 | `acos` | fn | ✅ | — | 1 | arccosine | Native DataFusion |
-| `acosd` | fn | 🚧 | P2 | 1 | arccosine, degrees |  |
+| `acosd` | fn | 🔧 | — | 1 | arccosine, degrees |  |
 | `acosh` | fn | ✅ | — | 1 | inverse hyperbolic cosine | Native DataFusion |
 | `asin` | fn | ✅ | — | 1 | arcsine | Native DataFusion |
-| `asind` | fn | 🚧 | P2 | 1 | arcsine, degrees |  |
+| `asind` | fn | 🔧 | — | 1 | arcsine, degrees |  |
 | `asinh` | fn | ✅ | — | 1 | inverse hyperbolic sine | Native DataFusion |
 | `atan` | fn | ✅ | — | 1 | arctangent | Native DataFusion |
 | `atan2` | fn | ✅ | — | 1 | arctangent, two arguments | Native DataFusion |
-| `atan2d` | fn | 🚧 | P2 | 1 | arctangent, two arguments, degrees |  |
-| `atand` | fn | 🚧 | P2 | 1 | arctangent, degrees |  |
+| `atan2d` | fn | 🔧 | — | 1 | arctangent, two arguments, degrees |  |
+| `atand` | fn | 🔧 | — | 1 | arctangent, degrees |  |
 | `atanh` | fn | ✅ | — | 1 | inverse hyperbolic tangent | Native DataFusion |
 | `cbrt` | fn | ✅ | — | 1 | cube root | Native DataFusion |
 | `ceil` | fn | ✅ | — | 2 | nearest integer >= value | Native DataFusion |
-| `ceiling` | fn | 🚧 | P1 | 2 | nearest integer >= value | Alias of `ceil`; thin wrapper. DataFusion has `ceil`; alias `ceiling` may be missing. |
+| `ceiling` | fn | 🔧 | — | 2 | nearest integer >= value | Implemented in this crate (`numeric::aliases`). |
 | `cos` | fn | ✅ | — | 1 | cosine | Native DataFusion |
-| `cosd` | fn | 🚧 | P2 | 1 | cosine, degrees |  |
+| `cosd` | fn | 🔧 | — | 1 | cosine, degrees |  |
 | `cosh` | fn | ✅ | — | 1 | hyperbolic cosine | Native DataFusion |
 | `cot` | fn | ✅ | — | 1 | cotangent | Native DataFusion |
-| `cotd` | fn | 🚧 | P2 | 1 | cotangent, degrees |  |
+| `cotd` | fn | 🔧 | — | 1 | cotangent, degrees |  |
 | `degrees` | fn | ✅ | — | 1 | radians to degrees | Native DataFusion |
-| `div` | fn | 🚧 | P2 | 1 | trunc(x/y) | Integer quotient. |
-| `erf` | fn | 🚧 | P3 | 1 | error function | Special function. |
-| `erfc` | fn | 🚧 | P3 | 1 | complementary error function |  |
+| `div` | fn | 🔧 | — | 1 | trunc(x/y) | Integer quotient. |
+| `erf` | fn | 🔧 | — | 1 | error function | Special function. |
+| `erfc` | fn | 🔧 | — | 1 | complementary error function |  |
 | `exp` | fn | ✅ | — | 2 | natural exponential (e^x) | Native DataFusion |
 | `factorial` | fn | ✅ | — | 1 | factorial | Native DataFusion |
 | `floor` | fn | ✅ | — | 2 | nearest integer <= value | Native DataFusion |
-| `gamma` | fn | 🚧 | P3 | 1 | gamma function |  |
+| `gamma` | fn | 🔧 | — | 1 | gamma function |  |
 | `gcd` | fn | ✅ | — | 3 | greatest common divisor | Native DataFusion |
 | `lcm` | fn | ✅ | — | 3 | least common multiple | Native DataFusion |
-| `lgamma` | fn | 🚧 | P3 | 1 | natural logarithm of absolute value of gamma function |  |
+| `lgamma` | fn | 🔧 | — | 1 | natural logarithm of absolute value of gamma function |  |
 | `ln` | fn | ✅ | — | 2 | natural logarithm | Native DataFusion |
 | `log` | fn | ✅ | — | 3 | logarithm base m of n | PG default base is 10; DataFusion default base is e. Native DataFusion |
-| `log10` | fn | 🚧 | P1 | 2 | base 10 logarithm | Alias of DF `log(x)`. Native DataFusion. DataFusion's `log(x)` is base-e by default; PG `log(x)` is base-10. |
+| `log10` | fn | ✅ | — | 2 | base 10 logarithm | Native DataFusion (base-10 log). |
 | `min_scale` | fn | 🚧 | P3 | 1 | minimum scale needed to represent the value | Numeric-internal. |
-| `mod` | fn | 🚧 | P1 | 4 | modulus | Map to DF `%` operator. DataFusion exposes only the % operator; the function name may need an alias. |
+| `mod` | fn | 🔧 | — | 4 | modulus | Implemented in this crate (`numeric::mod_op`). |
 | `pi` | fn | ✅ | — | 1 | PI | Native DataFusion |
 | `power` | fn | ✅ | — | 2 | exponentiation | Native DataFusion |
 | `radians` | fn | ✅ | — | 1 | degrees to radians | Native DataFusion |
 | `random` | fn | ✅ | — | 4 | random integer in range | Native DataFusion |
-| `random_normal` | fn | 🚧 | P2 | 1 | random value from normal distribution | Box-Muller on `random()`. |
+| `random_normal` | fn | 🔧 | — | 1 | random value from normal distribution | Box-Muller on `random()`. |
 | `round` | fn | ✅ | — | 3 | value rounded to 'scale' of zero | PG 2-arg form: `round(x, n)`. Native DataFusion. DataFusion's round lacks the 2-argument form in some versions. |
 | `scale` | fn | 🚧 | P3 | 1 | number of decimal digits in the fractional part | Numeric-internal. |
 | `setseed` | fn | 🚧 | P3 | 1 | set random seed | Mutates global RNG; thread-safety concern. |
-| `sign` | fn | 🚧 | P1 | 2 | sign of value | Alias of DF `signum`. DataFusion names this `signum`. |
+| `sign` | fn | 🔧 | — | 2 | sign of value | Implemented in this crate (`numeric::aliases`). DataFusion names this `signum`. |
 | `sin` | fn | ✅ | — | 1 | sine | Native DataFusion |
-| `sind` | fn | 🚧 | P2 | 1 | sine, degrees |  |
+| `sind` | fn | 🔧 | — | 1 | sine, degrees |  |
 | `sinh` | fn | ✅ | — | 1 | hyperbolic sine | Native DataFusion |
 | `sqrt` | fn | ✅ | — | 2 | square root | Native DataFusion |
 | `tan` | fn | ✅ | — | 1 | tangent | Native DataFusion |
-| `tand` | fn | 🚧 | P2 | 1 | tangent, degrees |  |
+| `tand` | fn | 🔧 | — | 1 | tangent, degrees |  |
 | `tanh` | fn | ✅ | — | 1 | hyperbolic tangent | Native DataFusion |
 | `trim_scale` | fn | 🚧 | P3 | 1 | numeric with minimum scale needed to represent the value | Numeric-internal. |
 | `trunc` | fn | ✅ | — | 5 | value truncated to 'scale' of zero | PG 2-arg form: `trunc(x, n)`. Native DataFusion. Same 2-arg concern as round. |
-| `width_bucket` | fn | 🚧 | P2 | 3 | bucket number of operand given a sorted array of bucket lower bounds | Numeric histogram bucketing. |
+| `width_bucket` | fn | 🔧 | — | 3 | bucket number of operand given a sorted array of bucket lower bounds | Numeric histogram bucketing. |
 
 ## String Functions and Operators
 

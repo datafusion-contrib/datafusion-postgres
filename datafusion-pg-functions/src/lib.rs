@@ -49,8 +49,8 @@
 //! use datafusion::prelude::SessionContext;
 //! use datafusion_pg_functions::register_all;
 //!
-//! let ctx = SessionContext::new();
-//! register_all(&ctx);
+//! let mut ctx = SessionContext::new();
+//! register_all(&mut ctx);
 //! ```
 //!
 //! To register a single category, call its `register` function directly:
@@ -59,8 +59,8 @@
 //! use datafusion::prelude::SessionContext;
 //! use datafusion_pg_functions::string;
 //!
-//! let ctx = SessionContext::new();
-//! string::register(&ctx);
+//! let mut ctx = SessionContext::new();
+//! string::register(&mut ctx);
 //! ```
 
 use datafusion::execution::FunctionRegistry;
@@ -95,7 +95,7 @@ pub mod xml;
 /// bring the SQL surface area close to a vanilla PostgreSQL backend.
 ///
 /// Returns the number of UDFs that were registered.
-pub fn register_all(registry: &dyn FunctionRegistry) -> usize {
+pub fn register_all(registry: &mut dyn FunctionRegistry) -> usize {
     let mut count = 0;
     count += string::register(registry);
     count += binary::register(registry);
@@ -130,8 +130,8 @@ mod tests {
     /// guarding against here, e.g. a panic in any submodule's `register`).
     #[test]
     fn register_all_runs_against_fresh_context() {
-        let ctx = SessionContext::new();
-        let n = register_all(&ctx);
+        let mut ctx = SessionContext::new();
+        let n = register_all(&mut ctx);
         assert!(n >= 0);
     }
 }

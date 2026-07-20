@@ -13,6 +13,8 @@ rust-version.workspace = true
 
 [dependencies]
 datafusion = { workspace = true, features = ["nested_expressions"] }
+libm = "0.2"
+rand = "0.9"
 
 [dev-dependencies]
 datafusion = { workspace = true, features = ["nested_expressions"] }
