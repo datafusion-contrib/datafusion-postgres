@@ -1595,6 +1595,180 @@ mod test {
         assert_eq!(typoutput, "textout");
     }
 
+    // --- OID stability regressions (issues #389 / #390) --------------------------
+    //
+    // The dynamic catalog tables (`pg_namespace`, `pg_class`, `pg_attribute`,
+    // `pg_database`) each assign OIDs to catalog/schema/table objects. Pooled
+    // PostgreSQL clients (DBeaver, JDBC drivers, ...) resolve an OID on one
+    // connection and then reference it on another via joins such as
+    // `pg_class WHERE relnamespace = <oid>`. Real PostgreSQL OIDs are stable for
+    // the lifetime of an object, so these OIDs must be:
+    //
+    //   1. stable across catalog-table queries within a session (a schema's OID
+    //      must not change just because another catalog table was queried), and
+    //   2. join-consistent (`pg_class.relnamespace` must equal the
+    //      `pg_namespace.oid` a client resolved earlier).
+    //
+    // Additionally, the static catalog rows this crate ships reference the
+    // canonical `pg_catalog` namespace OID 11 (e.g. `pg_type.typnamespace = 11`),
+    // so `pg_catalog` must keep that fixed OID.
+    //
+    // The tests below assert all of the above. They fail on `master` (the OIDs
+    // are currently assigned from a shared counter that is rebuilt inconsistently
+    // by each builder, so they drift) and pass once OIDs are derived
+    // deterministically.
+
+    /// A session with a single user table `datafusion.public.t` and pg_catalog
+    /// installed, matching how the server sets up a connection.
+    async fn ctx_with_user_table() -> SessionContext {
+        use crate::pg_catalog::context::EmptyContextProvider;
+        use datafusion::prelude::{SessionConfig, SessionContext};
+
+        let config = SessionConfig::new().with_default_catalog_and_schema("datafusion", "public");
+        let ctx = SessionContext::new_with_config(config);
+        ctx.sql("CREATE TABLE t (a INT, b TEXT)")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        setup_pg_catalog(&ctx, "datafusion", EmptyContextProvider).unwrap();
+        ctx
+    }
+
+    async fn collect(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
+        ctx.sql(sql).await.unwrap().collect().await.unwrap()
+    }
+
+    /// First value of the first column of the first batch, as `int4`.
+    fn first_i32(batches: &[RecordBatch]) -> i32 {
+        use datafusion::arrow::array::Int32Array;
+        batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .value(0)
+    }
+
+    /// First value of the first column of the first batch, as `int8`
+    /// (DataFusion's `count(*)` type).
+    fn first_i64(batches: &[RecordBatch]) -> i64 {
+        use datafusion::arrow::array::Int64Array;
+        batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0)
+    }
+
+    #[tokio::test]
+    async fn schema_oid_is_stable_across_pg_attribute_query() {
+        // Regression for #389. Each OID-assigning builder rewrites the shared
+        // OID cache differently; `pg_attribute` replaces it with table-only
+        // entries, evicting every schema OID. The next `pg_namespace` query then
+        // re-assigns the schema a *different* OID, so a client that resolved the
+        // schema OID earlier can no longer use it. A schema's OID must be stable.
+        let ctx = ctx_with_user_table().await;
+
+        let oid_before = first_i32(
+            &collect(
+                &ctx,
+                "SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'public'",
+            )
+            .await,
+        );
+
+        // Force the cache-evicting builder to run.
+        let _ = collect(&ctx, "SELECT count(*) FROM pg_catalog.pg_attribute").await;
+
+        let oid_after = first_i32(
+            &collect(
+                &ctx,
+                "SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'public'",
+            )
+            .await,
+        );
+
+        assert_eq!(
+            oid_before, oid_after,
+            "OID of the 'public' schema must not change after querying pg_attribute"
+        );
+    }
+
+    #[tokio::test]
+    async fn pg_class_resolves_table_via_namespace_oid() {
+        // Regression for #389 — the concrete user-facing breakage. A client
+        // resolves a schema OID from pg_namespace, then filters pg_class by that
+        // OID (`WHERE relnamespace = <oid>`). After pg_attribute evicts the
+        // schema OID and pg_class re-assigns it, the filter matches nothing and
+        // no tables are listed (the symptom DBeaver users report).
+        let ctx = ctx_with_user_table().await;
+
+        let nsp_oid = first_i32(
+            &collect(
+                &ctx,
+                "SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'public'",
+            )
+            .await,
+        );
+
+        let _ = collect(&ctx, "SELECT count(*) FROM pg_catalog.pg_attribute").await;
+
+        let n = first_i64(
+            &collect(
+                &ctx,
+                &format!(
+                    "SELECT count(*) FROM pg_catalog.pg_class \
+                     WHERE relnamespace = {nsp_oid} AND relname = 't'"
+                ),
+            )
+            .await,
+        );
+
+        assert!(
+            n >= 1,
+            "expected user table 't' to resolve via relnamespace = {nsp_oid}, got {n}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pg_catalog_namespace_keeps_fixed_oid_eleven() {
+        // Regression for #390. The static catalog rows this crate ships
+        // reference the canonical `pg_catalog` namespace OID 11 (e.g.
+        // `pg_type.typnamespace = 11`). If `pg_namespace` assigns `pg_catalog`
+        // a generated OID instead, joins from a system object to its namespace
+        // fail — e.g. DBeaver cannot resolve any column's data type and every
+        // column shows as unknown. `pg_catalog` must keep OID 11.
+        let ctx = ctx_with_user_table().await;
+
+        let oid = first_i32(
+            &collect(
+                &ctx,
+                "SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'pg_catalog'",
+            )
+            .await,
+        );
+        assert_eq!(oid, 11, "pg_catalog namespace must use the fixed OID 11");
+
+        // And the join a client performs: a built-in type -> its namespace.
+        let n = first_i64(
+            &collect(
+                &ctx,
+                "SELECT count(*) \
+                 FROM pg_catalog.pg_type t \
+                 JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace \
+                 WHERE t.typname = 'int4'",
+            )
+            .await,
+        );
+        assert_eq!(
+            n, 1,
+            "built-in type 'int4' must join to its pg_catalog namespace (oid 11)"
+        );
+    }
+
     #[test]
     fn test_load_arrow_data() {
         let table = ArrowTable::from_ipc_data(
