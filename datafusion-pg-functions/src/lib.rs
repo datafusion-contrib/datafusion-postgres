@@ -86,46 +86,46 @@ use datafusion::execution::FunctionRegistry;
 
 // One module per PostgreSQL function category. Each module is gated by its
 // matching Cargo feature (see lib.rs docs / Cargo.toml `[features]`).
-#[cfg(feature = "math")]
-pub mod numeric;
-#[cfg(feature = "string")]
-pub mod string;
+#[cfg(feature = "array")]
+pub mod array;
 #[cfg(feature = "binary")]
 pub mod binary;
 #[cfg(feature = "bitstring")]
 pub mod bitstring;
 #[cfg(feature = "conditional")]
 pub mod conditional;
-#[cfg(feature = "datetime")]
-pub mod datetime;
 #[cfg(feature = "crypto")]
 pub mod crypto;
-#[cfg(feature = "array")]
-pub mod array;
-#[cfg(feature = "range")]
-pub mod range;
+#[cfg(feature = "datetime")]
+pub mod datetime;
+#[cfg(feature = "enum_type")]
+pub mod enum_type;
+#[cfg(feature = "format")]
+pub mod format;
+#[cfg(feature = "geometric")]
+pub mod geometric;
 #[cfg(feature = "json")]
 pub mod json;
 #[cfg(feature = "network")]
 pub mod network;
+#[cfg(feature = "math")]
+pub mod numeric;
+#[cfg(feature = "range")]
+pub mod range;
+#[cfg(feature = "row")]
+pub mod row;
+#[cfg(feature = "sequence")]
+pub mod sequence;
+#[cfg(feature = "string")]
+pub mod string;
+#[cfg(feature = "system")]
+pub mod system;
 #[cfg(feature = "text_search")]
 pub mod text_search;
 #[cfg(feature = "uuid")]
 pub mod uuid;
 #[cfg(feature = "xml")]
 pub mod xml;
-#[cfg(feature = "system")]
-pub mod system;
-#[cfg(feature = "format")]
-pub mod format;
-#[cfg(feature = "geometric")]
-pub mod geometric;
-#[cfg(feature = "enum_type")]
-pub mod enum_type;
-#[cfg(feature = "sequence")]
-pub mod sequence;
-#[cfg(feature = "row")]
-pub mod row;
 
 /// Register every PostgreSQL built-in UDF provided by this crate against
 /// `registry`, across every category whose Cargo feature is enabled.
