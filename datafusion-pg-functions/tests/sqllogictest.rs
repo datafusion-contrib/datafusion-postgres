@@ -156,15 +156,17 @@ async fn run_slt_files() {
         .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("slt"))
         .collect();
     entries.sort();
-    assert!(!entries.is_empty(), "no .slt files found in {}", dir.display());
+    assert!(
+        !entries.is_empty(),
+        "no .slt files found in {}",
+        dir.display()
+    );
 
     // Optional filter via env var SLT_FILTER=substring to run only matching files.
     let selected: Vec<PathBuf> = match std::env::var("SLT_FILTER") {
         Ok(stem) => entries
             .iter()
-            .filter(|p| {
-                p.to_string_lossy().contains(&stem)
-            })
+            .filter(|p| p.to_string_lossy().contains(&stem))
             .cloned()
             .collect(),
         Err(_) => entries,
