@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
 use datafusion::arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -15,7 +15,7 @@ use tokio::sync::RwLock;
 
 use crate::pg_catalog::catalog_info::CatalogInfo;
 
-use super::OidCacheKey;
+use super::{OidCacheKey, resolve_oid};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PgNamespaceTable<C> {
@@ -68,11 +68,7 @@ impl<C: CatalogInfo> PgNamespaceTable<C> {
             if let Some(schema_names) = this.catalog_list.schema_names(&catalog_name).await? {
                 for schema_name in schema_names {
                     let cache_key = OidCacheKey::Schema(catalog_name.clone(), schema_name.clone());
-                    let schema_oid = if let Some(oid) = oid_cache.get(&cache_key) {
-                        *oid
-                    } else {
-                        this.oid_counter.fetch_add(1, Ordering::Relaxed)
-                    };
+                    let schema_oid = resolve_oid(&cache_key, &oid_cache, &this.oid_counter);
                     schema_oid_cache.insert(cache_key, schema_oid);
 
                     oids.push(schema_oid as i32);

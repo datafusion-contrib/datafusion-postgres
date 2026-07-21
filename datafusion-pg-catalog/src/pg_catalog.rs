@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{
@@ -196,6 +196,61 @@ pub(crate) enum OidCacheKey {
     Schema(String, String),
     /// Table by schema and table name
     Table(String, String, String),
+}
+
+/// Canonical OID of the `pg_catalog` namespace in every PostgreSQL cluster
+/// (`PG_CATALOG_NAMESPACE`). The static catalog rows this crate ships
+/// (`pg_type.typnamespace`, `pg_proc.pronamespace`, … — see the
+/// `pg_catalog_arrow_exports` produced by `export_pg_catalog_arrow.sh`) all
+/// reference 11, so `pg_namespace`/`pg_class` must report the same OID or a
+/// client can't join a system object back to its namespace (e.g. DBeaver
+/// resolving a column's data type). See #390.
+const PG_CATALOG_NAMESPACE_OID: Oid = 11;
+
+/// Returns the fixed canonical OID for a catalog object, if it has one.
+///
+/// Some objects must keep a specific PostgreSQL-assigned OID so the static
+/// catalog rows this crate ships (`pg_catalog_arrow_exports`, produced by
+/// `export_pg_catalog_arrow.sh`) join back correctly. For example, the
+/// `pg_catalog` namespace must be OID 11 because `pg_type.typnamespace` /
+/// `pg_proc.pronamespace` reference 11. See #390.
+///
+/// Keyed by [`OidCacheKey`] so additional fixed OIDs (other namespaces,
+/// catalogs, tables, ...) can be added as new match arms. These OIDs sit below
+/// the user range (the dynamic counter starts at 16384), so they never collide
+/// with an OID handed out dynamically. Returns `None` for objects without a
+/// fixed OID, leaving them to the normal cache/counter path.
+pub(crate) fn fixed_oid(key: &OidCacheKey) -> Option<Oid> {
+    match key {
+        OidCacheKey::Schema(_, schema) if schema == "pg_catalog" => Some(PG_CATALOG_NAMESPACE_OID),
+        _ => None,
+    }
+}
+
+/// Resolve the OID for `key`, consulting each source in priority order:
+///
+/// 1. a fixed canonical OID ([`fixed_oid`]) if this object has one -- so
+///    well-known objects keep their PostgreSQL-assigned OIDs regardless of
+///    cache state or counter position;
+/// 2. the previously assigned OID in `oid_cache`, if present -- keeping OIDs
+///    stable across catalog queries;
+/// 3. otherwise a freshly allocated OID from `oid_counter`.
+///
+/// Routing every OID assignment through here guarantees [`fixed_oid`] is
+/// always consulted, including for catalogs and tables (future fixed OIDs for
+/// those kinds are just new match arms in [`fixed_oid`]).
+pub(crate) fn resolve_oid(
+    key: &OidCacheKey,
+    oid_cache: &HashMap<OidCacheKey, Oid>,
+    oid_counter: &AtomicU32,
+) -> Oid {
+    if let Some(oid) = fixed_oid(key) {
+        oid
+    } else if let Some(oid) = oid_cache.get(key) {
+        *oid
+    } else {
+        oid_counter.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 // Create custom schema provider for pg_catalog
@@ -1721,6 +1776,43 @@ mod test {
         assert!(
             n >= 1,
             "expected user table 't' to resolve via relnamespace = {nsp_oid}, got {n}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pg_catalog_namespace_keeps_fixed_oid_eleven() {
+        // Regression for #390. The static catalog rows this crate ships
+        // reference the canonical `pg_catalog` namespace OID 11 (e.g.
+        // `pg_type.typnamespace = 11`, `pg_proc.pronamespace = 11`). If
+        // `pg_namespace` assigns `pg_catalog` a generated OID instead, joins
+        // from a system object to its namespace fail -- e.g. DBeaver cannot
+        // resolve any column's data type and every column shows as unknown.
+        // `pg_catalog` must keep the fixed OID 11.
+        let ctx = ctx_with_user_table().await;
+
+        let oid = first_i32(
+            &collect(
+                &ctx,
+                "SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'pg_catalog'",
+            )
+            .await,
+        );
+        assert_eq!(oid, 11, "pg_catalog namespace must use the fixed OID 11");
+
+        // And the join a client performs: a built-in type -> its namespace.
+        let n = first_i64(
+            &collect(
+                &ctx,
+                "SELECT count(*) \
+                 FROM pg_catalog.pg_type t \
+                 JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace \
+                 WHERE t.typname = 'int4'",
+            )
+            .await,
+        );
+        assert_eq!(
+            n, 1,
+            "built-in type 'int4' must join to its pg_catalog namespace (oid 11)"
         );
     }
 
