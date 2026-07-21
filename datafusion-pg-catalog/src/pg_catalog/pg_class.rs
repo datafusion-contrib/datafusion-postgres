@@ -124,7 +124,7 @@ impl<C: CatalogInfo> PgClassTable<C> {
             let catalog_oid = if let Some(oid) = oid_cache.get(&cache_key) {
                 *oid
             } else {
-                this.oid_counter.fetch_add(1, Ordering::Relaxed)
+                super::stable_oid(&cache_key)
             };
             swap_cache.insert(cache_key, catalog_oid);
 
@@ -134,7 +134,7 @@ impl<C: CatalogInfo> PgClassTable<C> {
                     let schema_oid = if let Some(oid) = oid_cache.get(&cache_key) {
                         *oid
                     } else {
-                        this.oid_counter.fetch_add(1, Ordering::Relaxed)
+                        super::stable_oid(&cache_key)
                     };
                     swap_cache.insert(cache_key, schema_oid);
 
@@ -156,7 +156,7 @@ impl<C: CatalogInfo> PgClassTable<C> {
                             let table_oid = if let Some(oid) = oid_cache.get(&cache_key) {
                                 *oid
                             } else {
-                                this.oid_counter.fetch_add(1, Ordering::Relaxed)
+                                super::stable_oid(&cache_key)
                             };
                             swap_cache.insert(cache_key, table_oid);
 

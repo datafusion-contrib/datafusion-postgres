@@ -198,6 +198,43 @@ pub(crate) enum OidCacheKey {
     Table(String, String, String),
 }
 
+/// First OID in the user (non-reserved) space. Static/system catalog objects
+/// use the real PostgreSQL OIDs below this.
+const FIRST_USER_OID: u32 = 16384;
+
+/// Fixed OID of the `pg_catalog` namespace in every PostgreSQL cluster
+/// (`PG_CATALOG_NAMESPACE`). The static catalog rows this crate ships
+/// (`pg_type.typnamespace`, `pg_proc.pronamespace`, …) all reference 11, so
+/// `pg_namespace`/`pg_class` must report the same or clients can't join a system
+/// object to its namespace (e.g. DBeaver resolving a column's type via pg_type).
+const PG_CATALOG_NAMESPACE_OID: u32 = 11;
+
+/// Deterministic OID for a catalog object, derived from its name-based cache
+/// key. PostgreSQL OIDs are stable, and pooled clients (DBeaver, etc.) resolve
+/// an OID on one connection and reference it on another; a per-connection
+/// counter produced different OIDs each connection, so cross-connection lookups
+/// (e.g. `pg_class WHERE relnamespace = <public oid>`) returned nothing. Hashing
+/// the key makes the same object resolve to the same OID on every connection,
+/// independent of iteration order or which catalog table is queried first.
+///
+/// `DefaultHasher` uses fixed keys (unlike `RandomState`), so the result is
+/// stable across processes. Mapped into `[FIRST_USER_OID, i32::MAX]` — a
+/// positive range (OIDs are carried as `int4`) that avoids the reserved/static
+/// catalog OIDs below `FIRST_USER_OID`.
+pub(crate) fn stable_oid(key: &OidCacheKey) -> u32 {
+    // pg_catalog must keep its canonical fixed OID so the static rows that
+    // reference namespace 11 line up with pg_namespace/pg_class.
+    if let OidCacheKey::Schema(_, schema) = key {
+        if schema == "pg_catalog" {
+            return PG_CATALOG_NAMESPACE_OID;
+        }
+    }
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    FIRST_USER_OID + (hasher.finish() as u32) % (i32::MAX as u32 - FIRST_USER_OID)
+}
+
 // Create custom schema provider for pg_catalog
 #[derive(Debug)]
 pub struct PgCatalogSchemaProvider<C, P> {

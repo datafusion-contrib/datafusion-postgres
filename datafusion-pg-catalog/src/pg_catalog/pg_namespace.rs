@@ -71,7 +71,7 @@ impl<C: CatalogInfo> PgNamespaceTable<C> {
                     let schema_oid = if let Some(oid) = oid_cache.get(&cache_key) {
                         *oid
                     } else {
-                        this.oid_counter.fetch_add(1, Ordering::Relaxed)
+                        super::stable_oid(&cache_key)
                     };
                     schema_oid_cache.insert(cache_key, schema_oid);
 
