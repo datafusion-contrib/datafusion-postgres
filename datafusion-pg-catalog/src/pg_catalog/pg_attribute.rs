@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
 use datafusion::arrow::array::{
     ArrayRef, BooleanArray, Int16Array, Int32Array, RecordBatch, StringArray,
@@ -15,8 +15,8 @@ use tokio::sync::RwLock;
 
 use crate::pg_catalog::catalog_info::CatalogInfo;
 
-use super::OidCacheKey;
 use super::oid_field;
+use super::{OidCacheKey, resolve_oid};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PgAttributeTable<C> {
@@ -127,11 +127,7 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
                                 schema_name.clone(),
                                 table_name.clone(),
                             );
-                            let table_oid = if let Some(oid) = oid_cache.get(&cache_key) {
-                                *oid
-                            } else {
-                                this.oid_counter.fetch_add(1, Ordering::Relaxed)
-                            };
+                            let table_oid = resolve_oid(&cache_key, &oid_cache, &this.oid_counter);
                             table_oid_cache.insert(cache_key, table_oid);
 
                             if let Some(table_schema) = this

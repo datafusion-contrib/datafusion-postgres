@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
 use datafusion::arrow::array::{
     ArrayRef, BooleanArray, Int32Array, ListArray, RecordBatch, StringArray,
@@ -15,7 +15,7 @@ use tokio::sync::RwLock;
 
 use crate::pg_catalog::catalog_info::CatalogInfo;
 
-use super::OidCacheKey;
+use super::{OidCacheKey, resolve_oid};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PgDatabaseTable<C> {
@@ -94,11 +94,7 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
         // Add a record for each catalog (treating catalogs as "databases")
         for catalog_name in this.catalog_list.catalog_names().await? {
             let cache_key = OidCacheKey::Catalog(catalog_name.clone());
-            let catalog_oid = if let Some(oid) = oid_cache.get(&cache_key) {
-                *oid
-            } else {
-                this.oid_counter.fetch_add(1, Ordering::Relaxed)
-            };
+            let catalog_oid = resolve_oid(&cache_key, &oid_cache, &this.oid_counter);
             catalog_oid_cache.insert(cache_key, catalog_oid);
 
             oids.push(catalog_oid as i32);
@@ -125,11 +121,7 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
         let default_datname = "postgres".to_string();
         if !datnames.contains(&default_datname) {
             let cache_key = OidCacheKey::Catalog(default_datname.clone());
-            let catalog_oid = if let Some(oid) = oid_cache.get(&cache_key) {
-                *oid
-            } else {
-                this.oid_counter.fetch_add(1, Ordering::Relaxed)
-            };
+            let catalog_oid = resolve_oid(&cache_key, &oid_cache, &this.oid_counter);
             catalog_oid_cache.insert(cache_key, catalog_oid);
 
             oids.push(catalog_oid as i32);
