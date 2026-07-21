@@ -1595,6 +1595,135 @@ mod test {
         assert_eq!(typoutput, "textout");
     }
 
+    // --- OID stability regressions for #389 -------------------------------------
+    //
+    // The dynamic catalog tables (`pg_namespace`, `pg_class`, `pg_attribute`,
+    // `pg_database`) share one OID counter + cache, and each builder reconciles
+    // that cache against the live catalog. `pg_attribute` used to replace the
+    // whole cache with table-only keys (`*oid_cache = swap_cache`), which
+    // silently deleted every `Catalog`/`Schema` OID. The next `pg_namespace` /
+    // `pg_class` query then re-allocated the schema a *different* OID, so an
+    // OID a pooled client (DBeaver, JDBC) resolved earlier no longer matched —
+    // e.g. `pg_class WHERE relnamespace = <oid>` returned nothing.
+    //
+    // These tests pin the invariant: a schema's OID is stable across catalog
+    // queries, and `pg_class.relnamespace` joins back to the `pg_namespace.oid`
+    // a client resolved earlier.
+
+    /// A session with a single user table `datafusion.public.t` and pg_catalog
+    /// installed, matching how the server sets up a connection.
+    async fn ctx_with_user_table() -> SessionContext {
+        use crate::pg_catalog::context::EmptyContextProvider;
+        use datafusion::prelude::{SessionConfig, SessionContext};
+
+        let config = SessionConfig::new().with_default_catalog_and_schema("datafusion", "public");
+        let ctx = SessionContext::new_with_config(config);
+        ctx.sql("CREATE TABLE t (a INT, b TEXT)")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        setup_pg_catalog(&ctx, "datafusion", EmptyContextProvider).unwrap();
+        ctx
+    }
+
+    async fn collect(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
+        ctx.sql(sql).await.unwrap().collect().await.unwrap()
+    }
+
+    /// First value of the first column of the first batch, as `int4`.
+    fn first_i32(batches: &[RecordBatch]) -> i32 {
+        use datafusion::arrow::array::Int32Array;
+        batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .value(0)
+    }
+
+    /// First value of the first column of the first batch, as `int8`
+    /// (DataFusion's `count(*)` type).
+    fn first_i64(batches: &[RecordBatch]) -> i64 {
+        use datafusion::arrow::array::Int64Array;
+        batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0)
+    }
+
+    #[tokio::test]
+    async fn schema_oid_is_stable_across_pg_attribute_query() {
+        // Regression for #389. `pg_attribute` must not evict schema OIDs from
+        // the shared cache; otherwise the same schema resolves to a different
+        // OID before/after a column-metadata query. A schema's OID must be
+        // stable across catalog-table queries.
+        let ctx = ctx_with_user_table().await;
+
+        let oid_before = first_i32(
+            &collect(
+                &ctx,
+                "SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'public'",
+            )
+            .await,
+        );
+
+        // Force the (formerly) cache-evicting builder to run.
+        let _ = collect(&ctx, "SELECT count(*) FROM pg_catalog.pg_attribute").await;
+
+        let oid_after = first_i32(
+            &collect(
+                &ctx,
+                "SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'public'",
+            )
+            .await,
+        );
+
+        assert_eq!(
+            oid_before, oid_after,
+            "OID of the 'public' schema must not change after querying pg_attribute"
+        );
+    }
+
+    #[tokio::test]
+    async fn pg_class_resolves_table_via_namespace_oid() {
+        // Regression for #389 — the concrete user-facing breakage. A client
+        // resolves a schema OID from pg_namespace, then filters pg_class by
+        // that OID (`WHERE relnamespace = <oid>`). After pg_attribute ran, the
+        // schema OID used to drift and the filter matched nothing, so no tables
+        // were listed (the symptom DBeaver users report).
+        let ctx = ctx_with_user_table().await;
+
+        let nsp_oid = first_i32(
+            &collect(
+                &ctx,
+                "SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'public'",
+            )
+            .await,
+        );
+
+        let _ = collect(&ctx, "SELECT count(*) FROM pg_catalog.pg_attribute").await;
+
+        let n = first_i64(
+            &collect(
+                &ctx,
+                &format!(
+                    "SELECT count(*) FROM pg_catalog.pg_class \
+                     WHERE relnamespace = {nsp_oid} AND relname = 't'"
+                ),
+            )
+            .await,
+        );
+
+        assert!(
+            n >= 1,
+            "expected user table 't' to resolve via relnamespace = {nsp_oid}, got {n}"
+        );
+    }
+
     #[test]
     fn test_load_arrow_data() {
         let table = ArrowTable::from_ipc_data(

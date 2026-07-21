@@ -102,9 +102,15 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
         let mut attmissingvals: Vec<Option<String>> = Vec::new();
 
         let mut oid_cache = this.oid_cache.write().await;
-        // Every time when call pg_catalog we generate a new cache and drop the
-        // original one in case that schemas or tables were dropped.
-        let mut swap_cache = HashMap::new();
+        // Collect the table OIDs assigned this run into a local map, then
+        // reconcile the shared cache below. pg_attribute enumerates only
+        // tables, so it must NOT discard `Catalog`/`Schema` entries it didn't
+        // visit. The previous `*oid_cache = swap_cache` replaced the whole
+        // cache with table-only keys, silently deleting every schema/catalog
+        // OID; the next pg_namespace/pg_class query then re-allocated the
+        // schema a *different* OID, breaking OID-based joins (e.g. DBeaver's
+        // `pg_class WHERE relnamespace = <oid>`). See #389.
+        let mut table_oid_cache = HashMap::new();
 
         for catalog_name in this.catalog_list.catalog_names().await? {
             if let Some(schema_names) = this.catalog_list.schema_names(&catalog_name).await? {
@@ -126,7 +132,7 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
                             } else {
                                 this.oid_counter.fetch_add(1, Ordering::Relaxed)
                             };
-                            swap_cache.insert(cache_key, table_oid);
+                            table_oid_cache.insert(cache_key, table_oid);
 
                             if let Some(table_schema) = this
                                 .catalog_list
@@ -174,7 +180,16 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
             }
         }
 
-        *oid_cache = swap_cache;
+        // Reconcile: drop only stale `Table` entries (tables that no longer
+        // exist); leave `Catalog` and `Schema` entries untouched, then refresh
+        // the live table OIDs. This mirrors pg_namespace's surgical retain
+        // rather than clobbering keys this builder never enumerated.
+        oid_cache.retain(|key, _| match key {
+            OidCacheKey::Catalog(..) => true,
+            OidCacheKey::Schema(..) => true,
+            OidCacheKey::Table(..) => table_oid_cache.contains_key(key),
+        });
+        oid_cache.extend(table_oid_cache);
 
         // Create Arrow arrays from the collected data
         let arrays: Vec<ArrayRef> = vec![
