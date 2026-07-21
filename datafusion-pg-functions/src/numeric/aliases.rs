@@ -41,7 +41,6 @@ pub fn create_sign_udf() -> ScalarUDF {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::arrow::array::Array;
     use datafusion::arrow::array::AsArray;
     use datafusion::arrow::datatypes::Float64Type;
     use datafusion::prelude::SessionContext;
@@ -56,7 +55,7 @@ mod tests {
     #[tokio::test]
     async fn ceiling_resolves_and_matches_ceil() {
         let ctx = SessionContext::new();
-        ctx.register_udf(create_ceiling_udf().into());
+        ctx.register_udf(create_ceiling_udf());
 
         for x in ["2.4", "-2.4", "0.0", "5.0"] {
             assert_eq!(
@@ -70,7 +69,7 @@ mod tests {
     #[tokio::test]
     async fn sign_resolves_and_matches_signum() {
         let ctx = SessionContext::new();
-        ctx.register_udf(create_sign_udf().into());
+        ctx.register_udf(create_sign_udf());
 
         for x in ["-7", "0", "3.5", "-3.5"] {
             assert_eq!(

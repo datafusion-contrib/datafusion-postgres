@@ -91,5 +91,13 @@ libm = { version = "0.2", optional = true }
 rand = { version = "0.9", optional = true }
 
 [dev-dependencies]
+async-trait = "0.1"
 datafusion = { workspace = true, features = ["nested_expressions"] }
-tokio = { workspace = true, features = ["macros", "rt"] }
+env_logger = "0.11"
+sqllogictest = "0.28"
+tokio = { workspace = true, features = ["macros", "rt", "fs"] }
+
+[[test]]
+name = "sqllogictest"
+path = "tests/sqllogictest.rs"
+required-features = ["math"]

@@ -214,7 +214,7 @@ mod tests {
     #[tokio::test]
     async fn mod_matches_postgres_examples() {
         let ctx = SessionContext::new();
-        ctx.register_udf(create_mod_udf().into());
+        ctx.register_udf(create_mod_udf());
 
         // From the Postgres docs:
         //   mod(9, 4)   = 1
@@ -230,7 +230,7 @@ mod tests {
     #[tokio::test]
     async fn mod_float_uses_trunc_quotient() {
         let ctx = SessionContext::new();
-        ctx.register_udf(create_mod_udf().into());
+        ctx.register_udf(create_mod_udf());
 
         // mod(7.5, 2.5) = 7.5 - 2.5 * trunc(7.5 / 2.5) = 7.5 - 2.5 * 3 = 0
         let got = run_f64(&ctx, "SELECT mod(7.5, 2.5)").await.unwrap();
@@ -248,7 +248,7 @@ mod tests {
     #[tokio::test]
     async fn mod_by_zero_returns_null() {
         let ctx = SessionContext::new();
-        ctx.register_udf(create_mod_udf().into());
+        ctx.register_udf(create_mod_udf());
         assert_eq!(run_i64(&ctx, "SELECT mod(9, 0)").await, None);
     }
 }
