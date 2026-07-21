@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{
@@ -224,10 +223,10 @@ const PG_CATALOG_NAMESPACE_OID: u32 = 11;
 pub(crate) fn stable_oid(key: &OidCacheKey) -> u32 {
     // pg_catalog must keep its canonical fixed OID so the static rows that
     // reference namespace 11 line up with pg_namespace/pg_class.
-    if let OidCacheKey::Schema(_, schema) = key {
-        if schema == "pg_catalog" {
-            return PG_CATALOG_NAMESPACE_OID;
-        }
+    if let OidCacheKey::Schema(_, schema) = key
+        && schema == "pg_catalog"
+    {
+        return PG_CATALOG_NAMESPACE_OID;
     }
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -239,7 +238,6 @@ pub(crate) fn stable_oid(key: &OidCacheKey) -> u32 {
 #[derive(Debug)]
 pub struct PgCatalogSchemaProvider<C, P> {
     catalog_list: C,
-    oid_counter: Arc<AtomicU32>,
     oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
     static_tables: Arc<PgCatalogStaticTables>,
     context_provider: P,
@@ -273,7 +271,6 @@ impl<C: CatalogInfo, P: PgCatalogContextProvider> PgCatalogSchemaProvider<C, P> 
     ) -> Result<PgCatalogSchemaProvider<C, P>> {
         Ok(Self {
             catalog_list,
-            oid_counter: Arc::new(AtomicU32::new(16384)),
             oid_cache: Arc::new(RwLock::new(HashMap::new())),
             static_tables,
             context_provider,
@@ -411,7 +408,6 @@ impl<C: CatalogInfo, P: PgCatalogContextProvider> PgCatalogSchemaProvider<C, P> 
             PG_CATALOG_TABLE_PG_ATTRIBUTE => {
                 let table = Arc::new(pg_attribute::PgAttributeTable::new(
                     self.catalog_list.clone(),
-                    self.oid_counter.clone(),
                     self.oid_cache.clone(),
                 ));
                 Ok(Some(PgCatalogTable::Dynamic(table)))
@@ -419,7 +415,6 @@ impl<C: CatalogInfo, P: PgCatalogContextProvider> PgCatalogSchemaProvider<C, P> 
             PG_CATALOG_TABLE_PG_CLASS => {
                 let table = Arc::new(pg_class::PgClassTable::new(
                     self.catalog_list.clone(),
-                    self.oid_counter.clone(),
                     self.oid_cache.clone(),
                 ));
                 Ok(Some(PgCatalogTable::Dynamic(table)))
@@ -427,7 +422,6 @@ impl<C: CatalogInfo, P: PgCatalogContextProvider> PgCatalogSchemaProvider<C, P> 
             PG_CATALOG_TABLE_PG_DATABASE => {
                 let table = Arc::new(pg_database::PgDatabaseTable::new(
                     self.catalog_list.clone(),
-                    self.oid_counter.clone(),
                     self.oid_cache.clone(),
                 ));
                 Ok(Some(PgCatalogTable::Dynamic(table)))
@@ -435,7 +429,6 @@ impl<C: CatalogInfo, P: PgCatalogContextProvider> PgCatalogSchemaProvider<C, P> 
             PG_CATALOG_TABLE_PG_NAMESPACE => {
                 let table = Arc::new(pg_namespace::PgNamespaceTable::new(
                     self.catalog_list.clone(),
-                    self.oid_counter.clone(),
                     self.oid_cache.clone(),
                 ));
                 Ok(Some(PgCatalogTable::Dynamic(table)))

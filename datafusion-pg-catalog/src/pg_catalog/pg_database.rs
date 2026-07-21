@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use datafusion::arrow::array::{
     ArrayRef, BooleanArray, Int32Array, ListArray, RecordBatch, StringArray,
@@ -21,16 +20,11 @@ use super::OidCacheKey;
 pub(crate) struct PgDatabaseTable<C> {
     schema: SchemaRef,
     catalog_list: C,
-    oid_counter: Arc<AtomicU32>,
     oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
 }
 
 impl<C: CatalogInfo> PgDatabaseTable<C> {
-    pub(crate) fn new(
-        catalog_list: C,
-        oid_counter: Arc<AtomicU32>,
-        oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>,
-    ) -> Self {
+    pub(crate) fn new(catalog_list: C, oid_cache: Arc<RwLock<HashMap<OidCacheKey, Oid>>>) -> Self {
         // Define the schema for pg_database
         // This matches PostgreSQL's pg_database table columns
         let schema = Arc::new(Schema::new(vec![
@@ -60,7 +54,6 @@ impl<C: CatalogInfo> PgDatabaseTable<C> {
         Self {
             schema,
             catalog_list,
-            oid_counter,
             oid_cache,
         }
     }
