@@ -909,7 +909,7 @@ const REG_CAST_SPECS: &[RegCastSpec] = &[
     // regclass: relation name -> pg_class.oid
     RegCastSpec {
         type_name: "regclass",
-        query: "SELECT oid FROM pg_catalog.pg_class WHERE relname = $1",
+        query: "SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) WHERE array_length(parts, 1) IN (1, 2) AND ((array_length(parts, 1) = 1 AND n.nspname = current_schema() AND c.relname = parts[1]) OR (array_length(parts, 1) = 2 AND n.nspname = parts[1] AND c.relname = parts[2]))",
     },
     // regnamespace: schema name -> pg_namespace.oid
     RegCastSpec {
@@ -1629,7 +1629,7 @@ mod tests {
         assert_rewrite!(
             &rules,
             "SELECT 'pg_class'::regclass",
-            "SELECT (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pg_class')"
+            "SELECT (SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid CROSS JOIN (SELECT parse_ident('pg_class'::TEXT) AS parts) WHERE array_length(parts, 1) IN (1, 2) AND ((array_length(parts, 1) = 1 AND n.nspname = current_schema() AND c.relname = parts[1]) OR (array_length(parts, 1) = 2 AND n.nspname = parts[1] AND c.relname = parts[2])))"
         );
         assert_rewrite!(
             &rules,
@@ -1646,7 +1646,67 @@ mod tests {
         assert_rewrite!(
             &rules,
             "SELECT 1 WHERE classoid = 'pg_class'::regclass",
-            "SELECT 1 WHERE classoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pg_class')"
+            "SELECT 1 WHERE classoid = (SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid CROSS JOIN (SELECT parse_ident('pg_class'::TEXT) AS parts) WHERE array_length(parts, 1) IN (1, 2) AND ((array_length(parts, 1) = 1 AND n.nspname = current_schema() AND c.relname = parts[1]) OR (array_length(parts, 1) = 2 AND n.nspname = parts[1] AND c.relname = parts[2])))"
+        );
+    }
+
+    #[test]
+    fn test_rewrite_regclass_uses_parse_ident_schema_aware_lookup() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RewriteRegCastToSubquery::new())];
+
+        let lookup = "SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid CROSS JOIN (SELECT parse_ident($1::TEXT) AS parts) WHERE array_length(parts, 1) IN (1, 2) AND ((array_length(parts, 1) = 1 AND n.nspname = current_schema() AND c.relname = parts[1]) OR (array_length(parts, 1) = 2 AND n.nspname = parts[1] AND c.relname = parts[2]))";
+
+        // A bound portal parameter remains a parameter through the parse_ident
+        // lookup and outer oid cast.
+        assert_rewrite!(
+            &rules,
+            "SELECT $1::regclass::oid",
+            format!("SELECT ({lookup})::oid")
+        );
+        // The pg_catalog-qualified spelling normalizes to the same template.
+        assert_rewrite!(
+            &rules,
+            "SELECT $1::pg_catalog.regclass",
+            format!("SELECT ({lookup})")
+        );
+        // parse_ident preserves quoted, case-sensitive unqualified names.
+        assert_rewrite!(
+            &rules,
+            "SELECT '\"Mixed Case\"'::regclass",
+            format!("SELECT ({})", lookup.replace("$1", "'\"Mixed Case\"'"))
+        );
+        // Two explicit quoted components select the supplied schema and relation.
+        assert_rewrite!(
+            &rules,
+            "SELECT '\"Mixed Schema\".\"Mixed Table\"'::regclass",
+            format!(
+                "SELECT ({})",
+                lookup.replace("$1", "'\"Mixed Schema\".\"Mixed Table\"'")
+            )
+        );
+        // Invalid and over-qualified names are guarded by the component count.
+        assert_rewrite!(
+            &rules,
+            "SELECT 'too.many.parts'::regclass",
+            format!("SELECT ({})", lookup.replace("$1", "'too.many.parts'"))
+        );
+        assert_rewrite!(
+            &rules,
+            "SELECT 'too..many'::regclass",
+            format!("SELECT ({})", lookup.replace("$1", "'too..many'"))
+        );
+    }
+
+    #[test]
+    fn test_rewrite_regclass_leaves_direct_relname_predicate_unchanged() {
+        let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+            vec![Arc::new(RewriteRegCastToSubquery::new())];
+
+        assert_rewrite!(
+            &rules,
+            "SELECT oid FROM pg_catalog.pg_class WHERE relname = $1",
+            "SELECT oid FROM pg_catalog.pg_class WHERE relname = $1"
         );
     }
 
