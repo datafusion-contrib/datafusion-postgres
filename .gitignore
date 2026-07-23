@@ -4,3 +4,9 @@
 .vscode
 .aider*
 /tests-integration/test_env
+
+# datafusion-pg-functions: functions.md is hand-maintained. The generator
+# script under datafusion-pg-functions/gen/ is a one-shot bootstrap tool
+# (run it once to regenerate functions.md from PostgreSQL source); it is
+# not part of the shipped crate.
+/datafusion-pg-functions/gen/

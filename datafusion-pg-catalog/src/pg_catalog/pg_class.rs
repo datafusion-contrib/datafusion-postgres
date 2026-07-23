@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
 use datafusion::arrow::array::{
     ArrayRef, BooleanArray, Float64Array, Int16Array, Int32Array, RecordBatch, StringArray,
@@ -18,7 +18,7 @@ use tokio::sync::RwLock;
 
 use crate::pg_catalog::catalog_info::{CatalogInfo, table_type_to_string};
 
-use super::OidCacheKey;
+use super::{OidCacheKey, resolve_oid};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PgClassTable<C> {
@@ -121,21 +121,13 @@ impl<C: CatalogInfo> PgClassTable<C> {
         // Iterate through all catalogs and schemas
         for catalog_name in this.catalog_list.catalog_names().await? {
             let cache_key = OidCacheKey::Catalog(catalog_name.clone());
-            let catalog_oid = if let Some(oid) = oid_cache.get(&cache_key) {
-                *oid
-            } else {
-                this.oid_counter.fetch_add(1, Ordering::Relaxed)
-            };
+            let catalog_oid = resolve_oid(&cache_key, &oid_cache, &this.oid_counter);
             swap_cache.insert(cache_key, catalog_oid);
 
             if let Some(schema_names) = this.catalog_list.schema_names(&catalog_name).await? {
                 for schema_name in schema_names {
                     let cache_key = OidCacheKey::Schema(catalog_name.clone(), schema_name.clone());
-                    let schema_oid = if let Some(oid) = oid_cache.get(&cache_key) {
-                        *oid
-                    } else {
-                        this.oid_counter.fetch_add(1, Ordering::Relaxed)
-                    };
+                    let schema_oid = resolve_oid(&cache_key, &oid_cache, &this.oid_counter);
                     swap_cache.insert(cache_key, schema_oid);
 
                     // Add an entry for the schema itself (as a namespace)
@@ -153,11 +145,7 @@ impl<C: CatalogInfo> PgClassTable<C> {
                                 schema_name.clone(),
                                 table_name.clone(),
                             );
-                            let table_oid = if let Some(oid) = oid_cache.get(&cache_key) {
-                                *oid
-                            } else {
-                                this.oid_counter.fetch_add(1, Ordering::Relaxed)
-                            };
+                            let table_oid = resolve_oid(&cache_key, &oid_cache, &this.oid_counter);
                             swap_cache.insert(cache_key, table_oid);
 
                             if let Some(table_schema) = this

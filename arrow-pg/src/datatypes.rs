@@ -124,7 +124,54 @@ pub fn into_pg_type(arrow_type: &DataType) -> PgWireResult<Type> {
     Ok(datatype)
 }
 
+/// Field metadata key marking an `Int32` Arrow field as a Postgres oid /
+/// oid-alias column.
+///
+/// This is a **cross-crate contract**: the lower-level `arrow-pg` crate does
+/// not depend on `datafusion-pg-catalog`, which owns the canonical
+/// `OID_ALIAS_KEY` definition and the list of recognized alias names. The
+/// value names the alias kind (`oid`, `regclass`, `regtype`, ...) in
+/// lowercase and is matched case-sensitively. Unknown or missing metadata
+/// falls back to the ordinary physical Arrow type mapping (`Int32` -> `INT4`),
+/// so untagged columns are unaffected.
+pub const PG_OID_ALIAS_KEY: &str = "pg.oid_alias";
+
+/// Map a field's [`PG_OID_ALIAS_KEY`] metadata, when present and recognized, to
+/// the matching Postgres alias [`Type`] (e.g. `regtype` -> OID 2206).
+///
+/// Returns `None` when the metadata is absent or names an unrecognized alias,
+/// so the caller can fall back to the physical-type mapping (`Int32` ->
+/// `INT4`).
+fn pg_alias_type(field: &Field) -> Option<Type> {
+    let kind = field.metadata().get(PG_OID_ALIAS_KEY)?;
+    Some(match kind.as_str() {
+        "oid" => Type::OID,
+        "regproc" => Type::REGPROC,
+        "regprocedure" => Type::REGPROCEDURE,
+        "regoper" => Type::REGOPER,
+        "regoperator" => Type::REGOPERATOR,
+        "regclass" => Type::REGCLASS,
+        "regtype" => Type::REGTYPE,
+        "regnamespace" => Type::REGNAMESPACE,
+        "regrole" => Type::REGROLE,
+        "regconfig" => Type::REGCONFIG,
+        "regdictionary" => Type::REGDICTIONARY,
+        "regcollation" => Type::REGCOLLATION,
+        _ => return None,
+    })
+}
+
 pub fn field_into_pg_type(field: &Arc<Field>) -> PgWireResult<Type> {
+    // A `pg.oid_alias`-tagged Int32 field is reported as its Postgres alias
+    // type (regtype -> OID 2206, regclass -> OID 2205, ...) instead of the
+    // physical INT4 (OID 23), so RowDescription matches what a
+    // Postgres-compatible client expects. The metadata is the semantic source
+    // of truth; unknown/missing metadata falls through to the physical-type
+    // mapping below.
+    if let Some(alias_type) = pg_alias_type(field) {
+        return Ok(alias_type);
+    }
+
     let arrow_type = field.data_type();
 
     match field.extension_type_name() {
@@ -195,11 +242,123 @@ pub fn encode_recordbatch(
 mod tests {
     use super::*;
 
+    fn oid_alias_field(kind: &str) -> Arc<Field> {
+        use std::collections::HashMap;
+        Arc::new(
+            Field::new("c", DataType::Int32, false).with_metadata(HashMap::from([(
+                PG_OID_ALIAS_KEY.to_string(),
+                kind.to_string(),
+            )])),
+        )
+    }
+
     #[test]
     fn null_list_is_text_array() {
         // Align with PostgreSQL: `ARRAY[NULL]` has no element type
         // information and is reported as `text[]`.
         let ty = DataType::List(Arc::new(Field::new_list_field(DataType::Null, true)));
         assert_eq!(into_pg_type(&ty).unwrap(), Type::TEXT_ARRAY);
+    }
+
+    #[test]
+    fn oid_alias_metadata_maps_to_alias_pg_type() {
+        // The kinds enumerated in issue #384:
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("oid")).unwrap(),
+            Type::OID
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regproc")).unwrap(),
+            Type::REGPROC
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regprocedure")).unwrap(),
+            Type::REGPROCEDURE
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regclass")).unwrap(),
+            Type::REGCLASS
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regtype")).unwrap(),
+            Type::REGTYPE
+        );
+
+        // The remaining recognized oid-alias kinds:
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regoper")).unwrap(),
+            Type::REGOPER
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regoperator")).unwrap(),
+            Type::REGOPERATOR
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regnamespace")).unwrap(),
+            Type::REGNAMESPACE
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regrole")).unwrap(),
+            Type::REGROLE
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regconfig")).unwrap(),
+            Type::REGCONFIG
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regdictionary")).unwrap(),
+            Type::REGDICTIONARY
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regcollation")).unwrap(),
+            Type::REGCOLLATION
+        );
+    }
+
+    #[test]
+    fn oid_alias_metadata_reports_correct_oid() {
+        // Issue #384: clients key off the RowDescription type OID, not just the
+        // Type variant. Pin the OIDs called out explicitly in the issue.
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regtype"))
+                .unwrap()
+                .oid(),
+            2206
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regclass"))
+                .unwrap()
+                .oid(),
+            2205
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regprocedure"))
+                .unwrap()
+                .oid(),
+            2202
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("regproc"))
+                .unwrap()
+                .oid(),
+            24
+        );
+        assert_eq!(
+            field_into_pg_type(&oid_alias_field("oid")).unwrap().oid(),
+            26
+        );
+    }
+
+    #[test]
+    fn unknown_oid_alias_metadata_falls_back_to_int4() {
+        let field = oid_alias_field("not_a_real_alias");
+        assert_eq!(field_into_pg_type(&field).unwrap(), Type::INT4);
+    }
+
+    #[test]
+    fn missing_oid_alias_metadata_is_int4() {
+        // An ordinary Int32 column with no pg.oid_alias metadata is unchanged.
+        let field = Arc::new(Field::new("c", DataType::Int32, false));
+        assert_eq!(field_into_pg_type(&field).unwrap(), Type::INT4);
     }
 }
