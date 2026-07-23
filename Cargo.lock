@@ -1580,7 +1580,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-pg-catalog"
-version = "0.18.2"
+version = "0.18.3"
 dependencies = [
  "arrow-pg",
  "async-trait",
