@@ -10,7 +10,7 @@ use datafusion::logical_expr::ScalarUDF;
 /// `registry`.
 ///
 /// Returns the number of UDFs that were registered.
-pub fn register(_registry: &dyn FunctionRegistry) -> usize {
+pub fn register(_registry: &mut dyn FunctionRegistry) -> usize {
     let _udfs: Vec<ScalarUDF> = vec![];
     // registry.register_udf(...);
     0

@@ -11,9 +11,93 @@ repository.workspace = true
 documentation.workspace = true
 rust-version.workspace = true
 
+[features]
+# By default only the `math` category is enabled. Opt into additional
+# PostgreSQL function categories by enabling the corresponding feature
+# (e.g. `datafusion-pg-functions = { version = "0.1", default-features = false, features = ["math", "string"] }`),
+# or pull in everything with the `full` meta-feature.
+default = ["math"]
+full = [
+    "math",
+    "string",
+    "binary",
+    "bitstring",
+    "conditional",
+    "datetime",
+    "crypto",
+    "array",
+    "range",
+    "json",
+    "network",
+    "text_search",
+    "uuid",
+    "xml",
+    "system",
+    "format",
+    "geometric",
+    "enum_type",
+    "sequence",
+    "row",
+]
+
+# One feature per PostgreSQL function category. The feature name matches
+# the PostgreSQL manual section title where it differs from the module
+# directory name (notably `math` -> `src/numeric/`).
+#
+# Mathematical Functions and Operators
+math = ["dep:libm", "dep:rand"]
+# String Functions and Operators
+string = []
+# Binary String Functions and Operators
+binary = []
+# Bit String Functions and Operators
+bitstring = []
+# Conditional Expressions (and comparison / logical)
+conditional = []
+# Date/Time Functions and Operators
+datetime = []
+# Hash / digest helpers (pgcrypto-style)
+crypto = []
+# Array Functions and Operators
+array = []
+# Range / Multirange Functions and Operators
+range = []
+# JSON / JSONB Functions and Operators
+json = []
+# Network Address Functions and Operators
+network = []
+# Text Search Functions
+text_search = []
+# UUID Functions
+uuid = []
+# XML Functions
+xml = []
+# System Information / Administration Functions
+system = []
+# Data Type Formatting Functions
+format = []
+# Geometric Functions and Operators
+geometric = []
+# Enum Support Functions
+enum_type = []
+# Sequence Manipulation Functions
+sequence = []
+# Row / Record Functions
+row = []
+
 [dependencies]
 datafusion = { workspace = true, features = ["nested_expressions"] }
+libm = { version = "0.2", optional = true }
+rand = { version = "0.9", optional = true }
 
 [dev-dependencies]
+async-trait = "0.1"
 datafusion = { workspace = true, features = ["nested_expressions"] }
-tokio = { workspace = true, features = ["macros", "rt"] }
+env_logger = "0.11"
+sqllogictest = "0.28"
+tokio = { workspace = true, features = ["macros", "rt", "fs"] }
+
+[[test]]
+name = "sqllogictest"
+path = "tests/sqllogictest.rs"
+required-features = ["math"]

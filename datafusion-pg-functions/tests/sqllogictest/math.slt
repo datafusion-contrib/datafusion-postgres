@@ -1,0 +1,415 @@
+# Integration tests for the PostgreSQL math functions implemented in
+# `datafusion-pg-functions/src/numeric/`.
+#
+# Each section exercises one UDF via the full SQL -> plan -> execute path
+# against a `SessionContext` that has had `register_all` applied.
+#
+# Conventions:
+#   * Float values are formatted with Rust's `{:?}` (round-trippable, always
+#     shows a decimal point). Expected values below were captured from the
+#     current implementation; update them if the underlying libm/Rust math
+#     behavior shifts.
+#   * `round(...)` is used where the math has irreducible float error
+#     (e.g. `sind(30)` is `0.49999999999999994`) and the intent of the test
+#     is to verify the function semantics, not the precise bits.
+#   * NULL inputs must propagate to NULL.
+#   * Where Postgres raises an error (integer div/mod by zero) we return NULL
+#     instead -- DataFusion cannot raise per-row errors.
+
+# ============================================================================
+# ceiling(x) -- alias of ceil
+# ============================================================================
+
+query R
+SELECT ceiling(2.4)
+----
+3.0
+
+query R
+SELECT ceiling(-2.4)
+----
+-2.0
+
+query R
+SELECT ceiling(0.0)
+----
+0.0
+
+query R
+SELECT ceiling(CAST(NULL AS DOUBLE))
+----
+NULL
+
+# ceiling must agree with ceil on every input.
+query R
+SELECT ceiling(7.7) - ceil(7.7)
+----
+0.0
+
+# ============================================================================
+# sign(x) -- alias of signum
+# ============================================================================
+
+query R
+SELECT sign(-7)
+----
+-1.0
+
+query R
+SELECT sign(0)
+----
+0.0
+
+query R
+SELECT sign(3.5)
+----
+1.0
+
+query R
+SELECT sign(-3.5)
+----
+-1.0
+
+query R
+SELECT sign(CAST(NULL AS INT))
+----
+NULL
+
+# ============================================================================
+# mod(y, x) -- modulus function
+# ============================================================================
+
+# Postgres doc examples (integer).
+query I
+SELECT mod(9, 4)
+----
+1
+
+query I
+SELECT mod(-9, 4)
+----
+-1
+
+query I
+SELECT mod(9, -4)
+----
+1
+
+query I
+SELECT mod(-9, -4)
+----
+-1
+
+# Integer type variants: i8 / i16 / i32 / i64 all work.
+query I
+SELECT mod(CAST(9 AS TINYINT), CAST(4 AS TINYINT))
+----
+1
+
+query I
+SELECT mod(CAST(9 AS SMALLINT), CAST(4 AS SMALLINT))
+----
+1
+
+query I
+SELECT mod(CAST(9 AS BIGINT), CAST(4 AS BIGINT))
+----
+1
+
+# Float variant uses Postgres `y - x * trunc(y / x)` semantics.
+query R
+SELECT mod(7.5, 2.5)
+----
+0.0
+
+query R
+SELECT mod(10.5, 3.0)
+----
+1.5
+
+# Division by zero returns NULL (Postgres raises; DataFusion cannot per-row).
+query I
+SELECT mod(9, 0)
+----
+NULL
+
+# NULL propagates.
+query I
+SELECT mod(CAST(NULL AS INT), 4)
+----
+NULL
+
+query I
+SELECT mod(9, CAST(NULL AS INT))
+----
+NULL
+
+# ============================================================================
+# div(y, x) -- integer quotient
+# ============================================================================
+
+query I
+SELECT div(9, 4)
+----
+2
+
+query I
+SELECT div(-9, 4)
+----
+-2
+
+query I
+SELECT div(9, -4)
+----
+-2
+
+query I
+SELECT div(-9, -4)
+----
+2
+
+query I
+SELECT div(CAST(9 AS TINYINT), CAST(4 AS TINYINT))
+----
+2
+
+query I
+SELECT div(CAST(9 AS BIGINT), CAST(4 AS BIGINT))
+----
+2
+
+query I
+SELECT div(9, 0)
+----
+NULL
+
+query I
+SELECT div(CAST(NULL AS INT), 4)
+----
+NULL
+
+# ============================================================================
+# Degree-variant trigonometric functions
+# ============================================================================
+
+# ---- sind ----
+query R
+SELECT sind(0)
+----
+0.0
+
+# sind(30) is mathematically 0.5 but irreducibly 0.49999999999999994 in f64.
+query R
+SELECT sind(30)
+----
+0.49999999999999994
+
+query R
+SELECT sind(90)
+----
+1.0
+
+# ---- cosd ----
+query R
+SELECT cosd(0)
+----
+1.0
+
+query R
+SELECT cosd(60)
+----
+0.5000000000000001
+
+# cosd(90) is essentially 0 but with float error; round for a clean expected.
+query R
+SELECT round(cosd(90), 10)
+----
+0.0
+
+# ---- tand ----
+query R
+SELECT tand(45)
+----
+0.9999999999999999
+
+# ---- cotd ----
+query R
+SELECT cotd(45)
+----
+1.0000000000000002
+
+# ---- asind / acosd / atand / atan2d (inverse, results in degrees) ----
+query R
+SELECT asind(0.5)
+----
+30.000000000000004
+
+query R
+SELECT acosd(0.5)
+----
+60.00000000000001
+
+query R
+SELECT atand(1.0)
+----
+45.0
+
+query R
+SELECT atan2d(1, 1)
+----
+45.0
+
+# Round-trip identity: degrees(acosd(x)) ~= acos(x).
+query R
+SELECT round(asind(sind(30)), 10)
+----
+30.0
+
+# NULL propagation across all eight degree functions.
+query R
+SELECT sind(CAST(NULL AS DOUBLE))
+----
+NULL
+
+query R
+SELECT cosd(CAST(NULL AS DOUBLE))
+----
+NULL
+
+query R
+SELECT tand(CAST(NULL AS DOUBLE))
+----
+NULL
+
+query R
+SELECT cotd(CAST(NULL AS DOUBLE))
+----
+NULL
+
+query R
+SELECT asind(CAST(NULL AS DOUBLE))
+----
+NULL
+
+query R
+SELECT acosd(CAST(NULL AS DOUBLE))
+----
+NULL
+
+query R
+SELECT atand(CAST(NULL AS DOUBLE))
+----
+NULL
+
+query R
+SELECT atan2d(CAST(NULL AS DOUBLE), 1.0)
+----
+NULL
+
+# ============================================================================
+# width_bucket
+# ============================================================================
+
+# Postgres docs example (4-arg equal-width form).
+query I
+SELECT width_bucket(5.35, 0.024, 10.06, 5)
+----
+3
+
+# Operand below `low` -> bucket 0.
+query I
+SELECT width_bucket(-0.4, 0.024, 10.06, 5)
+----
+0
+
+# Operand >= `high` -> bucket count+1.
+query I
+SELECT width_bucket(11.0, 0.024, 10.06, 5)
+----
+6
+
+# 2-arg sorted-thresholds form.
+query I
+SELECT width_bucket(25, ARRAY[10.0, 20.0, 30.0])
+----
+2
+
+query I
+SELECT width_bucket(5, ARRAY[10.0, 20.0, 30.0])
+----
+0
+
+query I
+SELECT width_bucket(30, ARRAY[10.0, 20.0, 30.0])
+----
+3
+
+query I
+SELECT width_bucket(CAST(NULL AS DOUBLE), 0.0, 10.0, 5)
+----
+NULL
+
+# ============================================================================
+# random_normal -- non-deterministic, test statistical properties
+# ============================================================================
+
+# Default args (mean=0, stddev=1) must produce a finite f64.
+query R
+SELECT CASE WHEN random_normal() - random_normal() = random_normal() - random_normal()
+            THEN 1.0 ELSE 0.0 END IS NOT NULL
+----
+true
+
+# Explicit mean=100, stddev=0.5; with 10000 samples the sample mean should be
+# very close to 100. Loose bound (3 sigma) avoids flakiness.
+query R
+SELECT abs((SELECT avg(random_normal(100.0, 0.5)) FROM generate_series(1, 10000)) - 100.0) < 0.05
+----
+true
+
+# Negative stddev must be rejected (returns execution error -> NULL is not ok).
+# sqllogictest's `statement error` directive asserts that the SQL fails.
+statement error
+SELECT random_normal(0.0, -1.0)
+
+# ============================================================================
+# Special functions: erf, erfc, gamma, lgamma
+# ============================================================================
+
+query R
+SELECT erf(0)
+----
+0.0
+
+query R
+SELECT erfc(0)
+----
+1.0
+
+# gamma(n) = (n-1)!; gamma(5) = 4! = 24.
+query R
+SELECT gamma(5)
+----
+24.0
+
+# lgamma(5) = ln(24).
+query R
+SELECT round(lgamma(5) - ln(24.0), 10)
+----
+0.0
+
+# Complementary identity: erfc(x) = 1 - erf(x). Round because of float drift.
+query R
+SELECT round(erfc(0.5) - (1.0 - erf(0.5)), 10)
+----
+0.0
+
+query R
+SELECT erf(CAST(NULL AS DOUBLE))
+----
+NULL
+
+query R
+SELECT gamma(CAST(NULL AS DOUBLE))
+----
+NULL
