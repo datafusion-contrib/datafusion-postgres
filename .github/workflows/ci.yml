@@ -65,6 +65,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: insightsengineering/disk-space-reclaimer@v1
       - uses: cachix/install-nix-action@v31
       - run: nix develop --command cargo test
 
@@ -75,6 +76,7 @@ jobs:
     needs: [test]
     steps:
     - uses: actions/checkout@v6
+    - uses: insightsengineering/disk-space-reclaimer@v1
     - uses: cachix/install-nix-action@v31
     - name: Initialize podman
       run: nix develop --command podman info >/dev/null 2>&1 || true
