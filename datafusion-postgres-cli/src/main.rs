@@ -8,6 +8,7 @@ use datafusion::execution::options::{
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_postgres::auth::AuthManager;
 use datafusion_postgres::datafusion_pg_catalog::setup_pg_catalog;
+use datafusion_postgres::datafusion_pg_functions::register_all;
 use datafusion_postgres::{ServerOptions, serve};
 use env_logger::Env;
 use log::info;
@@ -123,7 +124,7 @@ impl Opt {
 }
 
 async fn setup_session_context(
-    session_context: &SessionContext,
+    session_context: &mut SessionContext,
     opts: &Opt,
     auth_manager: Arc<AuthManager>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -183,6 +184,9 @@ async fn setup_session_context(
     // Register pg_catalog
     setup_pg_catalog(session_context, "datafusion", auth_manager)?;
 
+    // Register udfs
+    register_all(session_context);
+
     Ok(())
 }
 
@@ -197,11 +201,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     opts.include_directory_files()?;
 
     let session_config = SessionConfig::new().with_information_schema(true);
-    let session_context = SessionContext::new_with_config(session_config);
+    let mut session_context = SessionContext::new_with_config(session_config);
 
     // TODO: remove or replace AuthManager for pg_catalog
     let auth_manager = Arc::new(AuthManager::new());
-    setup_session_context(&session_context, &opts, Arc::clone(&auth_manager)).await?;
+    setup_session_context(&mut session_context, &opts, Arc::clone(&auth_manager)).await?;
 
     let server_options = ServerOptions::new()
         .with_host(opts.host)

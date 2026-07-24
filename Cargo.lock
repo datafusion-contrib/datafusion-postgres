@@ -1761,6 +1761,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-pg-catalog",
+ "datafusion-pg-functions",
  "env_logger",
  "futures",
  "geodatafusion",

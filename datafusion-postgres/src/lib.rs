@@ -29,6 +29,7 @@ pub use hooks::QueryHook;
 /// re-exports
 pub use arrow_pg;
 pub use datafusion_pg_catalog;
+pub use datafusion_pg_functions;
 pub use pgwire;
 
 #[derive(Getters, Setters, WithSetters, Debug)]
