@@ -29,7 +29,7 @@ use datafusion::common::{Result, exec_err};
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 
 /// Create the PostgreSQL `random_normal()` UDF.
 pub fn create_random_normal_udf() -> ScalarUDF {
