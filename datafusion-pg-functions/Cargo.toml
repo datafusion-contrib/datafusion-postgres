@@ -94,7 +94,7 @@ rand = { version = "0.9", optional = true }
 async-trait = "0.1"
 datafusion = { workspace = true, features = ["nested_expressions"] }
 env_logger = "0.11"
-sqllogictest = "0.28"
+sqllogictest = "0.29"
 tokio = { workspace = true, features = ["macros", "rt", "fs"] }
 
 [[test]]
