@@ -1647,8 +1647,10 @@ dependencies = [
  "env_logger",
  "libm",
  "rand 0.10.2",
+ "regex",
  "sqllogictest",
  "tokio",
+ "unicode-normalization",
 ]
 
 [[package]]

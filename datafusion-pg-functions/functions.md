@@ -60,7 +60,7 @@ implementation strategy in DataFusion.
 | [Subquery Expressions](#functions-subquery) | 0 | 0 | 0 | 0 | 0 | 0 | 0+0 | 0 |
 | [Row and Array Comparisons](#functions-comparisons) | 0 | 0 | 0 | 0 | 0 | 0 | 0+0 | 0 |
 | [Mathematical](#functions-math) | 55 | 33 | 18 | 0 | 0 | 4 | 0+0 | 0 |
-| [String](#functions-string) | 61 | 42 | 2 | 0 | 17 | 0 | 0+4 | 0 |
+| [String](#functions-string) | 61 | 42 | 16 | 0 | 3 | 0 | 0+4 | 0 |
 | [Binary String](#functions-binarystring) | 30 | 20 | 0 | 0 | 10 | 0 | 0+4 | 0 |
 | [Bit String](#functions-bitstring) | 9 | 6 | 0 | 0 | 0 | 0 | 0+3 | 3 |
 | [Pattern Matching](#functions-matching) | 15 | 7 | 0 | 0 | 4 | 0 | 3+2 | 0 |
@@ -85,7 +85,7 @@ implementation strategy in DataFusion.
 | [System Administration](#functions-admin) | 105 | 0 | 2 | 0 | 5 | 0 | 0+0 | 98 |
 | [Trigger](#functions-trigger) | 3 | 0 | 0 | 0 | 0 | 0 | 0+0 | 3 |
 | [Event Trigger](#functions-event-triggers) | 5 | 0 | 0 | 0 | 0 | 0 | 0+0 | 5 |
-| **TOTAL** | **768** | **198** | **40** | **4** | **85** | **65** | **21** | **371** |
+| **TOTAL** | **768** | **198** | **54** | **4** | **71** | **65** | **21** | **371** |
 
 ---
 
@@ -210,7 +210,7 @@ implementation strategy in DataFusion.
 
 ## String Functions and Operators
 
-*Section `functions-string` · Module: [`string`](src/string.rs)
+*Section `functions-string` · Module: [`string`](src/string/)
 
 | Function | Kind | Status | Pri | #overloads | Description | Notes |
 |---|:---:|:---:|:---:|---:|---|---|
@@ -248,9 +248,9 @@ implementation strategy in DataFusion.
 | `regexp_match` | fn | ✅ | — | 2 | find first match for regexp | Native DataFusion |
 | `regexp_matches` | fn | 🚧 | P2 | 2 | find match(es) for regexp | Postgres is set-returning; DataFusion returns an array. |
 | `regexp_replace` | fn | ✅ | — | 5 | replace text using regexp | Native DataFusion |
-| `regexp_split_to_array` | fn | 🚧 | P2 | 2 | split string by pattern |  |
+| `regexp_split_to_array` | fn | 🔧 | — | 2 | split string by pattern |  |
 | `regexp_split_to_table` | fn | 🚧 | P2 | 2 | split string by pattern | Set-returning. |
-| `regexp_substr` | fn | 🚧 | P2 | 5 | extract substring that matches regexp |  |
+| `regexp_substr` | fn | 🔧 | — | 5 | extract substring that matches regexp |  |
 | `repeat` | fn | ✅ | — | 1 | replicate string n times | Native DataFusion |
 | `replace` | fn | ✅ | — | 1 | replace all occurrences in string of old_substr with new_substr | Native DataFusion |
 | `reverse` | fn | ✅ | — | 2 | reverse bytea | Native DataFusion |
@@ -344,9 +344,9 @@ implementation strategy in DataFusion.
 | `regexp_match` | fn | ✅ | — | 2 | find first match for regexp | Native DataFusion |
 | `regexp_matches` | fn | 🚧 | P2 | 2 | find match(es) for regexp | Postgres is set-returning; DataFusion returns an array. |
 | `regexp_replace` | fn | ✅ | — | 5 | replace text using regexp | Native DataFusion |
-| `regexp_split_to_array` | fn | 🚧 | P2 | 2 | split string by pattern |  |
+| `regexp_split_to_array` | fn | 🔧 | — | 2 | split string by pattern |  |
 | `regexp_split_to_table` | fn | 🚧 | P2 | 2 | split string by pattern | Set-returning. |
-| `regexp_substr` | fn | 🚧 | P2 | 5 | extract substring that matches regexp |  |
+| `regexp_substr` | fn | 🔧 | — | 5 | extract substring that matches regexp |  |
 | `similar to` | op | 🚧 | P2 | 0 | — |  |
 | `starts_with` | fn | ✅ | — | 1 | — | Native DataFusion |
 | `substring` | both | ✅ | — | 8 | extract text matching SQL regular expression | Native DataFusion. Postgres 1-based offsets. |

@@ -47,7 +47,7 @@ full = [
 # Mathematical Functions and Operators
 math = ["dep:libm", "dep:rand"]
 # String Functions and Operators
-string = []
+string = ["dep:regex", "dep:unicode-normalization"]
 # Binary String Functions and Operators
 binary = []
 # Bit String Functions and Operators
@@ -89,6 +89,8 @@ row = []
 datafusion = { workspace = true, features = ["nested_expressions"] }
 libm = { version = "0.2", optional = true }
 rand = { version = "0.10", optional = true }
+regex = { version = "1", optional = true }
+unicode-normalization = { version = "0.1", optional = true }
 
 [dev-dependencies]
 async-trait = "0.1"
@@ -100,4 +102,4 @@ tokio = { workspace = true, features = ["macros", "rt", "fs"] }
 [[test]]
 name = "sqllogictest"
 path = "tests/sqllogictest.rs"
-required-features = ["math"]
+required-features = ["math", "string"]
