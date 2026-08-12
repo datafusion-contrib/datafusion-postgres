@@ -19,9 +19,9 @@ SELECT to_bin(0)
 0
 
 query T
-SELECT to_bin(-13)
+SELECT to_bin(CAST(-13 AS INT))
 ----
--1101
+11111111111111111111111111110011
 
 query T
 SELECT to_bin(255)
@@ -48,9 +48,9 @@ SELECT to_oct(0)
 0
 
 query T
-SELECT to_oct(-13)
+SELECT to_oct(CAST(-13 AS INT))
 ----
--15
+37777777763
 
 query T
 SELECT to_oct(8)
@@ -67,9 +67,9 @@ NULL
 # ============================================================================
 
 query T
-SELECT quote_literal('hello')
+SELECT quote_literal('a''b\c')
 ----
-'hello'
+'a''b\c'
 
 query T
 SELECT quote_literal(CAST(NULL AS TEXT))
@@ -117,6 +117,11 @@ query T
 SELECT casefold('UPPER')
 ----
 upper
+
+query T
+SELECT casefold('ß')
+----
+ss
 
 query T
 SELECT casefold(CAST(NULL AS TEXT))
@@ -226,6 +231,16 @@ query T
 SELECT to_ascii('hello')
 ----
 hello
+
+query T
+SELECT to_ascii('café')
+----
+cafe
+
+query T
+SELECT to_ascii('München')
+----
+Munchen
 
 query T
 SELECT to_ascii(CAST(NULL AS TEXT))

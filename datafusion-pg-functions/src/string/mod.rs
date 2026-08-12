@@ -52,6 +52,7 @@ pub fn register(registry: &mut dyn FunctionRegistry) -> usize {
         format::create_format_udf(),
         // regexp
         regexp::create_regexp_substr_udf(),
+        regexp::create_regexp_split_to_array_udf(),
         // encoding
         encoding::create_pg_client_encoding_udf(),
         encoding::create_to_ascii_udf(),

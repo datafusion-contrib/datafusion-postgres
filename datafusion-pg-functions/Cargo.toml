@@ -47,7 +47,11 @@ full = [
 # Mathematical Functions and Operators
 math = ["dep:libm", "dep:rand"]
 # String Functions and Operators
-string = ["dep:regex", "dep:unicode-normalization"]
+string = [
+    "dep:regex",
+    "dep:unicode-normalization",
+    "dep:icu_properties",
+]
 # Binary String Functions and Operators
 binary = []
 # Bit String Functions and Operators
@@ -91,6 +95,7 @@ libm = { version = "0.2", optional = true }
 rand = { version = "0.10", optional = true }
 regex = { version = "1", optional = true }
 unicode-normalization = { version = "0.1", optional = true }
+icu_properties = { version = "2.1", optional = true }
 
 [dev-dependencies]
 async-trait = "0.1"

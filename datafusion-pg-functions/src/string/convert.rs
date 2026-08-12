@@ -1,18 +1,19 @@
 //! PostgreSQL `to_bin(integer)` and `to_oct(integer)` — integer-to-text
-//! conversion in binary and octal bases.
+//! conversion in binary and octal bases (PG 18+).
 //!
-//! PostgreSQL also overloads these on `bigint`. We cover both `int4` and
-//! `int8` via separate signature arms.
+//! <https://www.postgresql.org/docs/18/functions-string.html>
 //!
-//! ## Semantics
+//! ## Postgres compatibility
 //!
-//! * Negative values get a leading `-` sign followed by the absolute value
-//!   in the target base (matching Postgres, **not** two's-complement).
-//! * `NULL` input propagates to `NULL`.
+//! Negative values are rendered using the **two's-complement** representation
+//! of the integer's width (matching `to_hex`, the sibling base-conversion
+//! function). So `to_bin(-1::int4)` yields 32 ones, `to_oct(-1::int4)` yields
+//! `37777777777`. `NULL` propagates to `NULL`. We support both `int4` and
+//! `int8` inputs; the width follows the input type.
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, AsArray, StringBuilder};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Int32Type, Int64Type};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::{
@@ -25,11 +26,11 @@ use datafusion::logical_expr::{
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ToBinUdf {
+pub struct ToBinUDF {
     signature: Signature,
 }
 
-impl Default for ToBinUdf {
+impl Default for ToBinUDF {
     fn default() -> Self {
         Self {
             signature: Signature::one_of(
@@ -43,7 +44,7 @@ impl Default for ToBinUdf {
     }
 }
 
-impl ScalarUDFImpl for ToBinUdf {
+impl ScalarUDFImpl for ToBinUDF {
     fn name(&self) -> &str {
         "to_bin"
     }
@@ -68,7 +69,7 @@ impl ScalarUDFImpl for ToBinUdf {
                             if typed.is_null(i) {
                                 builder.append_null();
                             } else {
-                                builder.append_value(&format_bin_i64(typed.value(i) as i64));
+                                builder.append_value(bin_i32(typed.value(i)));
                             }
                         }
                     }
@@ -78,7 +79,7 @@ impl ScalarUDFImpl for ToBinUdf {
                             if typed.is_null(i) {
                                 builder.append_null();
                             } else {
-                                builder.append_value(&format_bin_i64(typed.value(i)));
+                                builder.append_value(bin_i64(typed.value(i)));
                             }
                         }
                     }
@@ -88,14 +89,14 @@ impl ScalarUDFImpl for ToBinUdf {
                         )));
                     }
                 }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as _))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
             ColumnarValue::Scalar(sv) => match sv {
                 ScalarValue::Int32(Some(v)) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                    format_bin_i64(*v as i64),
+                    bin_i32(*v),
                 )))),
                 ScalarValue::Int64(Some(v)) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                    format_bin_i64(*v),
+                    bin_i64(*v),
                 )))),
                 ScalarValue::Int32(None) | ScalarValue::Int64(None) => {
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
@@ -108,12 +109,14 @@ impl ScalarUDFImpl for ToBinUdf {
     }
 }
 
-fn format_bin_i64(v: i64) -> String {
-    if v < 0 {
-        format!("-{:b}", v.unsigned_abs())
-    } else {
-        format!("{v:b}")
-    }
+/// Binary text of an `int4`, two's-complement (32-bit width for negatives).
+fn bin_i32(v: i32) -> String {
+    format!("{:b}", v as u32)
+}
+
+/// Binary text of an `int8`, two's-complement (64-bit width for negatives).
+fn bin_i64(v: i64) -> String {
+    format!("{:b}", v as u64)
 }
 
 // ---------------------------------------------------------------------------
@@ -121,11 +124,11 @@ fn format_bin_i64(v: i64) -> String {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ToOctUdf {
+pub struct ToOctUDF {
     signature: Signature,
 }
 
-impl Default for ToOctUdf {
+impl Default for ToOctUDF {
     fn default() -> Self {
         Self {
             signature: Signature::one_of(
@@ -139,7 +142,7 @@ impl Default for ToOctUdf {
     }
 }
 
-impl ScalarUDFImpl for ToOctUdf {
+impl ScalarUDFImpl for ToOctUDF {
     fn name(&self) -> &str {
         "to_oct"
     }
@@ -164,7 +167,7 @@ impl ScalarUDFImpl for ToOctUdf {
                             if typed.is_null(i) {
                                 builder.append_null();
                             } else {
-                                builder.append_value(&format_oct_i64(typed.value(i) as i64));
+                                builder.append_value(oct_i32(typed.value(i)));
                             }
                         }
                     }
@@ -174,7 +177,7 @@ impl ScalarUDFImpl for ToOctUdf {
                             if typed.is_null(i) {
                                 builder.append_null();
                             } else {
-                                builder.append_value(&format_oct_i64(typed.value(i)));
+                                builder.append_value(oct_i64(typed.value(i)));
                             }
                         }
                     }
@@ -184,14 +187,14 @@ impl ScalarUDFImpl for ToOctUdf {
                         )));
                     }
                 }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as _))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
             ColumnarValue::Scalar(sv) => match sv {
                 ScalarValue::Int32(Some(v)) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                    format_oct_i64(*v as i64),
+                    oct_i32(*v),
                 )))),
                 ScalarValue::Int64(Some(v)) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                    format_oct_i64(*v),
+                    oct_i64(*v),
                 )))),
                 ScalarValue::Int32(None) | ScalarValue::Int64(None) => {
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
@@ -204,20 +207,22 @@ impl ScalarUDFImpl for ToOctUdf {
     }
 }
 
-fn format_oct_i64(v: i64) -> String {
-    if v < 0 {
-        format!("-{:o}", v.unsigned_abs())
-    } else {
-        format!("{v:o}")
-    }
+/// Octal text of an `int4`, two's-complement (32-bit width for negatives).
+fn oct_i32(v: i32) -> String {
+    format!("{:o}", v as u32)
+}
+
+/// Octal text of an `int8`, two's-complement (64-bit width for negatives).
+fn oct_i64(v: i64) -> String {
+    format!("{:o}", v as u64)
 }
 
 pub fn create_to_bin_udf() -> ScalarUDF {
-    ScalarUDF::new_from_impl(ToBinUdf::default())
+    ScalarUDF::new_from_impl(ToBinUDF::default())
 }
 
 pub fn create_to_oct_udf() -> ScalarUDF {
-    ScalarUDF::new_from_impl(ToOctUdf::default())
+    ScalarUDF::new_from_impl(ToOctUDF::default())
 }
 
 #[cfg(test)]
@@ -246,8 +251,28 @@ mod tests {
 
         assert_eq!(run_str(&ctx, "SELECT to_bin(42)").await, Some("101010".into()));
         assert_eq!(run_str(&ctx, "SELECT to_bin(0)").await, Some("0".into()));
-        assert_eq!(run_str(&ctx, "SELECT to_bin(-13)").await, Some("-1101".into()));
+        // Two's-complement 32-bit: -1 -> 32 ones
+        assert_eq!(
+            run_str(&ctx, "SELECT to_bin(CAST(-1 AS INT))").await,
+            Some("11111111111111111111111111111111".into())
+        );
+        // -13 -> ...11110011
+        assert_eq!(
+            run_str(&ctx, "SELECT to_bin(CAST(-13 AS INT))").await,
+            Some("11111111111111111111111111110011".into())
+        );
         assert_eq!(run_str(&ctx, "SELECT to_bin(CAST(NULL AS INT))").await, None);
+    }
+
+    #[tokio::test]
+    async fn to_bin_bigint_width() {
+        let ctx = SessionContext::new();
+        ctx.register_udf(create_to_bin_udf());
+        // int8 -1 -> 64 ones
+        assert_eq!(
+            run_str(&ctx, "SELECT to_bin(CAST(-1 AS BIGINT))").await.map(|s| s.len()),
+            Some(64)
+        );
     }
 
     #[tokio::test]
@@ -257,7 +282,33 @@ mod tests {
 
         assert_eq!(run_str(&ctx, "SELECT to_oct(42)").await, Some("52".into()));
         assert_eq!(run_str(&ctx, "SELECT to_oct(0)").await, Some("0".into()));
-        assert_eq!(run_str(&ctx, "SELECT to_oct(-13)").await, Some("-15".into()));
+        // -1 int4 -> 37777777777 (two's-complement)
+        assert_eq!(
+            run_str(&ctx, "SELECT to_oct(CAST(-1 AS INT))").await,
+            Some("37777777777".into())
+        );
         assert_eq!(run_str(&ctx, "SELECT to_oct(CAST(NULL AS INT))").await, None);
+    }
+
+    #[tokio::test]
+    async fn to_bin_vectorized_batch() {
+        // Convention #4: a row-wise vectorized batch (array input path).
+        let ctx = SessionContext::new();
+        ctx.register_udf(create_to_bin_udf());
+        let df = ctx
+            .sql("SELECT to_bin(c) FROM (VALUES (1), (2), (10), (CAST(NULL AS INT))) AS t(c)")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let arr = df[0].column(0).as_string::<i32>();
+        let got: Vec<Option<&str>> = (0..arr.len()).map(|i| {
+            if arr.is_null(i) { None } else { Some(arr.value(i)) }
+        }).collect();
+        assert_eq!(
+            got,
+            vec![Some("1"), Some("10"), Some("1010"), None]
+        );
     }
 }

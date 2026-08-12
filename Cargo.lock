@@ -1645,6 +1645,7 @@ dependencies = [
  "async-trait",
  "datafusion",
  "env_logger",
+ "icu_properties",
  "libm",
  "rand 0.10.2",
  "regex",

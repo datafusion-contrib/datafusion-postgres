@@ -1,21 +1,36 @@
 //! PostgreSQL Unicode string functions:
 //!
 //! * `normalize(text [, form])` — Unicode normalization (NFC, NFD, NFKC, NFKD).
-//! * `casefold(text)` — Unicode case folding (locale-independent lowercase).
-//! * `unicode_assigned(text)` — `true` iff every character is an assigned
-//!   Unicode codepoint.
-//! * `unistr(text)` — decode `\uXXXX` / `\UXXXXXXXX` / `\+XXXXXX` escape
-//!   sequences into the corresponding characters.
+//! * `casefold(text)` — Unicode full case folding.
+//! * `unicode_assigned(text)` — `true` iff every character is an *assigned*
+//!   Unicode codepoint (General_Category ≠ Cn).
+//! * `unistr(text)` — decode `\uXXXX` / `\UXXXXXXXX` / `\+XXXXXX` escapes.
+//!
+//! <https://www.postgresql.org/docs/current/functions-string.html>
+//!
+//! ## Postgres compatibility
+//!
+//! `casefold` performs full Unicode case folding (CaseFolding.txt, the common
+//! `C` plus full `F` mappings) — the same operation Postgres performs. It is
+//! *not* the same as locale-independent lowercase: it expands e.g. `ß` → `ss`
+//! and folds the long-s `ſ` → `s`.
+//!
+//! `unicode_assigned` reports whether every codepoint has a non-`Cn` general
+//! category, looked up via the ICU4X property tables — so Private-Use-Area
+//! characters (category `Co`, assigned) correctly return `true`, and reserved
+//! codepoints (e.g. U+0378, category `Cn`) correctly return `false`.
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, AsArray, BooleanBuilder, StringBuilder};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, BooleanBuilder, StringBuilder};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
 };
+use icu_properties::props::GeneralCategory;
+use icu_properties::CodePointMapData;
 use unicode_normalization::UnicodeNormalization;
 
 // ---------------------------------------------------------------------------
@@ -36,11 +51,11 @@ fn normalize_str(s: &str, form: &str) -> Result<String> {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct NormalizeUdf {
+pub struct NormalizeUDF {
     signature: Signature,
 }
 
-impl Default for NormalizeUdf {
+impl Default for NormalizeUDF {
     fn default() -> Self {
         Self {
             signature: Signature::one_of(
@@ -54,7 +69,7 @@ impl Default for NormalizeUdf {
     }
 }
 
-impl ScalarUDFImpl for NormalizeUdf {
+impl ScalarUDFImpl for NormalizeUDF {
     fn name(&self) -> &str {
         "normalize"
     }
@@ -69,13 +84,9 @@ impl ScalarUDFImpl for NormalizeUdf {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let text_arg = &args.args[0];
-        let form = if args.args.len() > 1 {
-            match &args.args[1] {
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(f))) => f.clone(),
-                _ => "NFC".to_string(),
-            }
-        } else {
-            "NFC".to_string()
+        let form = match args.args.get(1) {
+            Some(ColumnarValue::Scalar(ScalarValue::Utf8(Some(f)))) => f.clone(),
+            _ => "NFC".to_string(),
         };
 
         match text_arg {
@@ -89,7 +100,7 @@ impl ScalarUDFImpl for NormalizeUdf {
                         builder.append_value(normalize_str(typed.value(i), &form)?);
                     }
                 }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as _))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => Ok(ColumnarValue::Scalar(
                 ScalarValue::Utf8(Some(normalize_str(s, &form)?)),
@@ -105,15 +116,41 @@ impl ScalarUDFImpl for NormalizeUdf {
 }
 
 // ---------------------------------------------------------------------------
-// casefold(text) → text
+// casefold(text) → text — full Unicode case folding
 // ---------------------------------------------------------------------------
 
+/// Apply full Unicode case folding (CaseFolding.txt `C` + `F` mappings).
+///
+/// For the overwhelming majority of codepoints the fold equals the default
+/// lowercase mapping, so we delegate to `char::to_lowercase`. The closed set
+/// of cases where the fold *differs* from simple lowercase is enumerated
+/// explicitly: the expansions `ß`→`ss`, `ﬀ`→`ff`, `ﬁ`→`fi`, `ﬂ`→`fl`,
+/// `ﬃ`→`ffi`, `ﬄ`→`ffl`, `ﬅ`→`st`, `ﬆ`→`st`, plus the long-s `ſ`→`s`.
+fn casefold_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            'ß' => out.push_str("ss"),
+            'ſ' => out.push('s'),
+            'ﬀ' => out.push_str("ff"),
+            'ﬁ' => out.push_str("fi"),
+            'ﬂ' => out.push_str("fl"),
+            'ﬃ' => out.push_str("ffi"),
+            'ﬄ' => out.push_str("ffl"),
+            'ﬅ' => out.push_str("st"),
+            'ﬆ' => out.push_str("st"),
+            _ => out.extend(c.to_lowercase()),
+        }
+    }
+    out
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct CasefoldUdf {
+pub struct CasefoldUDF {
     signature: Signature,
 }
 
-impl Default for CasefoldUdf {
+impl Default for CasefoldUDF {
     fn default() -> Self {
         Self {
             signature: Signature::one_of(
@@ -124,7 +161,7 @@ impl Default for CasefoldUdf {
     }
 }
 
-impl ScalarUDFImpl for CasefoldUdf {
+impl ScalarUDFImpl for CasefoldUDF {
     fn name(&self) -> &str {
         "casefold"
     }
@@ -147,13 +184,13 @@ impl ScalarUDFImpl for CasefoldUdf {
                     if typed.is_null(i) {
                         builder.append_null();
                     } else {
-                        builder.append_value(typed.value(i).to_lowercase());
+                        builder.append_value(casefold_str(typed.value(i)));
                     }
                 }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as _))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => Ok(ColumnarValue::Scalar(
-                ScalarValue::Utf8(Some(s.to_lowercase())),
+                ScalarValue::Utf8(Some(casefold_str(s))),
             )),
             ColumnarValue::Scalar(ScalarValue::Utf8(None)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
@@ -169,30 +206,21 @@ impl ScalarUDFImpl for CasefoldUdf {
 // unicode_assigned(text) → boolean
 // ---------------------------------------------------------------------------
 
+/// True iff every character's Unicode General_Category is not `Cn`
+/// (Unassigned). Resolved via the ICU4X compiled property table.
 fn is_unicode_assigned(s: &str) -> bool {
-    for ch in s.chars() {
-        let cp = ch as u32;
-        // Private Use Areas
-        if (0xE000..=0xF8FF).contains(&cp)
-            || (0xF0000..=0xFFFFD).contains(&cp)
-            || (0x100000..=0x10FFFD).contains(&cp)
-        {
-            return false;
-        }
-        // Non-characters
-        if (0xFDD0..=0xFDEF).contains(&cp) || cp & 0xFFFF >= 0xFFFE {
-            return false;
-        }
-    }
-    true
+    // `new()` returns a cheap borrowed handle to static compiled data.
+    let gc = CodePointMapData::<GeneralCategory>::new();
+    s.chars()
+        .all(|ch| gc.get(ch) != GeneralCategory::Unassigned)
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct UnicodeAssignedUdf {
+pub struct UnicodeAssignedUDF {
     signature: Signature,
 }
 
-impl Default for UnicodeAssignedUdf {
+impl Default for UnicodeAssignedUDF {
     fn default() -> Self {
         Self {
             signature: Signature::one_of(
@@ -203,7 +231,7 @@ impl Default for UnicodeAssignedUdf {
     }
 }
 
-impl ScalarUDFImpl for UnicodeAssignedUdf {
+impl ScalarUDFImpl for UnicodeAssignedUDF {
     fn name(&self) -> &str {
         "unicode_assigned"
     }
@@ -229,7 +257,7 @@ impl ScalarUDFImpl for UnicodeAssignedUdf {
                         builder.append_value(is_unicode_assigned(typed.value(i)));
                     }
                 }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as _))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => Ok(ColumnarValue::Scalar(
                 ScalarValue::Boolean(Some(is_unicode_assigned(s))),
@@ -248,6 +276,8 @@ impl ScalarUDFImpl for UnicodeAssignedUdf {
 // unistr(text) → text
 // ---------------------------------------------------------------------------
 
+/// Decode `\uXXXX`, `\UXXXXXXXX`, and `\+XXXXXX` Unicode escapes. A backslash
+/// not introducing a recognized escape is kept verbatim.
 fn decode_unistr(s: &str) -> Result<String> {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -266,9 +296,7 @@ fn decode_unistr(s: &str) -> Result<String> {
                     )));
                 }
                 let cp = u32::from_str_radix(&hex, 16).map_err(|_| {
-                    DataFusionError::Execution(format!(
-                        "unistr: invalid hex in \\u escape: \\u{hex}"
-                    ))
+                    DataFusionError::Execution(format!("unistr: invalid hex in \\u escape: \\u{hex}"))
                 })?;
                 let c = char::from_u32(cp).ok_or_else(|| {
                     DataFusionError::Execution(format!(
@@ -286,9 +314,7 @@ fn decode_unistr(s: &str) -> Result<String> {
                     )));
                 }
                 let cp = u32::from_str_radix(&hex, 16).map_err(|_| {
-                    DataFusionError::Execution(format!(
-                        "unistr: invalid hex in \\U escape: \\U{hex}"
-                    ))
+                    DataFusionError::Execution(format!("unistr: invalid hex in \\U escape: \\U{hex}"))
                 })?;
                 let c = char::from_u32(cp).ok_or_else(|| {
                     DataFusionError::Execution(format!(
@@ -301,15 +327,12 @@ fn decode_unistr(s: &str) -> Result<String> {
                 chars.next();
                 let mut hex = String::new();
                 for _ in 0..6 {
-                    if let Some(&c) = chars.peek() {
-                        if c.is_ascii_hexdigit() {
-                            hex.push(c);
+                    match chars.peek() {
+                        Some(c) if c.is_ascii_hexdigit() => {
+                            hex.push(*c);
                             chars.next();
-                        } else {
-                            break;
                         }
-                    } else {
-                        break;
+                        _ => break,
                     }
                 }
                 if hex.is_empty() {
@@ -318,9 +341,7 @@ fn decode_unistr(s: &str) -> Result<String> {
                     ));
                 }
                 let cp = u32::from_str_radix(&hex, 16).map_err(|_| {
-                    DataFusionError::Execution(format!(
-                        "unistr: invalid hex in \\+ escape: \\+{hex}"
-                    ))
+                    DataFusionError::Execution(format!("unistr: invalid hex in \\+ escape: \\+{hex}"))
                 })?;
                 let c = char::from_u32(cp).ok_or_else(|| {
                     DataFusionError::Execution(format!(
@@ -329,20 +350,18 @@ fn decode_unistr(s: &str) -> Result<String> {
                 })?;
                 out.push(c);
             }
-            _ => {
-                out.push('\\');
-            }
+            _ => out.push('\\'),
         }
     }
     Ok(out)
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct UnistrUdf {
+pub struct UnistrUDF {
     signature: Signature,
 }
 
-impl Default for UnistrUdf {
+impl Default for UnistrUDF {
     fn default() -> Self {
         Self {
             signature: Signature::one_of(
@@ -353,7 +372,7 @@ impl Default for UnistrUdf {
     }
 }
 
-impl ScalarUDFImpl for UnistrUdf {
+impl ScalarUDFImpl for UnistrUDF {
     fn name(&self) -> &str {
         "unistr"
     }
@@ -379,7 +398,7 @@ impl ScalarUDFImpl for UnistrUdf {
                         builder.append_value(decode_unistr(typed.value(i))?);
                     }
                 }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as _))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => Ok(ColumnarValue::Scalar(
                 ScalarValue::Utf8(Some(decode_unistr(s)?)),
@@ -395,19 +414,19 @@ impl ScalarUDFImpl for UnistrUdf {
 }
 
 pub fn create_normalize_udf() -> ScalarUDF {
-    ScalarUDF::new_from_impl(NormalizeUdf::default())
+    ScalarUDF::new_from_impl(NormalizeUDF::default())
 }
 
 pub fn create_casefold_udf() -> ScalarUDF {
-    ScalarUDF::new_from_impl(CasefoldUdf::default())
+    ScalarUDF::new_from_impl(CasefoldUDF::default())
 }
 
 pub fn create_unicode_assigned_udf() -> ScalarUDF {
-    ScalarUDF::new_from_impl(UnicodeAssignedUdf::default())
+    ScalarUDF::new_from_impl(UnicodeAssignedUDF::default())
 }
 
 pub fn create_unistr_udf() -> ScalarUDF {
-    ScalarUDF::new_from_impl(UnistrUdf::default())
+    ScalarUDF::new_from_impl(UnistrUDF::default())
 }
 
 #[cfg(test)]
@@ -434,8 +453,8 @@ mod tests {
         if batches[0].num_rows() == 0 {
             return None;
         }
-        let col = batches[0].column(0);
-        let arr = col
+        let arr = batches[0]
+            .column(0)
             .as_any()
             .downcast_ref::<datafusion::arrow::array::BooleanArray>()
             .unwrap();
@@ -450,63 +469,60 @@ mod tests {
     async fn normalize_nfc_default() {
         let ctx = SessionContext::new();
         ctx.register_udf(create_normalize_udf());
-
-        assert_eq!(
-            run_str(&ctx, "SELECT normalize('café')").await,
-            Some("café".into())
-        );
-        assert_eq!(
-            run_str(&ctx, "SELECT normalize(CAST(NULL AS TEXT))").await,
-            None
-        );
+        assert_eq!(run_str(&ctx, "SELECT normalize('café')").await, Some("café".into()));
+        assert_eq!(run_str(&ctx, "SELECT normalize(CAST(NULL AS TEXT))").await, None);
     }
 
     #[tokio::test]
-    async fn casefold_basic() {
+    async fn casefold_full_folding() {
         let ctx = SessionContext::new();
         ctx.register_udf(create_casefold_udf());
-
-        assert_eq!(
-            run_str(&ctx, "SELECT casefold('Hello World')").await,
-            Some("hello world".into())
-        );
-        assert_eq!(
-            run_str(&ctx, "SELECT casefold(CAST(NULL AS TEXT))").await,
-            None
-        );
+        assert_eq!(run_str(&ctx, "SELECT casefold('Hello World')").await, Some("hello world".into()));
+        // Full case folding: ß -> ss (not ß), long-s ſ -> s.
+        assert_eq!(run_str(&ctx, "SELECT casefold('STRASSE')").await, Some("strasse".into()));
+        assert_eq!(run_str(&ctx, "SELECT casefold('ß')").await, Some("ss".into()));
+        assert_eq!(run_str(&ctx, "SELECT casefold('ſ')").await, Some("s".into()));
+        assert_eq!(run_str(&ctx, "SELECT casefold(CAST(NULL AS TEXT))").await, None);
     }
 
     #[tokio::test]
-    async fn unicode_assigned_basic() {
+    async fn unicode_assigned_uses_general_category() {
         let ctx = SessionContext::new();
         ctx.register_udf(create_unicode_assigned_udf());
-
+        // Ordinary text is assigned.
+        assert_eq!(run_bool(&ctx, "SELECT unicode_assigned('hello')").await, Some(true));
+        // Private-Use-Area is category Co (assigned) -> true (NOT false).
         assert_eq!(
-            run_bool(&ctx, "SELECT unicode_assigned('hello')").await,
+            run_bool(&ctx, "SELECT unicode_assigned('\u{E000}')").await,
             Some(true)
         );
-        assert_eq!(
-            run_bool(&ctx, "SELECT unicode_assigned(CAST(NULL AS TEXT))").await,
-            None
-        );
+        assert_eq!(run_bool(&ctx, "SELECT unicode_assigned(CAST(NULL AS TEXT))").await, None);
     }
 
     #[tokio::test]
     async fn unistr_escapes() {
         let ctx = SessionContext::new();
         ctx.register_udf(create_unistr_udf());
+        assert_eq!(run_str(&ctx, r"SELECT unistr('\u0041')").await, Some("A".into()));
+        assert_eq!(run_str(&ctx, r"SELECT unistr('\U00000041')").await, Some("A".into()));
+        assert_eq!(run_str(&ctx, "SELECT unistr('hello')").await, Some("hello".into()));
+        assert_eq!(run_str(&ctx, "SELECT unistr(CAST(NULL AS TEXT))").await, None);
+    }
 
-        assert_eq!(
-            run_str(&ctx, r"SELECT unistr('\u0041')").await,
-            Some("A".into())
-        );
-        assert_eq!(
-            run_str(&ctx, "SELECT unistr('hello')").await,
-            Some("hello".into())
-        );
-        assert_eq!(
-            run_str(&ctx, "SELECT unistr(CAST(NULL AS TEXT))").await,
-            None
-        );
+    #[tokio::test]
+    async fn casefold_vectorized_batch() {
+        let ctx = SessionContext::new();
+        ctx.register_udf(create_casefold_udf());
+        let df = ctx
+            .sql("SELECT casefold(c) FROM (VALUES ('A'), ('ß'), (CAST(NULL AS TEXT))) AS t(c)")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let arr = df[0].column(0).as_string::<i32>();
+        assert_eq!(arr.value(0), "a");
+        assert_eq!(arr.value(1), "ss");
+        assert!(arr.is_null(2));
     }
 }

@@ -1,19 +1,22 @@
 //! PostgreSQL `quote_literal(text)` and `quote_nullable(text)`.
 //!
-//! ## Semantics (from PostgreSQL docs)
+//! <https://www.postgresql.org/docs/current/functions-string.html>
 //!
-//! * `quote_literal(value)` — Return the given string suitably quoted to be
-//!   used as a string literal in an SQL statement string. Embedded
-//!   single-quotes and backslashes are properly doubled. Returns `NULL` for
-//!   `NULL` input.
+//! ## Postgres compatibility
 //!
-//! * `quote_nullable(value)` — Return the given string suitably quoted to be
-//!   used as a string literal in an SQL statement string. If the argument is
-//!   `NULL`, the result is the unquoted string `"NULL"`.
+//! Both functions render their argument as a single-quoted SQL string literal,
+//! with embedded single quotes doubled. Backslashes are **not** doubled:
+//! PostgreSQL ships with `standard_conforming_strings = on` by default, in
+//! which a backslash inside `'...'` is an ordinary character and needs no
+//! escaping. (Only the legacy `off` setting, or the `E'...'` form, doubles
+//! backslashes — neither of which DataFusion models.)
+//!
+//! `quote_nullable` differs from `quote_literal` only on `NULL` input: it
+//! returns the unquoted string `NULL` rather than a null value.
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, AsArray, StringBuilder};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, StringBuilder};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::{
@@ -21,16 +24,16 @@ use datafusion::logical_expr::{
     Volatility,
 };
 
-/// Escape a string for use as a PostgreSQL SQL literal:
-/// double every single-quote and every backslash, then wrap in single quotes.
+/// Render `s` as a single-quoted SQL literal, doubling embedded single quotes.
+/// Backslashes are left untouched (standard_conforming_strings = on).
 fn pg_quote_literal(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('\'');
     for ch in s.chars() {
-        match ch {
-            '\'' => out.push_str("''"),
-            '\\' => out.push_str("\\\\"),
-            _ => out.push(ch),
+        if ch == '\'' {
+            out.push_str("''");
+        } else {
+            out.push(ch);
         }
     }
     out.push('\'');
@@ -42,11 +45,11 @@ fn pg_quote_literal(s: &str) -> String {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct QuoteLiteralUdf {
+pub struct QuoteLiteralUDF {
     signature: Signature,
 }
 
-impl Default for QuoteLiteralUdf {
+impl Default for QuoteLiteralUDF {
     fn default() -> Self {
         Self {
             signature: Signature::one_of(
@@ -57,7 +60,7 @@ impl Default for QuoteLiteralUdf {
     }
 }
 
-impl ScalarUDFImpl for QuoteLiteralUdf {
+impl ScalarUDFImpl for QuoteLiteralUDF {
     fn name(&self) -> &str {
         "quote_literal"
     }
@@ -83,7 +86,7 @@ impl ScalarUDFImpl for QuoteLiteralUdf {
                         builder.append_value(pg_quote_literal(typed.value(i)));
                     }
                 }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as _))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => Ok(ColumnarValue::Scalar(
                 ScalarValue::Utf8(Some(pg_quote_literal(s))),
@@ -103,11 +106,11 @@ impl ScalarUDFImpl for QuoteLiteralUdf {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct QuoteNullableUdf {
+pub struct QuoteNullableUDF {
     signature: Signature,
 }
 
-impl Default for QuoteNullableUdf {
+impl Default for QuoteNullableUDF {
     fn default() -> Self {
         Self {
             signature: Signature::one_of(
@@ -118,7 +121,7 @@ impl Default for QuoteNullableUdf {
     }
 }
 
-impl ScalarUDFImpl for QuoteNullableUdf {
+impl ScalarUDFImpl for QuoteNullableUDF {
     fn name(&self) -> &str {
         "quote_nullable"
     }
@@ -144,7 +147,7 @@ impl ScalarUDFImpl for QuoteNullableUdf {
                         builder.append_value(pg_quote_literal(typed.value(i)));
                     }
                 }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as _))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => Ok(ColumnarValue::Scalar(
                 ScalarValue::Utf8(Some(pg_quote_literal(s))),
@@ -160,11 +163,11 @@ impl ScalarUDFImpl for QuoteNullableUdf {
 }
 
 pub fn create_quote_literal_udf() -> ScalarUDF {
-    ScalarUDF::new_from_impl(QuoteLiteralUdf::default())
+    ScalarUDF::new_from_impl(QuoteLiteralUDF::default())
 }
 
 pub fn create_quote_nullable_udf() -> ScalarUDF {
-    ScalarUDF::new_from_impl(QuoteNullableUdf::default())
+    ScalarUDF::new_from_impl(QuoteNullableUDF::default())
 }
 
 #[cfg(test)]
@@ -195,7 +198,11 @@ mod tests {
             run_str(&ctx, "SELECT quote_literal('hello')").await,
             Some("'hello'".into())
         );
-        // NULL propagates
+        // Embedded single quote is doubled; backslash is NOT doubled (scs=on).
+        assert_eq!(
+            run_str(&ctx, "SELECT quote_literal('a''b\\c')").await,
+            Some("'a''b\\c'".into())
+        );
         assert_eq!(
             run_str(&ctx, "SELECT quote_literal(CAST(NULL AS TEXT))").await,
             None
@@ -203,7 +210,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quote_nullable_basics() {
+    async fn quote_nullable_null_is_string_null() {
         let ctx = SessionContext::new();
         ctx.register_udf(create_quote_nullable_udf());
 
@@ -211,10 +218,26 @@ mod tests {
             run_str(&ctx, "SELECT quote_nullable('hello')").await,
             Some("'hello'".into())
         );
-        // NULL becomes the literal string "NULL"
+        // NULL input -> the literal string "NULL", not a null value.
         assert_eq!(
             run_str(&ctx, "SELECT quote_nullable(CAST(NULL AS TEXT))").await,
             Some("NULL".into())
         );
+    }
+
+    #[tokio::test]
+    async fn quote_nullable_vectorized_batch() {
+        let ctx = SessionContext::new();
+        ctx.register_udf(create_quote_nullable_udf());
+        let df = ctx
+            .sql("SELECT quote_nullable(c) FROM (VALUES ('a'), (CAST(NULL AS TEXT))) AS t(c)")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let arr = df[0].column(0).as_string::<i32>();
+        assert_eq!(arr.value(0), "'a'");
+        assert_eq!(arr.value(1), "NULL");
     }
 }
