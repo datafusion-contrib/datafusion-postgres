@@ -29,8 +29,8 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
 };
-use icu_properties::props::GeneralCategory;
 use icu_properties::CodePointMapData;
+use icu_properties::props::GeneralCategory;
 use unicode_normalization::UnicodeNormalization;
 
 // ---------------------------------------------------------------------------
@@ -296,7 +296,9 @@ fn decode_unistr(s: &str) -> Result<String> {
                     )));
                 }
                 let cp = u32::from_str_radix(&hex, 16).map_err(|_| {
-                    DataFusionError::Execution(format!("unistr: invalid hex in \\u escape: \\u{hex}"))
+                    DataFusionError::Execution(format!(
+                        "unistr: invalid hex in \\u escape: \\u{hex}"
+                    ))
                 })?;
                 let c = char::from_u32(cp).ok_or_else(|| {
                     DataFusionError::Execution(format!(
@@ -314,7 +316,9 @@ fn decode_unistr(s: &str) -> Result<String> {
                     )));
                 }
                 let cp = u32::from_str_radix(&hex, 16).map_err(|_| {
-                    DataFusionError::Execution(format!("unistr: invalid hex in \\U escape: \\U{hex}"))
+                    DataFusionError::Execution(format!(
+                        "unistr: invalid hex in \\U escape: \\U{hex}"
+                    ))
                 })?;
                 let c = char::from_u32(cp).ok_or_else(|| {
                     DataFusionError::Execution(format!(
@@ -341,7 +345,9 @@ fn decode_unistr(s: &str) -> Result<String> {
                     ));
                 }
                 let cp = u32::from_str_radix(&hex, 16).map_err(|_| {
-                    DataFusionError::Execution(format!("unistr: invalid hex in \\+ escape: \\+{hex}"))
+                    DataFusionError::Execution(format!(
+                        "unistr: invalid hex in \\+ escape: \\+{hex}"
+                    ))
                 })?;
                 let c = char::from_u32(cp).ok_or_else(|| {
                     DataFusionError::Execution(format!(
@@ -469,20 +475,41 @@ mod tests {
     async fn normalize_nfc_default() {
         let ctx = SessionContext::new();
         ctx.register_udf(create_normalize_udf());
-        assert_eq!(run_str(&ctx, "SELECT normalize('café')").await, Some("café".into()));
-        assert_eq!(run_str(&ctx, "SELECT normalize(CAST(NULL AS TEXT))").await, None);
+        assert_eq!(
+            run_str(&ctx, "SELECT normalize('café')").await,
+            Some("café".into())
+        );
+        assert_eq!(
+            run_str(&ctx, "SELECT normalize(CAST(NULL AS TEXT))").await,
+            None
+        );
     }
 
     #[tokio::test]
     async fn casefold_full_folding() {
         let ctx = SessionContext::new();
         ctx.register_udf(create_casefold_udf());
-        assert_eq!(run_str(&ctx, "SELECT casefold('Hello World')").await, Some("hello world".into()));
+        assert_eq!(
+            run_str(&ctx, "SELECT casefold('Hello World')").await,
+            Some("hello world".into())
+        );
         // Full case folding: ß -> ss (not ß), long-s ſ -> s.
-        assert_eq!(run_str(&ctx, "SELECT casefold('STRASSE')").await, Some("strasse".into()));
-        assert_eq!(run_str(&ctx, "SELECT casefold('ß')").await, Some("ss".into()));
-        assert_eq!(run_str(&ctx, "SELECT casefold('ſ')").await, Some("s".into()));
-        assert_eq!(run_str(&ctx, "SELECT casefold(CAST(NULL AS TEXT))").await, None);
+        assert_eq!(
+            run_str(&ctx, "SELECT casefold('STRASSE')").await,
+            Some("strasse".into())
+        );
+        assert_eq!(
+            run_str(&ctx, "SELECT casefold('ß')").await,
+            Some("ss".into())
+        );
+        assert_eq!(
+            run_str(&ctx, "SELECT casefold('ſ')").await,
+            Some("s".into())
+        );
+        assert_eq!(
+            run_str(&ctx, "SELECT casefold(CAST(NULL AS TEXT))").await,
+            None
+        );
     }
 
     #[tokio::test]
@@ -490,23 +517,41 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.register_udf(create_unicode_assigned_udf());
         // Ordinary text is assigned.
-        assert_eq!(run_bool(&ctx, "SELECT unicode_assigned('hello')").await, Some(true));
+        assert_eq!(
+            run_bool(&ctx, "SELECT unicode_assigned('hello')").await,
+            Some(true)
+        );
         // Private-Use-Area is category Co (assigned) -> true (NOT false).
         assert_eq!(
             run_bool(&ctx, "SELECT unicode_assigned('\u{E000}')").await,
             Some(true)
         );
-        assert_eq!(run_bool(&ctx, "SELECT unicode_assigned(CAST(NULL AS TEXT))").await, None);
+        assert_eq!(
+            run_bool(&ctx, "SELECT unicode_assigned(CAST(NULL AS TEXT))").await,
+            None
+        );
     }
 
     #[tokio::test]
     async fn unistr_escapes() {
         let ctx = SessionContext::new();
         ctx.register_udf(create_unistr_udf());
-        assert_eq!(run_str(&ctx, r"SELECT unistr('\u0041')").await, Some("A".into()));
-        assert_eq!(run_str(&ctx, r"SELECT unistr('\U00000041')").await, Some("A".into()));
-        assert_eq!(run_str(&ctx, "SELECT unistr('hello')").await, Some("hello".into()));
-        assert_eq!(run_str(&ctx, "SELECT unistr(CAST(NULL AS TEXT))").await, None);
+        assert_eq!(
+            run_str(&ctx, r"SELECT unistr('\u0041')").await,
+            Some("A".into())
+        );
+        assert_eq!(
+            run_str(&ctx, r"SELECT unistr('\U00000041')").await,
+            Some("A".into())
+        );
+        assert_eq!(
+            run_str(&ctx, "SELECT unistr('hello')").await,
+            Some("hello".into())
+        );
+        assert_eq!(
+            run_str(&ctx, "SELECT unistr(CAST(NULL AS TEXT))").await,
+            None
+        );
     }
 
     #[tokio::test]

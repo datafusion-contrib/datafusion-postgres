@@ -151,17 +151,67 @@ fn transliterate(c: char) -> Option<&'static str> {
     }
     // Latin-1 Supplement (U+00C0 .. U+00FF) transliteration.
     let mapped = match u {
-        0x00C0 => "A", 0x00C1 => "A", 0x00C2 => "A", 0x00C3 => "A", 0x00C4 => "A", 0x00C5 => "A",
-        0x00C6 => "AE", 0x00C7 => "C", 0x00C8 => "E", 0x00C9 => "E", 0x00CA => "E", 0x00CB => "E",
-        0x00CC => "I", 0x00CD => "I", 0x00CE => "I", 0x00CF => "I", 0x00D0 => "D", 0x00D1 => "N",
-        0x00D2 => "O", 0x00D3 => "O", 0x00D4 => "O", 0x00D5 => "O", 0x00D6 => "O", 0x00D8 => "O",
-        0x00D9 => "U", 0x00DA => "U", 0x00DB => "U", 0x00DC => "U", 0x00DD => "Y", 0x00DE => "TH",
+        0x00C0 => "A",
+        0x00C1 => "A",
+        0x00C2 => "A",
+        0x00C3 => "A",
+        0x00C4 => "A",
+        0x00C5 => "A",
+        0x00C6 => "AE",
+        0x00C7 => "C",
+        0x00C8 => "E",
+        0x00C9 => "E",
+        0x00CA => "E",
+        0x00CB => "E",
+        0x00CC => "I",
+        0x00CD => "I",
+        0x00CE => "I",
+        0x00CF => "I",
+        0x00D0 => "D",
+        0x00D1 => "N",
+        0x00D2 => "O",
+        0x00D3 => "O",
+        0x00D4 => "O",
+        0x00D5 => "O",
+        0x00D6 => "O",
+        0x00D8 => "O",
+        0x00D9 => "U",
+        0x00DA => "U",
+        0x00DB => "U",
+        0x00DC => "U",
+        0x00DD => "Y",
+        0x00DE => "TH",
         0x00DF => "ss",
-        0x00E0 => "a", 0x00E1 => "a", 0x00E2 => "a", 0x00E3 => "a", 0x00E4 => "a", 0x00E5 => "a",
-        0x00E6 => "ae", 0x00E7 => "c", 0x00E8 => "e", 0x00E9 => "e", 0x00EA => "e", 0x00EB => "e",
-        0x00EC => "i", 0x00ED => "i", 0x00EE => "i", 0x00EF => "i", 0x00F0 => "d", 0x00F1 => "n",
-        0x00F2 => "o", 0x00F3 => "o", 0x00F4 => "o", 0x00F5 => "o", 0x00F6 => "o", 0x00F8 => "o",
-        0x00F9 => "u", 0x00FA => "u", 0x00FB => "u", 0x00FC => "u", 0x00FD => "y", 0x00FE => "th",
+        0x00E0 => "a",
+        0x00E1 => "a",
+        0x00E2 => "a",
+        0x00E3 => "a",
+        0x00E4 => "a",
+        0x00E5 => "a",
+        0x00E6 => "ae",
+        0x00E7 => "c",
+        0x00E8 => "e",
+        0x00E9 => "e",
+        0x00EA => "e",
+        0x00EB => "e",
+        0x00EC => "i",
+        0x00ED => "i",
+        0x00EE => "i",
+        0x00EF => "i",
+        0x00F0 => "d",
+        0x00F1 => "n",
+        0x00F2 => "o",
+        0x00F3 => "o",
+        0x00F4 => "o",
+        0x00F5 => "o",
+        0x00F6 => "o",
+        0x00F8 => "o",
+        0x00F9 => "u",
+        0x00FA => "u",
+        0x00FB => "u",
+        0x00FC => "u",
+        0x00FD => "y",
+        0x00FE => "th",
         0x00FF => "y",
         // Latin Extended-A (common Central/Eastern European letters).
         0x0100 | 0x0101 => "A",  // Ā/ā
@@ -261,7 +311,10 @@ mod tests {
     async fn pg_client_encoding_returns_utf8() {
         let ctx = SessionContext::new();
         ctx.register_udf(create_pg_client_encoding_udf());
-        assert_eq!(run_str(&ctx, "SELECT pg_client_encoding()").await, Some("UTF8".into()));
+        assert_eq!(
+            run_str(&ctx, "SELECT pg_client_encoding()").await,
+            Some("UTF8".into())
+        );
     }
 
     #[tokio::test]
@@ -269,10 +322,22 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.register_udf(create_to_ascii_udf());
         // Accented Latin chars are transliterated to their ASCII base (not '?').
-        assert_eq!(run_str(&ctx, "SELECT to_ascii('café')").await, Some("cafe".into()));
-        assert_eq!(run_str(&ctx, "SELECT to_ascii('München')").await, Some("Munchen".into()));
-        assert_eq!(run_str(&ctx, "SELECT to_ascii('hello')").await, Some("hello".into()));
-        assert_eq!(run_str(&ctx, "SELECT to_ascii(CAST(NULL AS TEXT))").await, None);
+        assert_eq!(
+            run_str(&ctx, "SELECT to_ascii('café')").await,
+            Some("cafe".into())
+        );
+        assert_eq!(
+            run_str(&ctx, "SELECT to_ascii('München')").await,
+            Some("Munchen".into())
+        );
+        assert_eq!(
+            run_str(&ctx, "SELECT to_ascii('hello')").await,
+            Some("hello".into())
+        );
+        assert_eq!(
+            run_str(&ctx, "SELECT to_ascii(CAST(NULL AS TEXT))").await,
+            None
+        );
     }
 
     #[tokio::test]

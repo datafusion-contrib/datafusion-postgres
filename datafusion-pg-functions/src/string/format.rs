@@ -244,7 +244,10 @@ mod tests {
             run_str(&ctx, "SELECT format('%2$s %1$s', 'a', 'b')").await,
             Some("b a".into())
         );
-        assert_eq!(run_str(&ctx, "SELECT format('100%%')").await, Some("100%".into()));
+        assert_eq!(
+            run_str(&ctx, "SELECT format('100%%')").await,
+            Some("100%".into())
+        );
         assert_eq!(
             run_str(&ctx, "SELECT format('table %I', 'my table')").await,
             Some("table \"my table\"".into())
@@ -260,7 +263,12 @@ mod tests {
         // Postgres' format() grammar has no width — an error at execution, not planning.
         let ctx = SessionContext::new();
         ctx.register_udf(create_format_udf());
-        let res = ctx.sql("SELECT format('%10s', 'x')").await.unwrap().collect().await;
+        let res = ctx
+            .sql("SELECT format('%10s', 'x')")
+            .await
+            .unwrap()
+            .collect()
+            .await;
         assert!(res.is_err(), "width should be rejected");
     }
 

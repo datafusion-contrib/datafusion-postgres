@@ -92,12 +92,12 @@ impl ScalarUDFImpl for ToBinUDF {
                 Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
             ColumnarValue::Scalar(sv) => match sv {
-                ScalarValue::Int32(Some(v)) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                    bin_i32(*v),
-                )))),
-                ScalarValue::Int64(Some(v)) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                    bin_i64(*v),
-                )))),
+                ScalarValue::Int32(Some(v)) => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(bin_i32(*v)))))
+                }
+                ScalarValue::Int64(Some(v)) => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(bin_i64(*v)))))
+                }
                 ScalarValue::Int32(None) | ScalarValue::Int64(None) => {
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
                 }
@@ -190,12 +190,12 @@ impl ScalarUDFImpl for ToOctUDF {
                 Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
             ColumnarValue::Scalar(sv) => match sv {
-                ScalarValue::Int32(Some(v)) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                    oct_i32(*v),
-                )))),
-                ScalarValue::Int64(Some(v)) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                    oct_i64(*v),
-                )))),
+                ScalarValue::Int32(Some(v)) => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(oct_i32(*v)))))
+                }
+                ScalarValue::Int64(Some(v)) => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(oct_i64(*v)))))
+                }
                 ScalarValue::Int32(None) | ScalarValue::Int64(None) => {
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
                 }
@@ -249,7 +249,10 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.register_udf(create_to_bin_udf());
 
-        assert_eq!(run_str(&ctx, "SELECT to_bin(42)").await, Some("101010".into()));
+        assert_eq!(
+            run_str(&ctx, "SELECT to_bin(42)").await,
+            Some("101010".into())
+        );
         assert_eq!(run_str(&ctx, "SELECT to_bin(0)").await, Some("0".into()));
         // Two's-complement 32-bit: -1 -> 32 ones
         assert_eq!(
@@ -261,7 +264,10 @@ mod tests {
             run_str(&ctx, "SELECT to_bin(CAST(-13 AS INT))").await,
             Some("11111111111111111111111111110011".into())
         );
-        assert_eq!(run_str(&ctx, "SELECT to_bin(CAST(NULL AS INT))").await, None);
+        assert_eq!(
+            run_str(&ctx, "SELECT to_bin(CAST(NULL AS INT))").await,
+            None
+        );
     }
 
     #[tokio::test]
@@ -270,7 +276,9 @@ mod tests {
         ctx.register_udf(create_to_bin_udf());
         // int8 -1 -> 64 ones
         assert_eq!(
-            run_str(&ctx, "SELECT to_bin(CAST(-1 AS BIGINT))").await.map(|s| s.len()),
+            run_str(&ctx, "SELECT to_bin(CAST(-1 AS BIGINT))")
+                .await
+                .map(|s| s.len()),
             Some(64)
         );
     }
@@ -287,7 +295,10 @@ mod tests {
             run_str(&ctx, "SELECT to_oct(CAST(-1 AS INT))").await,
             Some("37777777777".into())
         );
-        assert_eq!(run_str(&ctx, "SELECT to_oct(CAST(NULL AS INT))").await, None);
+        assert_eq!(
+            run_str(&ctx, "SELECT to_oct(CAST(NULL AS INT))").await,
+            None
+        );
     }
 
     #[tokio::test]
@@ -303,12 +314,15 @@ mod tests {
             .await
             .unwrap();
         let arr = df[0].column(0).as_string::<i32>();
-        let got: Vec<Option<&str>> = (0..arr.len()).map(|i| {
-            if arr.is_null(i) { None } else { Some(arr.value(i)) }
-        }).collect();
-        assert_eq!(
-            got,
-            vec![Some("1"), Some("10"), Some("1010"), None]
-        );
+        let got: Vec<Option<&str>> = (0..arr.len())
+            .map(|i| {
+                if arr.is_null(i) {
+                    None
+                } else {
+                    Some(arr.value(i))
+                }
+            })
+            .collect();
+        assert_eq!(got, vec![Some("1"), Some("10"), Some("1010"), None]);
     }
 }

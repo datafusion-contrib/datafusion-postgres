@@ -20,9 +20,7 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, ListBuilder, StringBuilder,
-};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, ListBuilder, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::{
@@ -49,8 +47,9 @@ fn build_regex(pattern: &str, flags: &str) -> Result<Regex> {
         }
     }
     pat.push_str(pattern);
-    Regex::new(&pat)
-        .map_err(|e| DataFusionError::Execution(format!("regexp: invalid pattern '{pattern}': {e}")))
+    Regex::new(&pat).map_err(|e| {
+        DataFusionError::Execution(format!("regexp: invalid pattern '{pattern}': {e}"))
+    })
 }
 
 /// Return the byte offset of the `skip`-th (0-based) char, or `None` if the
@@ -239,7 +238,11 @@ impl ScalarUDFImpl for RegexpSplitToArrayUDF {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))))
+        Ok(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Utf8,
+            true,
+        ))))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -329,8 +332,14 @@ mod tests {
             run_str(&ctx, "SELECT regexp_substr('abc123def', '[0-9]+')").await,
             Some("123".into())
         );
-        assert_eq!(run_str(&ctx, "SELECT regexp_substr('hello', '[0-9]+')").await, None);
-        assert_eq!(run_str(&ctx, "SELECT regexp_substr(CAST(NULL AS TEXT), 'abc')").await, None);
+        assert_eq!(
+            run_str(&ctx, "SELECT regexp_substr('hello', '[0-9]+')").await,
+            None
+        );
+        assert_eq!(
+            run_str(&ctx, "SELECT regexp_substr(CAST(NULL AS TEXT), 'abc')").await,
+            None
+        );
     }
 
     #[tokio::test]
