@@ -11,9 +11,10 @@
 //! ## Postgres compatibility
 //!
 //! `casefold` performs full Unicode case folding (CaseFolding.txt, the common
-//! `C` plus full `F` mappings) — the same operation Postgres performs. It is
-//! *not* the same as locale-independent lowercase: it expands e.g. `ß` → `ss`
-//! and folds the long-s `ſ` → `s`.
+//! `C` plus full `F` mappings) via the ICU4X case-mapping tables — the same
+//! operation Postgres performs. It is *not* the same as locale-independent
+//! lowercase: it expands e.g. `ß` → `ss`, folds the long-s `ſ` → `s`, maps
+//! final sigma `ς` → `σ`, micro `µ` → `μ`, and capital sharp-s `ẞ` → `ss`.
 //!
 //! `unicode_assigned` reports whether every codepoint has a non-`Cn` general
 //! category, looked up via the ICU4X property tables — so Private-Use-Area
@@ -29,6 +30,7 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
 };
+use icu_casemap::CaseMapper;
 use icu_properties::CodePointMapData;
 use icu_properties::props::GeneralCategory;
 use unicode_normalization::UnicodeNormalization;
@@ -119,30 +121,10 @@ impl ScalarUDFImpl for NormalizeUDF {
 // casefold(text) → text — full Unicode case folding
 // ---------------------------------------------------------------------------
 
-/// Apply full Unicode case folding (CaseFolding.txt `C` + `F` mappings).
-///
-/// For the overwhelming majority of codepoints the fold equals the default
-/// lowercase mapping, so we delegate to `char::to_lowercase`. The closed set
-/// of cases where the fold *differs* from simple lowercase is enumerated
-/// explicitly: the expansions `ß`→`ss`, `ﬀ`→`ff`, `ﬁ`→`fi`, `ﬂ`→`fl`,
-/// `ﬃ`→`ffi`, `ﬄ`→`ffl`, `ﬅ`→`st`, `ﬆ`→`st`, plus the long-s `ſ`→`s`.
+/// Apply full Unicode case folding (CaseFolding.txt `C` + `F` mappings) via
+/// the ICU4X `CaseMapper` — the same tables Postgres' own casefold uses.
 fn casefold_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            'ß' => out.push_str("ss"),
-            'ſ' => out.push('s'),
-            'ﬀ' => out.push_str("ff"),
-            'ﬁ' => out.push_str("fi"),
-            'ﬂ' => out.push_str("fl"),
-            'ﬃ' => out.push_str("ffi"),
-            'ﬄ' => out.push_str("ffl"),
-            'ﬅ' => out.push_str("st"),
-            'ﬆ' => out.push_str("st"),
-            _ => out.extend(c.to_lowercase()),
-        }
-    }
-    out
+    CaseMapper::new().fold_string(s).into_owned()
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -505,6 +487,19 @@ mod tests {
         assert_eq!(
             run_str(&ctx, "SELECT casefold('ſ')").await,
             Some("s".into())
+        );
+        // Full case folding edge cases: final sigma, micro sign, capital sharp-s.
+        assert_eq!(
+            run_str(&ctx, "SELECT casefold('ς')").await,
+            Some("σ".into())
+        );
+        assert_eq!(
+            run_str(&ctx, "SELECT casefold('µ')").await,
+            Some("μ".into())
+        );
+        assert_eq!(
+            run_str(&ctx, "SELECT casefold('ẞ')").await,
+            Some("ss".into())
         );
         assert_eq!(
             run_str(&ctx, "SELECT casefold(CAST(NULL AS TEXT))").await,

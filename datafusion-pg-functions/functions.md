@@ -63,7 +63,7 @@ implementation strategy in DataFusion.
 | [String](#functions-string) | 61 | 42 | 16 | 0 | 3 | 0 | 0+4 | 0 |
 | [Binary String](#functions-binarystring) | 30 | 20 | 0 | 0 | 10 | 0 | 0+4 | 0 |
 | [Bit String](#functions-bitstring) | 9 | 6 | 0 | 0 | 0 | 0 | 0+3 | 3 |
-| [Pattern Matching](#functions-matching) | 15 | 7 | 0 | 0 | 4 | 0 | 3+2 | 0 |
+| [Pattern Matching](#functions-matching) | 15 | 7 | 2 | 0 | 2 | 0 | 3+2 | 0 |
 | [Data Type Formatting](#functions-formatting) | 10 | 3 | 0 | 0 | 7 | 0 | 0+0 | 0 |
 | [Date/Time](#functions-datetime) | 33 | 11 | 0 | 0 | 21 | 0 | 0+1 | 0 |
 | [Enum Support](#functions-enum) | 3 | 0 | 0 | 0 | 0 | 0 | 0+0 | 3 |
@@ -219,13 +219,13 @@ implementation strategy in DataFusion.
 | `ascii` | fn | ✅ | — | 1 | convert first char to int4 | Native DataFusion |
 | `bit_length` | fn | ✅ | — | 3 | length in bits | Native DataFusion |
 | `btrim` | fn | ✅ | — | 3 | trim selected characters from both ends of string | Native DataFusion |
-| `casefold` | fn | 🚧 | P2 | 1 | fold case |  |
+| `casefold` | fn | 🔧 | — | 1 | fold case |  |
 | `char_length` | fn | ✅ | — | 2 | character length | Native DataFusion |
 | `character_length` | fn | ✅ | — | 2 | character length | Native DataFusion |
 | `chr` | fn | ✅ | — | 1 | convert int4 to char | Native DataFusion |
 | `concat` | fn | ✅ | — | 1 | concatenate values | Native DataFusion |
 | `concat_ws` | fn | ✅ | — | 1 | concatenate values with separators | Native DataFusion |
-| `format` | fn | 🚧 | P2 | 2 | format text message | PG `%s`/`%I`/`%L` format strings; high-value for psql/dbeaver. |
+| `format` | fn | 🔧 | — | 2 | format text message | PG `%s`/`%I`/`%L` format strings; high-value for psql/dbeaver. |
 | `initcap` | fn | ✅ | — | 1 | capitalize each word | Native DataFusion |
 | `left` | fn | ✅ | — | 1 | extract the first n characters | Native DataFusion |
 | `length` | fn | ✅ | — | 8 | length of string in specified encoding | Overloaded in PG (text/bytea/bit); DF covers text only. Native DataFusion |
@@ -233,15 +233,15 @@ implementation strategy in DataFusion.
 | `lpad` | fn | ✅ | — | 2 | left-pad string to length | Native DataFusion |
 | `ltrim` | fn | ✅ | — | 3 | trim selected characters from left end of string | Native DataFusion |
 | `md5` | fn | ✅ | — | 2 | MD5 hash | Native DataFusion |
-| `normalize` | fn | 🚧 | P2 | 1 | Unicode normalization | Unicode normalization. |
+| `normalize` | fn | 🔧 | — | 1 | Unicode normalization | Unicode normalization. |
 | `octet_length` | fn | ✅ | — | 4 | octet length | Native DataFusion |
 | `overlay` | both | ✅ | — | 6 | substitute portion of bitstring | Native DataFusion |
 | `parse_ident` | fn | 🔧 | — | 1 | parse qualified identifier to array of identifiers | In datafusion-pg-catalog |
-| `pg_client_encoding` | fn | 🚧 | P2 | 1 | encoding name of current database |  |
+| `pg_client_encoding` | fn | 🔧 | — | 1 | encoding name of current database |  |
 | `position` | both | ✅ | — | 3 | position of sub-bitstring | Native DataFusion |
 | `quote_ident` | fn | 🔧 | — | 1 | quote an identifier for usage in a querystring | In datafusion-pg-catalog |
-| `quote_literal` | fn | 🚧 | P2 | 2 | quote a data value for usage in a querystring |  |
-| `quote_nullable` | fn | 🚧 | P2 | 2 | quote a possibly-null data value for usage in a querystring |  |
+| `quote_literal` | fn | 🔧 | — | 2 | quote a data value for usage in a querystring |  |
+| `quote_nullable` | fn | 🔧 | — | 2 | quote a possibly-null data value for usage in a querystring |  |
 | `regexp_count` | fn | ✅ | — | 3 | count regexp matches | Native DataFusion |
 | `regexp_instr` | fn | ✅ | — | 6 | position of regexp match | Native DataFusion |
 | `regexp_like` | fn | ✅ | — | 2 | test for regexp match | Native DataFusion |
@@ -258,7 +258,7 @@ implementation strategy in DataFusion.
 | `rpad` | fn | ✅ | — | 2 | right-pad string to length | Native DataFusion |
 | `rtrim` | fn | ✅ | — | 3 | trim selected characters from right end of string | Native DataFusion |
 | `split_part` | fn | ✅ | — | 1 | split string by field_sep and return field_num | Native DataFusion |
-| `sprintf` | fn | 🚧 | P2 | 0 | — | PG 18+. |
+| `sprintf` | fn | 🔧 | — | 0 | — | PG 18+. |
 | `starts_with` | fn | ✅ | — | 1 | — | Native DataFusion |
 | `string_agg` | fn | ✅ | — | 2 | concatenate aggregate input into a string | Native DataFusion |
 | `string_to_array` | fn | ✅ | — | 2 | split delimited text, with null string | Native DataFusion |
@@ -266,14 +266,14 @@ implementation strategy in DataFusion.
 | `strpos` | fn | ✅ | — | 1 | position of substring | DataFusion is 0-based; Postgres is 1-based. Native DataFusion. Same naming and offset semantics as substr. |
 | `substr` | fn | ✅ | — | 4 | extract portion of string | DataFusion is 0-based; Postgres is 1-based. Native DataFusion. DataFusion's substr is 0-based; Postgres is 1-based. Translate. |
 | `substring` | both | ✅ | — | 8 | extract text matching SQL regular expression | Native DataFusion. Postgres 1-based offsets. |
-| `to_ascii` | fn | 🚧 | P2 | 3 | encode text from DB encoding to ASCII text |  |
-| `to_bin` | fn | 🚧 | P2 | 2 | convert int4 number to binary | Int→binary text. |
+| `to_ascii` | fn | 🔧 | — | 3 | encode text from DB encoding to ASCII text |  |
+| `to_bin` | fn | 🔧 | — | 2 | convert int4 number to binary | Int→binary text. |
 | `to_hex` | fn | ✅ | — | 2 | convert int4 number to hex | Native DataFusion |
-| `to_oct` | fn | 🚧 | P2 | 2 | convert int4 number to oct | Int→octal text. |
+| `to_oct` | fn | 🔧 | — | 2 | convert int4 number to oct | Int→octal text. |
 | `translate` | fn | ✅ | — | 1 | map a set of characters appearing in string | Native DataFusion |
 | `trim` | both | ✅ | — | 0 | — | Native DataFusion (SQL special form). |
-| `unicode_assigned` | fn | 🚧 | P2 | 1 | check valid Unicode |  |
-| `unistr` | fn | 🚧 | P2 | 1 | unescape Unicode characters | Unicode escape decoder. |
+| `unicode_assigned` | fn | 🔧 | — | 1 | check valid Unicode |  |
+| `unistr` | fn | 🔧 | — | 1 | unescape Unicode characters | Unicode escape decoder. |
 | `upper` | fn | ✅ | — | 3 | upper bound of multirange | Native DataFusion |
 
 ## Binary String Functions and Operators

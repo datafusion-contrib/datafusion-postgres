@@ -8,8 +8,11 @@
 //! `format(formatstr text [, VARIADIC "any"])` with specifiers
 //!
 //! * `%[position]s` — format the argument as a simple string (NULL → empty).
-//! * `%[position]I` — format the argument as an SQL identifier (double-quoted
-//!   when it is not a bare, lowercased, non-reserved identifier).
+//! * `%[position]I` — format the argument as an SQL identifier, double-quoted
+//!   unless it is a bare identifier (lowercase ASCII letters/digits/underscore,
+//!   not starting with a digit). Deviation from Postgres: the reserved-word
+//!   check is not implemented, so `format('%I', 'select')` renders unquoted
+//!   where Postgres would quote it.
 //! * `%[position]L` — format the argument as an SQL literal (`quote_nullable`).
 //! * `%%` — a literal `%`.
 //!
@@ -26,7 +29,8 @@ use datafusion::logical_expr::{
 
 /// Render `s` as an SQL identifier, double-quoting when it is not already a
 /// bare identifier (lowercase ASCII letters/digits/underscore, not starting
-/// with a digit). Mirrors the common case of Postgres' `quote_ident`.
+/// with a digit). Mirrors the common case of Postgres' `quote_ident` — the
+/// reserved-word check is not implemented (see the module docs).
 fn pg_quote_ident(s: &str) -> String {
     let is_bare = !s.is_empty()
         && s.bytes()

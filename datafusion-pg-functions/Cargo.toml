@@ -51,6 +51,7 @@ string = [
     "dep:regex",
     "dep:unicode-normalization",
     "dep:icu_properties",
+    "dep:icu_casemap",
 ]
 # Binary String Functions and Operators
 binary = []
@@ -96,7 +97,7 @@ rand = { version = "0.10", optional = true }
 regex = { version = "1", optional = true }
 unicode-normalization = { version = "0.1", optional = true }
 icu_properties = { version = "2.1", optional = true }
-
+icu_casemap = { version = "2", optional = true }
 [dev-dependencies]
 async-trait = "0.1"
 datafusion = { workspace = true, features = ["nested_expressions"] }

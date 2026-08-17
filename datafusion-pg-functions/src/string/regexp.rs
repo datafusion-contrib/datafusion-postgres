@@ -30,11 +30,17 @@ use datafusion::logical_expr::{
 use regex::Regex;
 
 /// Build a `Regex` from a pattern string and optional Postgres flag letters.
+///
+/// Flags are applied in order: `i` enables case-insensitive matching and
+/// `c` turns it back off (the default) — so `"ic"` is case-sensitive and
+/// `"ci"` is case-insensitive, matching Postgres.
 fn build_regex(pattern: &str, flags: &str) -> Result<Regex> {
     let mut pat = String::new();
+    let mut case_insensitive = false;
     for f in flags.chars() {
         match f {
-            'i' | 'c' => pat.push_str("(?i)"), // i = case-insensitive; c is no-op default
+            'i' => case_insensitive = true,
+            'c' => case_insensitive = false, // case-sensitive; overrides earlier 'i'
             'm' | 'n' => pat.push_str("(?m)"),
             's' => pat.push_str("(?s)"),
             'x' => pat.push_str("(?x)"),
@@ -45,6 +51,9 @@ fn build_regex(pattern: &str, flags: &str) -> Result<Regex> {
                 )));
             }
         }
+    }
+    if case_insensitive {
+        pat.push_str("(?i)");
     }
     pat.push_str(pattern);
     Regex::new(&pat).map_err(|e| {
@@ -254,7 +263,12 @@ impl ScalarUDFImpl for RegexpSplitToArrayUDF {
         match (&args.args[0], &args.args[1]) {
             (ColumnarValue::Scalar(ScalarValue::Utf8(None)), _)
             | (_, ColumnarValue::Scalar(ScalarValue::Utf8(None))) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Null))
+                // A NULL of the declared List return type (not untyped Null).
+                Ok(ColumnarValue::Scalar(ScalarValue::new_null_list(
+                    DataType::Utf8,
+                    true,
+                    1,
+                )))
             }
             (
                 ColumnarValue::Array(text_arr),
@@ -374,6 +388,50 @@ mod tests {
         assert_eq!(arr.value(0), "1");
         assert!(arr.is_null(1));
         assert!(arr.is_null(2));
+    }
+
+    #[tokio::test]
+    async fn regexp_substr_flag_c_is_case_sensitive() {
+        // PG: 'c' = case-sensitive (the default); 'i' = insensitive; 'c' after
+        // 'i' overrides it. Regression test for the flag that once mapped to (?i).
+        let ctx = SessionContext::new();
+        ctx.register_udf(create_regexp_substr_udf());
+        // case-sensitive: 'ABC' does NOT match 'abc' -> NULL
+        assert_eq!(
+            run_str(
+                &ctx,
+                "SELECT regexp_substr('ABC', 'abc', CAST(1 AS INT), CAST(1 AS INT), 'c')",
+            )
+            .await,
+            None
+        );
+        // 'i' alone: case-insensitive -> 'ABC'
+        assert_eq!(
+            run_str(
+                &ctx,
+                "SELECT regexp_substr('ABC', 'abc', CAST(1 AS INT), CAST(1 AS INT), 'i')",
+            )
+            .await,
+            Some("ABC".into())
+        );
+        // Last flag wins: 'ic' -> case-sensitive -> NULL
+        assert_eq!(
+            run_str(
+                &ctx,
+                "SELECT regexp_substr('ABC', 'abc', CAST(1 AS INT), CAST(1 AS INT), 'ic')",
+            )
+            .await,
+            None
+        );
+        // Last flag wins: 'ci' -> case-insensitive -> 'ABC'
+        assert_eq!(
+            run_str(
+                &ctx,
+                "SELECT regexp_substr('ABC', 'abc', CAST(1 AS INT), CAST(1 AS INT), 'ci')",
+            )
+            .await,
+            Some("ABC".into())
+        );
     }
 
     #[tokio::test]
