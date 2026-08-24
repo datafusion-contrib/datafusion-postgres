@@ -4,16 +4,25 @@
 //! # oid-alias types
 //!
 //! `regclass`, `regproc`, `regtype`, `regnamespace`, `oid`, ... Each is mapped
-//! to an `Int32` [`Field`] (oids are stored as int4) carrying the same
-//! `pg.oid_alias` metadata the catalog columns use, so the kind survives into
-//! the logical plan inside the resulting [`Expr::Cast`]'s `field`. The
-//! oid-coercion analyzer rule then reads that metadata to resolve name strings
-//! -> oids the way Postgres does -- no SQL/AST rewriting needed.
+//! to a plain `Int32` [`Field`] (oids are stored as int4) so the cast plans.
+//! Name-string -> oid resolution happens earlier, at the SQL-rewrite layer
+//! (`RewriteRegCastToSubquery`); column/reverse casts (`prorettype::regtype`,
+//! `c.oid::regclass`) stay in the plan as int4 identity casts.
 //!
-//! This is the metadata-aware replacement for the former `RemoveOidTypeCast`
-//! (SQL rewrite) + `RewriteRegCastToSubquery` (SQL rewrite) pair: instead of
-//! stripping the cast at the AST layer (losing the type) and reconstructing it
-//! later, the type is accepted up front and resolved at the analyzer layer.
+//! The field is deliberately **metadata-free**. DataFusion (as of 55)
+//! derives a logical cast's output field from the *source* field (keeping
+//! its `pg.oid_alias` metadata), while a physical `CastExpr` whose target
+//! field carries metadata reports that metadata from `return_field()`.
+//! Stamping the kind on the cast target therefore makes the two layers
+//! disagree -- e.g. `c.oid` is "oid"-kind but `c.oid::regclass` plans as
+//! "regclass"-kind -- and trips the physical optimizers' schema-invariant
+//! check ("ProjectionPushdown failed. Schema mismatch") as soon as a
+//! projection containing the cast is rebuilt. See upstream
+//! datafusion#22079 / datafusion#23169 for the divergence.
+//!
+//! This replaces the former `RemoveOidTypeCast` SQL rewrite: instead of
+//! stripping the cast at the AST layer (losing the type), the type is
+//! accepted up front.
 //!
 //! # `pg_catalog`-qualified builtins
 //!
@@ -33,7 +42,7 @@ use datafusion::common::Result;
 use datafusion::logical_expr::planner::TypePlanner;
 use datafusion::sql::sqlparser::ast::{DataType as SQLDataType, ObjectNamePart};
 
-use crate::pg_catalog::oid_field::{self, OID_ALIAS_KEY, OID_ALIAS_TYPE_NAMES};
+use crate::pg_catalog::oid_field::{self, OID_ALIAS_TYPE_NAMES};
 
 /// Recognize Postgres type names DataFusion rejects and map them to Arrow
 /// types/metadata at planning time.
@@ -42,10 +51,22 @@ pub struct PgOidTypePlanner;
 
 impl PgOidTypePlanner {
     /// Build the int4 oid field for a given kind (`regclass`, `oid`, ...).
-    fn oid_field(kind: &str) -> Arc<Field> {
-        Arc::new(Field::new("", DataType::Int32, true).with_metadata(
-            std::collections::HashMap::from([(OID_ALIAS_KEY.to_string(), kind.to_string())]),
-        ))
+    ///
+    /// Deliberately metadata-free: DataFusion (as of 55) resolves a logical
+    /// cast's output field from the *source* field (`cast_output_field` keeps
+    /// the source's `pg.oid_alias` metadata), while a physical `CastExpr`
+    /// whose target field carries metadata reports that metadata verbatim
+    /// from `return_field()`. Stamping the kind here therefore makes the two
+    /// layers disagree (`c.oid` is "oid" but `c.oid::regclass` plans as
+    /// "regclass"), which trips the physical optimizers' schema-invariant
+    /// check ("ProjectionPushdown failed. Schema mismatch") as soon as a
+    /// projection containing the cast is rebuilt. No code reads cast-target
+    /// `pg.oid_alias` metadata anymore (the oid-coercion analyzer rule that
+    /// did was replaced by `RewriteRegCastToSubquery` in the SQL layer), so
+    /// the stamp is pure liability. See upstream datafusion#22079 /
+    /// datafusion#23169 for the underlying logical/physical divergence.
+    fn oid_field(_kind: &str) -> Arc<Field> {
+        Arc::new(Field::new("", DataType::Int32, true))
     }
 
     /// Lowercase last identifier of a `Custom(...)` type name, if any.
@@ -200,12 +221,11 @@ mod tests {
             let dt = cast_target_type(&format!("SELECT 'x'::{t} AS c"));
             let field = planner.plan_type_field(&dt).unwrap().unwrap();
             assert_eq!(field.data_type(), &DataType::Int32, "{t}");
-            let kind = field.metadata().get(OID_ALIAS_KEY).cloned();
-            assert!(kind.is_some(), "{t} should carry oid-alias metadata");
-            assert!(
-                OID_ALIAS_TYPE_NAMES.contains(&kind.unwrap().as_str()),
-                "{t} kind must be canonical"
-            );
+            // Deliberately metadata-free: a stamped target field makes the
+            // physical cast report metadata the logical layer never produced,
+            // tripping the physical optimizers' schema-invariant check (see
+            // the `oid_field` doc above).
+            assert!(field.metadata().is_empty(), "{t}");
         }
     }
 
@@ -221,12 +241,14 @@ mod tests {
     #[test]
     fn pg_catalog_prefix_normalizes_to_kind() {
         let planner = PgOidTypePlanner;
-        let dt = cast_target_type("SELECT 'x'::pg_catalog.regproc AS c");
-        let field = planner.plan_type_field(&dt).unwrap().unwrap();
-        assert_eq!(
-            field.metadata().get(OID_ALIAS_KEY).map(String::as_str),
-            Some(oid_field::kind::REGPROC)
-        );
+        // Both bare and pg_catalog-qualified names plan to the same
+        // (metadata-free) int4 field.
+        for sql in ["regproc", "pg_catalog.regproc"] {
+            let dt = cast_target_type(&format!("SELECT 'x'::{sql} AS c"));
+            let field = planner.plan_type_field(&dt).unwrap().unwrap();
+            assert_eq!(field.data_type(), &DataType::Int32, "{sql}");
+            assert!(field.metadata().is_empty(), "{sql}");
+        }
     }
 
     #[test]
@@ -255,11 +277,8 @@ mod tests {
                 .unwrap()
                 .unwrap_or_else(|| panic!("{sql} should be handled by the planner"));
             assert_eq!(field.data_type(), &expected, "{sql}");
-            // No oid-alias metadata for plain builtins.
-            assert!(
-                field.metadata().get(OID_ALIAS_KEY).is_none(),
-                "{sql} must not carry oid-alias metadata"
-            );
+            // Metadata-free for every planner-produced field.
+            assert!(field.metadata().is_empty(), "{sql}");
         }
     }
 
@@ -276,12 +295,12 @@ mod tests {
         let dt = cast_target_type("SELECT 'x'::public.text AS c");
         assert_eq!(planner.plan_type_field(&dt).unwrap(), None);
 
-        // `pg_catalog.regclass` is an oid-alias: handled by the oid arm (Int32
-        // + metadata), NOT by the builtin arm.
+        // `pg_catalog.regclass` is an oid-alias: handled by the oid arm (a
+        // plain metadata-free Int32 field), NOT by the builtin arm.
         let dt = cast_target_type("SELECT 'x'::pg_catalog.regclass AS c");
         let field = planner.plan_type_field(&dt).unwrap().unwrap();
         assert_eq!(field.data_type(), &DataType::Int32);
-        assert!(field.metadata().get(OID_ALIAS_KEY).is_some());
+        assert!(field.metadata().is_empty());
     }
 
     #[test]
