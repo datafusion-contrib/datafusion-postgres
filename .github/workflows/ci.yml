@@ -19,6 +19,8 @@ jobs:
         override: true
     - run: cargo fmt -- --check
 
+  # The release gate: everything above MSRV must build and pass tests
+  # with default features, independent of optional feature readiness.
   lint:
     name: Clippy lint
     runs-on: ubuntu-latest
@@ -29,6 +31,26 @@ jobs:
         toolchain: stable
         components: clippy
         override: true
+    - uses: Swatinem/rust-cache@v2
+    # `full` is a superset of the default `math` feature, so this pass
+    # covers the base code plus every pg-functions category.
+    - name: Lint
+      run: cargo clippy --features datafusion-pg-functions/full -- -D warnings
+
+  # Advisory: lints the optional postgis feature as well. Allowed to fail
+  # so a lagging geodatafusion release does not block anything.
+  lint-all-features:
+    name: Clippy lint (all features)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        components: clippy
+        override: true
+    - uses: Swatinem/rust-cache@v2
     - name: Lint
       run: cargo clippy --all-features -- -D warnings
 
@@ -52,8 +74,40 @@ jobs:
       with:
         toolchain: ${{ matrix.rust }}
         override: true
+    - uses: Swatinem/rust-cache@v2
     - name: Build and run tests
-      run: cargo test --all-features
+      run: cargo test
+
+  # Additional features, each tested in isolation. Feature sets backed by
+  # fast-moving optional dependencies (postgis -> geodatafusion) are marked
+  # `optional` so they cannot block a release while upstream lags behind.
+  test-features:
+    name: Test features (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.optional }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: functions-full
+            flags: "--features datafusion-pg-functions/full"
+            optional: false
+          - name: postgis
+            flags: "--features datafusion-postgres/postgis"
+            optional: true
+          - name: all-features
+            flags: "--all-features"
+            optional: true
+    steps:
+    - uses: actions/checkout@v6
+    - uses: insightsengineering/disk-space-reclaimer@v1
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+    - uses: Swatinem/rust-cache@v2
+    - name: Build and run tests
+      run: cargo test ${{ matrix.flags }}
 
   cleanbuild-linux-nix:
     name: Run clean build on Linux
@@ -82,6 +136,24 @@ jobs:
       run: nix develop --command podman info >/dev/null 2>&1 || true
     - run: |
         cd tests-integration
+        nix develop --command bash test.sh --skip-postgis
+
+  # Advisory: full integration suite including the PostGIS tests, built
+  # with the postgis feature. Allowed to fail while geodatafusion lags.
+  integration-postgis:
+    name: Integration tests (postgis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [test]
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@v6
+    - uses: insightsengineering/disk-space-reclaimer@v1
+    - uses: cachix/install-nix-action@v31
+    - name: Initialize podman
+      run: nix develop --command podman info >/dev/null 2>&1 || true
+    - run: |
+        cd tests-integration
         nix develop --command bash test.sh
 
   msrv:
@@ -93,4 +165,5 @@ jobs:
       with:
         toolchain: "1.89"
         override: true
-    - run: cargo build --all-features
+    - uses: Swatinem/rust-cache@v2
+    - run: cargo build
