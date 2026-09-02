@@ -2,6 +2,16 @@
 
 set -e
 
+# Optional flag: --skip-postgis
+# Skips the PostGIS integration test and builds without the postgis
+# feature, for use when the geodatafusion dependency is not ready.
+SKIP_POSTGIS=""
+for arg in "$@"; do
+    case $arg in
+        --skip-postgis) SKIP_POSTGIS=1 ;;
+    esac
+done
+
 # Function to cleanup processes
 cleanup() {
     echo "🧹 Cleaning up processes..."
@@ -41,7 +51,11 @@ echo "=================================================="
 # Build the project
 echo "Building datafusion-postgres..."
 cd ..
-cargo build --features datafusion-postgres/postgis
+if [ -n "$SKIP_POSTGIS" ]; then
+    cargo build
+else
+    cargo build --features datafusion-postgres/postgis
+fi
 cd tests-integration
 
 # Test 1: CSV data loading and PostgreSQL compatibility
@@ -209,26 +223,30 @@ sleep 3
 echo ""
 echo "🗺️  Test 6: PostGIS Spatial Functions"
 echo "--------------------------------------"
-wait_for_port 5437
-../target/debug/datafusion-postgres-cli -p 5437 --csv delhi:delhiclimate.csv &
-POSTGIS_PID=$!
-sleep 5
+if [ -z "$SKIP_POSTGIS" ]; then
+    wait_for_port 5437
+    ../target/debug/datafusion-postgres-cli -p 5437 --csv delhi:delhiclimate.csv &
+    POSTGIS_PID=$!
+    sleep 5
 
-# Check if server is actually running
-if ! ps -p $POSTGIS_PID > /dev/null 2>&1; then
-    echo "❌ PostGIS server failed to start"
-    exit 1
-fi
+    # Check if server is actually running
+    if ! ps -p $POSTGIS_PID > /dev/null 2>&1; then
+        echo "❌ PostGIS server failed to start"
+        exit 1
+    fi
 
-if python test_postgis.py; then
-    echo "✅ PostGIS test passed"
-else
-    echo "❌ PostGIS test failed"
+    if python test_postgis.py; then
+        echo "✅ PostGIS test passed"
+    else
+        echo "❌ PostGIS test failed"
+        kill -9 $POSTGIS_PID 2>/dev/null || true
+        exit 1
+    fi
+
     kill -9 $POSTGIS_PID 2>/dev/null || true
-    exit 1
+else
+    echo "⏭️  Skipped (--skip-postgis)"
 fi
-
-kill -9 $POSTGIS_PID 2>/dev/null || true
 
 echo ""
 echo "🎉 All enhanced integration tests passed!"
@@ -243,5 +261,7 @@ echo "  ✅ Array types and complex data type support"
 echo "  ✅ Improved pg_catalog system tables"
 echo "  ✅ PostgreSQL function compatibility"
 echo "  ✅ SSL/TLS encryption support"
-echo "  ✅ PostGIS spatial functions support"
+if [ -z "$SKIP_POSTGIS" ]; then
+    echo "  ✅ PostGIS spatial functions support"
+fi
 echo ""
