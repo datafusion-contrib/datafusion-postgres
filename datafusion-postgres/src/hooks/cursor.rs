@@ -201,7 +201,7 @@ async fn handle_fetch(
                         "XX000".to_string(),
                         "unsupported portal strategy".to_string(),
                     ),
-                )))
+                )));
             }
         },
         None => {
@@ -211,7 +211,7 @@ async fn handle_fetch(
                     "34000".to_string(),
                     format!("cursor \"{cursor_name}\" does not exist"),
                 ),
-            )))
+            )));
         }
     };
 
