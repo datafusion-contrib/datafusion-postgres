@@ -390,7 +390,7 @@ impl QueryParser for Parser {
         client: &C,
         sql: &str,
         _types: &[Option<Type>],
-    ) -> PgWireResult<Self::Statement>
+    ) -> PgWireResult<Option<Self::Statement>>
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
@@ -400,7 +400,7 @@ impl QueryParser for Parser {
             .parse(sql)
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
         if statements.is_empty() {
-            return Ok((sql.to_string(), None));
+            return Ok(None);
         }
 
         let statement = statements.remove(0);
@@ -414,7 +414,7 @@ impl QueryParser for Parser {
                 .handle_extended_parse_query(&statement, context, client)
                 .await
             {
-                return Ok((query, Some((statement, logical_plan?))));
+                return Ok(Some((query, Some((statement, logical_plan?)))));
             }
         }
 
@@ -422,7 +422,7 @@ impl QueryParser for Parser {
             .statement_to_plan(Statement::Statement(Box::new(statement.clone())))
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        Ok((query, Some((statement, logical_plan))))
+        Ok(Some((query, Some((statement, logical_plan)))))
     }
 
     fn get_parameter_types(&self, stmt: &Self::Statement) -> PgWireResult<Vec<Type>> {
