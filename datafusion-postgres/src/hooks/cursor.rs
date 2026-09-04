@@ -187,13 +187,33 @@ async fn handle_fetch(
         }
     };
 
-    let portal = store.get_portal(cursor_name).ok_or_else(|| {
-        PgWireError::UserError(Box::new(pgwire::error::ErrorInfo::new(
-            "ERROR".to_string(),
-            "34000".to_string(),
-            format!("cursor \"{cursor_name}\" does not exist"),
-        )))
-    })?;
+    // Like PostgreSQL's PerformPortalFetch: a missing portal is 34000
+    // "cursor does not exist"; a portal bound from an empty query exists but
+    // has no fetchable strategy and fails with XX000 "unsupported portal
+    // strategy" (PortalRunFetch's default branch).
+    let portal = match store.get_portal(cursor_name) {
+        Some(entry) => match entry.value() {
+            Some(portal) => Arc::clone(portal),
+            None => {
+                return Err(PgWireError::UserError(Box::new(
+                    pgwire::error::ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "XX000".to_string(),
+                        "unsupported portal strategy".to_string(),
+                    ),
+                )));
+            }
+        },
+        None => {
+            return Err(PgWireError::UserError(Box::new(
+                pgwire::error::ErrorInfo::new(
+                    "ERROR".to_string(),
+                    "34000".to_string(),
+                    format!("cursor \"{cursor_name}\" does not exist"),
+                ),
+            )));
+        }
+    };
 
     let fetch_result = portal.fetch(max_rows.unwrap_or(0)).await?;
 
