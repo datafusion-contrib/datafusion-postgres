@@ -1,0 +1,248 @@
+# Integration tests for the PostgreSQL string functions implemented in
+# `datafusion-pg-functions/src/string/`.
+#
+# Each section exercises one UDF via the full SQL -> plan -> execute path
+# against a `SessionContext` that has had `register_all` applied.
+
+# ============================================================================
+# to_bin(integer) -- integer to binary text
+# ============================================================================
+
+query T
+SELECT to_bin(42)
+----
+101010
+
+query T
+SELECT to_bin(0)
+----
+0
+
+query T
+SELECT to_bin(CAST(-13 AS INT))
+----
+11111111111111111111111111110011
+
+query T
+SELECT to_bin(255)
+----
+11111111
+
+query T
+SELECT to_bin(CAST(NULL AS INT))
+----
+NULL
+
+# ============================================================================
+# to_oct(integer) -- integer to octal text
+# ============================================================================
+
+query T
+SELECT to_oct(42)
+----
+52
+
+query T
+SELECT to_oct(0)
+----
+0
+
+query T
+SELECT to_oct(CAST(-13 AS INT))
+----
+37777777763
+
+query T
+SELECT to_oct(8)
+----
+10
+
+query T
+SELECT to_oct(CAST(NULL AS INT))
+----
+NULL
+
+# ============================================================================
+# quote_literal(text) -- quote string as SQL literal
+# ============================================================================
+
+query T
+SELECT quote_literal('a''b\c')
+----
+'a''b\c'
+
+query T
+SELECT quote_literal(CAST(NULL AS TEXT))
+----
+NULL
+
+# ============================================================================
+# quote_nullable(text) -- like quote_literal but NULL → 'NULL'
+# ============================================================================
+
+query T
+SELECT quote_nullable('hello')
+----
+'hello'
+
+query T
+SELECT quote_nullable(CAST(NULL AS TEXT))
+----
+NULL
+
+# ============================================================================
+# normalize(text [, form]) -- Unicode normalization
+# ============================================================================
+
+query T
+SELECT normalize('hello')
+----
+hello
+
+query T
+SELECT normalize(CAST(NULL AS TEXT))
+----
+NULL
+
+# ============================================================================
+# casefold(text) -- Unicode case folding
+# ============================================================================
+
+query T
+SELECT casefold('Hello World')
+----
+hello world
+
+query T
+SELECT casefold('UPPER')
+----
+upper
+
+query T
+SELECT casefold('ß')
+----
+ss
+
+query T
+SELECT casefold(CAST(NULL AS TEXT))
+----
+NULL
+
+# ============================================================================
+# unicode_assigned(text) -- check if all chars are assigned Unicode codepoints
+# ============================================================================
+
+query T
+SELECT unicode_assigned('hello')
+----
+true
+
+query T
+SELECT unicode_assigned('')
+----
+true
+
+query T
+SELECT unicode_assigned(CAST(NULL AS TEXT))
+----
+NULL
+
+# ============================================================================
+# unistr(text) -- decode Unicode escapes
+# ============================================================================
+
+query T
+SELECT unistr('\u0041')
+----
+A
+
+query T
+SELECT unistr('hello')
+----
+hello
+
+query T
+SELECT unistr(CAST(NULL AS TEXT))
+----
+NULL
+
+# ============================================================================
+# format(fmt, ...) -- text formatting
+# ============================================================================
+
+query T
+SELECT format('Hello, %s!', 'world')
+----
+Hello, world!
+
+query T
+SELECT format('%s %s', 'a', 'b')
+----
+a b
+
+query T
+SELECT format('100%%')
+----
+100%
+
+query T
+SELECT sprintf('Hello, %s!', 'world')
+----
+Hello, world!
+
+# ============================================================================
+# regexp_substr(text, pattern [, ...]) -- extract regex match
+# ============================================================================
+
+query T
+SELECT regexp_substr('hello world', 'wor..')
+----
+world
+
+query T
+SELECT regexp_substr('abc123def', '[0-9]+')
+----
+123
+
+query T
+SELECT regexp_substr('hello', '[0-9]+')
+----
+NULL
+
+query T
+SELECT regexp_substr(CAST(NULL AS TEXT), 'abc')
+----
+NULL
+
+# ============================================================================
+# pg_client_encoding() -- always returns 'UTF8'
+# ============================================================================
+
+query T
+SELECT pg_client_encoding()
+----
+UTF8
+
+# ============================================================================
+# to_ascii(text) -- convert to ASCII
+# ============================================================================
+
+query T
+SELECT to_ascii('hello')
+----
+hello
+
+query T
+SELECT to_ascii('café')
+----
+cafe
+
+query T
+SELECT to_ascii('München')
+----
+Munchen
+
+query T
+SELECT to_ascii(CAST(NULL AS TEXT))
+----
+NULL
