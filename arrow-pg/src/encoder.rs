@@ -8,7 +8,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 #[cfg(feature = "datafusion")]
 use datafusion::arrow::{array::*, datatypes::*};
 use pg_interval::Interval as PgInterval;
-use pgwire::api::results::{CopyEncoder, DataRowEncoder, FieldInfo};
+use pgwire::api::results::{CopyEncoder, DataRowEncoder, FieldFormat, FieldInfo};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::messages::copy::CopyData;
 use pgwire::messages::data::DataRow;
@@ -159,6 +159,130 @@ fn get_large_binary_value(arr: &Arc<dyn Array>, idx: usize) -> Option<&[u8]> {
     })
 }
 
+/// Encode a Postgres `oid` column (stored as Arrow `Int32` with `pg.oid_alias
+/// = "oid"` metadata) whose result format is binary.
+///
+/// PostgreSQL's `oid` is unsigned 32-bit, and drivers (tokio-postgres, ...)
+/// encode/decode it with `u32`. Arrow stores our catalog oids as `Int32`, so
+/// for the binary protocol the value must be re-encoded as `u32`, otherwise the
+/// `i32` ToSql impl rejects the OID type.
+fn encode_pg_oid_binary<T: Encoder>(
+    encoder: &mut T,
+    arr: &Arc<dyn Array>,
+    idx: usize,
+    pg_field: &FieldInfo,
+) -> PgWireResult<()> {
+    if arr.is_null(idx) {
+        return encoder.encode_field(&None::<u32>, pg_field);
+    }
+    let value = get_i32_value(arr, idx).unwrap_or(0) as u32;
+    encoder.encode_field(&Some(value), pg_field)
+}
+
+/// Encode a Postgres internal `"char"` column (stored as a single-character
+/// UTF-8 string tagged with the `pg.char` metadata).
+///
+/// Binary format is the raw byte of the character (decoded by clients as an
+/// `i8`/`char`); text format is the character itself.
+fn encode_pg_char<T: Encoder>(
+    encoder: &mut T,
+    arr: &Arc<dyn Array>,
+    idx: usize,
+    pg_field: &FieldInfo,
+) -> PgWireResult<()> {
+    if arr.is_null(idx) {
+        return encoder.encode_field(&None::<String>, pg_field);
+    }
+    let text = get_utf8_value(arr, idx)
+        .ok_or_else(|| PgWireError::ApiError(ToSqlError::from("pg.char column must be UTF-8")))?;
+    if pg_field.format() == FieldFormat::Binary {
+        let byte = text
+            .as_bytes()
+            .first()
+            .copied()
+            .ok_or_else(|| PgWireError::ApiError(ToSqlError::from("pg.char value is empty")))?
+            as i8;
+        encoder.encode_field(&Some(byte), pg_field)
+    } else {
+        encoder.encode_field(&Some(text.to_string()), pg_field)
+    }
+}
+
+/// Render the pgvector text form of a vector: `[1,2,3]`.
+///
+/// Element formatting uses Rust's shortest round-trip `Display` for `f32`
+/// (`1.0` -> `1`), matching pgvector's `vector_out`.
+#[cfg(feature = "pgvector")]
+fn format_pg_vector(values: &[f32]) -> String {
+    let inner = values
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{inner}]")
+}
+
+/// Encode a pgvector `vector` column (an Arrow `List`/`FixedSizeList` of
+/// `Float32` tagged with the `pg.vector` field metadata) for a single row.
+///
+/// The value is emitted in the pgvector text format `[1,2,3]`. The result
+/// `FieldInfo` for vector columns is forced to the text format by
+/// `arrow_schema_to_pg_fields`, so pgwire serializes the string verbatim via
+/// `ToSqlText` regardless of the client's requested result format.
+#[cfg(feature = "pgvector")]
+fn encode_pg_vector<T: Encoder>(
+    encoder: &mut T,
+    arr: &Arc<dyn Array>,
+    idx: usize,
+    pg_field: &FieldInfo,
+) -> PgWireResult<()> {
+    if arr.is_null(idx) {
+        return encoder.encode_field(&None::<String>, pg_field);
+    }
+
+    fn row_values(arr: &Arc<dyn Array>, idx: usize) -> PgWireResult<Vec<f32>> {
+        let values = match arr.data_type() {
+            DataType::FixedSizeList(_, _) => {
+                let list = arr.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+                let values = list
+                    .values()
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .ok_or_else(|| {
+                        PgWireError::ApiError(ToSqlError::from(
+                            "vector FixedSizeList values must be Float32",
+                        ))
+                    })?;
+                let size = list.value_length() as usize;
+                let start = idx * size;
+                (0..size).map(|i| values.value(start + i)).collect()
+            }
+            DataType::List(_) => {
+                let list = arr.as_any().downcast_ref::<ListArray>().unwrap();
+                let value = list.value(idx);
+                let values = value
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .ok_or_else(|| {
+                        PgWireError::ApiError(ToSqlError::from(
+                            "vector List values must be Float32",
+                        ))
+                    })?;
+                values.values().to_vec()
+            }
+            other => {
+                return Err(PgWireError::ApiError(ToSqlError::from(format!(
+                    "vector column has unsupported arrow type {other}"
+                ))));
+            }
+        };
+        Ok(values)
+    }
+
+    let text = format_pg_vector(&row_values(arr, idx)?);
+    encoder.encode_field(&Some(text), pg_field)
+}
+
 fn get_date32_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDate> {
     if arr.is_null(idx) {
         return None;
@@ -281,6 +405,34 @@ pub fn encode_value<T: Encoder>(
             arrow_field,
             pg_field,
         );
+    }
+
+    // pgvector `vector` columns are tagged with the `pg.vector` field
+    // metadata. Route them through the vector encoder (text `[1,2,3]`) before
+    // the generic list handling below, which would otherwise emit them as a
+    // Postgres float4[] (`{1,2,3}`).
+    #[cfg(feature = "pgvector")]
+    if crate::datatypes::is_pg_vector_field(arrow_field) {
+        return encode_pg_vector(encoder, arr, idx, pg_field);
+    }
+
+    // Postgres internal `"char"` columns (pg.typtype, ...): wire type CHAR with
+    // char-specific binary/text encoding.
+    if crate::datatypes::is_pg_char_field(arrow_field) {
+        return encode_pg_char(encoder, arr, idx, pg_field);
+    }
+
+    // Postgres `oid` columns are `u32` on the wire but stored as Arrow Int32.
+    // Over the binary protocol the value must be sent as `u32` (the `i32` ToSql
+    // impl does not accept the OID type); text keeps the existing Int32 path.
+    if pg_field.format() == FieldFormat::Binary
+        && matches!(arrow_type, DataType::Int32)
+        && arrow_field
+            .metadata()
+            .get(crate::datatypes::PG_OID_ALIAS_KEY)
+            .is_some_and(|kind| kind == "oid")
+    {
+        return encode_pg_oid_binary(encoder, arr, idx, pg_field);
     }
 
     match arrow_type {
@@ -485,7 +637,22 @@ pub fn encode_value<T: Encoder>(
             if arr.is_null(idx) {
                 return encoder.encode_field(&None::<&[i8]>, pg_field);
             }
-            let array = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+            // Extract this row's element slice from the actual list flavour.
+            // (FixedSizeList / LargeList were previously downcast to ListArray,
+            // which panics -- these are not ListArrays.)
+            let array = match arrow_type {
+                DataType::FixedSizeList(_, _) => arr
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .unwrap()
+                    .value(idx),
+                DataType::LargeList(_) => arr
+                    .as_any()
+                    .downcast_ref::<LargeListArray>()
+                    .unwrap()
+                    .value(idx),
+                _ => arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx),
+            };
             encode_list(encoder, array, pg_field)?
         }
         DataType::Struct(arrow_fields) => encode_struct(encoder, arr, idx, arrow_fields, pg_field)?,
@@ -734,5 +901,155 @@ mod tests {
             value,
             Some(NaiveTime::from_hms_nano_opt(1, 2, 3, 1001001)).unwrap()
         );
+    }
+
+    #[cfg(feature = "pgvector")]
+    mod vector {
+        use super::*;
+        use arrow::buffer::NullBuffer;
+        use bytes::BytesMut;
+        use pgwire::{api::results::FieldFormat, types::format::FormatOptions};
+        use postgres_types::Type;
+        use std::collections::HashMap;
+
+        #[derive(Default)]
+        struct TextCapture {
+            encoded: String,
+        }
+
+        impl Encoder for TextCapture {
+            type Item = String;
+
+            fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
+            where
+                T: ToSql + ToSqlText + Sized,
+            {
+                let mut bytes = BytesMut::new();
+                value
+                    .to_sql_text(pg_field.datatype(), &mut bytes, &FormatOptions::default())
+                    .unwrap();
+                self.encoded = String::from_utf8(bytes.to_vec()).unwrap();
+                Ok(())
+            }
+
+            fn take_row(&mut self) -> Self::Item {
+                std::mem::take(&mut self.encoded)
+            }
+        }
+
+        fn vector_arrow_field(metadata: bool) -> Field {
+            let mut field = Field::new(
+                "embedding",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new_list_field(DataType::Float32, true)),
+                    3,
+                ),
+                true,
+            );
+            if metadata {
+                field = field.with_metadata(HashMap::from([(
+                    crate::datatypes::PG_VECTOR_KEY.to_string(),
+                    "vector".to_string(),
+                )]));
+            }
+            field
+        }
+
+        #[test]
+        fn encodes_vector_fixed_size_list_as_pgvector_text() {
+            // Two rows: [1,2,3] and [4.5,0,7]
+            let values = Float32Array::from(vec![1.0, 2.0, 3.0, 4.5, 0.0, 7.0]);
+            let array: Arc<dyn Array> = Arc::new(
+                FixedSizeListArray::try_new(
+                    Arc::new(Field::new_list_field(DataType::Float32, true)),
+                    3,
+                    Arc::new(values),
+                    None,
+                )
+                .unwrap(),
+            );
+
+            let arrow_field = vector_arrow_field(true);
+            let pg_field = FieldInfo::new(
+                "embedding".to_string(),
+                None,
+                None,
+                crate::datatypes::pg_vector_type(),
+                FieldFormat::Text,
+            );
+
+            let mut encoder = TextCapture::default();
+            encode_value(&mut encoder, &array, 0, &arrow_field, &pg_field).unwrap();
+            assert_eq!(encoder.encoded, "[1,2,3]");
+
+            let mut encoder = TextCapture::default();
+            encode_value(&mut encoder, &array, 1, &arrow_field, &pg_field).unwrap();
+            assert_eq!(encoder.encoded, "[4.5,0,7]");
+        }
+
+        #[test]
+        fn encodes_null_vector_as_null() {
+            // `NullBuffer::from(Vec<bool>)` treats `true` as valid.
+            let nulls = NullBuffer::from(vec![false, true]);
+            let values = Float32Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+            let array: Arc<dyn Array> = Arc::new(
+                FixedSizeListArray::try_new(
+                    Arc::new(Field::new_list_field(DataType::Float32, true)),
+                    3,
+                    Arc::new(values),
+                    Some(nulls),
+                )
+                .unwrap(),
+            );
+
+            let arrow_field = vector_arrow_field(true);
+            let pg_field = FieldInfo::new(
+                "embedding".to_string(),
+                None,
+                None,
+                crate::datatypes::pg_vector_type(),
+                FieldFormat::Text,
+            );
+
+            // Row 0 is NULL: no value bytes.
+            let mut encoder = TextCapture::default();
+            encode_value(&mut encoder, &array, 0, &arrow_field, &pg_field).unwrap();
+            assert!(encoder.encoded.is_empty(), "NULL must emit no bytes");
+
+            // Row 1 is a valid vector.
+            let mut encoder = TextCapture::default();
+            encode_value(&mut encoder, &array, 1, &arrow_field, &pg_field).unwrap();
+            assert_eq!(encoder.encoded, "[4,5,6]");
+        }
+
+        #[test]
+        fn plain_fixed_size_list_encodes_as_float4_array() {
+            // Regression: FixedSizeList columns used to be downcast to
+            // ListArray and panic. A non-pgvector fixed-size float list must
+            // still encode (as a Postgres array).
+            let values = Float32Array::from(vec![1.0, 2.0, 3.0]);
+            let array: Arc<dyn Array> = Arc::new(
+                FixedSizeListArray::try_new(
+                    Arc::new(Field::new_list_field(DataType::Float32, true)),
+                    3,
+                    Arc::new(values),
+                    None,
+                )
+                .unwrap(),
+            );
+
+            let arrow_field = vector_arrow_field(false);
+            let pg_field = FieldInfo::new(
+                "embedding".to_string(),
+                None,
+                None,
+                Type::FLOAT4_ARRAY,
+                FieldFormat::Text,
+            );
+
+            let mut encoder = TextCapture::default();
+            encode_value(&mut encoder, &array, 0, &arrow_field, &pg_field).unwrap();
+            assert_eq!(encoder.encoded, "{1.0,2.0,3.0}");
+        }
     }
 }

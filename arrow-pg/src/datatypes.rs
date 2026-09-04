@@ -136,15 +136,47 @@ pub fn into_pg_type(arrow_type: &DataType) -> PgWireResult<Type> {
 /// so untagged columns are unaffected.
 pub const PG_OID_ALIAS_KEY: &str = "pg.oid_alias";
 
-/// Map a field's [`PG_OID_ALIAS_KEY`] metadata, when present and recognized, to
-/// the matching Postgres alias [`Type`] (e.g. `regtype` -> OID 2206).
+/// Field metadata key marking an Arrow list/fixed-size-list field as a
+/// pgvector `vector` column.
 ///
-/// Returns `None` when the metadata is absent or names an unrecognized alias,
-/// so the caller can fall back to the physical-type mapping (`Int32` ->
-/// `INT4`).
-fn pg_alias_type(field: &Field) -> Option<Type> {
-    let kind = field.metadata().get(PG_OID_ALIAS_KEY)?;
-    Some(match kind.as_str() {
+/// This is a **cross-crate contract**: the lower-level `arrow-pg` crate does
+/// not depend on `datafusion-pg-catalog`, which writes the metadata when it
+/// plans the `vector(n)` SQL type. Columns carrying this marker are reported to
+/// the client as the pgvector `vector` type and encoded using the pgvector text
+/// format `[1,2,3]` instead of the ordinary Postgres array format `{1,2,3}`.
+///
+/// The value is currently always `"vector"`.
+#[cfg(feature = "pgvector")]
+pub const PG_VECTOR_KEY: &str = "pg.vector";
+
+/// Fixed OID reported for pgvector `vector` columns.
+///
+/// Real pgvector assigns OIDs dynamically when the extension is installed, so
+/// there is no universally canonical value. We pick the OID a default install
+/// commonly lands on (the first user-defined type, right above
+/// `FirstNormalObjectId`), which is what most name-based clients / hardcoded
+/// drivers expect. Adjust if you run against clients that hardcode another OID.
+#[cfg(feature = "pgvector")]
+pub const PG_VECTOR_TYPE_OID: u32 = 16385;
+
+/// Field metadata key marking a UTF-8 Arrow field that models a Postgres
+/// internal `"char"` column (e.g. `pg_type.typtype`).
+///
+/// Postgres' internal `"char"` is a one-byte type whose wire encoding differs
+/// from both `text` and `int2`: the binary form is the raw byte of the
+/// character while the text form is the single character itself. Clients
+/// (e.g. tokio-postgres) introspecting `pg_catalog` decode these columns as
+/// `CHAR`. Columns exported from a real database carry the character in a UTF-8
+/// string, so this marker lets `arrow-pg` report the wire type as `CHAR` and
+/// pick the right encoding per result format.
+pub const PG_CHAR_KEY: &str = "pg.char";
+
+/// Map an oid-alias kind name ([`PG_OID_ALIAS_KEY`] value) to its Postgres
+/// [`Type`], e.g. `"oid"` -> OID 26, `"regtype"` -> OID 2206.
+///
+/// Returns `None` for unrecognized kinds.
+pub fn pg_type_for_alias_kind(kind: &str) -> Option<Type> {
+    Some(match kind {
         "oid" => Type::OID,
         "regproc" => Type::REGPROC,
         "regprocedure" => Type::REGPROCEDURE,
@@ -161,6 +193,39 @@ fn pg_alias_type(field: &Field) -> Option<Type> {
     })
 }
 
+/// Map a field's [`PG_OID_ALIAS_KEY`] metadata, when present and recognized, to
+/// the matching Postgres alias [`Type`] (e.g. `regtype` -> OID 2206).
+///
+/// Returns `None` when the metadata is absent or names an unrecognized alias,
+/// so the caller can fall back to the physical-type mapping (`Int32` ->
+/// `INT4`).
+fn pg_alias_type(field: &Field) -> Option<Type> {
+    let kind = field.metadata().get(PG_OID_ALIAS_KEY)?;
+    pg_type_for_alias_kind(kind.as_str())
+}
+
+/// True when `field` carries the [`PG_CHAR_KEY`] marker (Postgres `"char"`).
+pub fn is_pg_char_field(field: &Field) -> bool {
+    field.metadata().get(PG_CHAR_KEY).is_some()
+}
+
+/// True when `field` carries the pgvector [`PG_VECTOR_KEY`] metadata marker.
+#[cfg(feature = "pgvector")]
+pub fn is_pg_vector_field(field: &Field) -> bool {
+    matches!(field.metadata().get(PG_VECTOR_KEY), Some(kind) if kind == "vector")
+}
+
+/// The pgwire [`Type`] reported for a pgvector `vector` column.
+#[cfg(feature = "pgvector")]
+pub fn pg_vector_type() -> Type {
+    Type::new(
+        "vector".to_string(),
+        PG_VECTOR_TYPE_OID,
+        Kind::Simple,
+        "public".to_string(),
+    )
+}
+
 pub fn field_into_pg_type(field: &Arc<Field>) -> PgWireResult<Type> {
     // A `pg.oid_alias`-tagged Int32 field is reported as its Postgres alias
     // type (regtype -> OID 2206, regclass -> OID 2205, ...) instead of the
@@ -170,6 +235,20 @@ pub fn field_into_pg_type(field: &Arc<Field>) -> PgWireResult<Type> {
     // mapping below.
     if let Some(alias_type) = pg_alias_type(field) {
         return Ok(alias_type);
+    }
+
+    // A pg.char-tagged UTF-8 field is reported as the Postgres internal
+    // `"char"` type (OID 18) so clients decode it as a one-byte char.
+    if is_pg_char_field(field) {
+        return Ok(Type::CHAR);
+    }
+
+    // A pg.vector-tagged list column is reported as the pgvector `vector` type
+    // instead of the physical float4[] array, so RowDescription and result
+    // schemas match a real pgvector backend.
+    #[cfg(feature = "pgvector")]
+    if is_pg_vector_field(field) {
+        return Ok(pg_vector_type());
     }
 
     let arrow_type = field.data_type();
@@ -219,8 +298,20 @@ pub fn arrow_schema_to_pg_fields(
         .enumerate()
         .map(|(idx, f)| {
             let pg_type = field_into_pg_type(f)?;
-            let mut field_info =
-                FieldInfo::new(f.name().into(), None, None, pg_type, format.format_for(idx));
+
+            // pgvector `vector` has no binary wire encoding implemented yet, so
+            // always negotiate the text format (`[1,2,3]`) for vector columns,
+            // even when the client asked for binary.
+            #[cfg(feature = "pgvector")]
+            let col_format = if is_pg_vector_field(f) {
+                pgwire::api::results::FieldFormat::Text
+            } else {
+                format.format_for(idx)
+            };
+            #[cfg(not(feature = "pgvector"))]
+            let col_format = format.format_for(idx);
+
+            let mut field_info = FieldInfo::new(f.name().into(), None, None, pg_type, col_format);
             if let Some(data_format_options) = &data_format_options {
                 field_info = field_info.with_format_options(data_format_options.clone());
             }
@@ -360,5 +451,50 @@ mod tests {
         // An ordinary Int32 column with no pg.oid_alias metadata is unchanged.
         let field = Arc::new(Field::new("c", DataType::Int32, false));
         assert_eq!(field_into_pg_type(&field).unwrap(), Type::INT4);
+    }
+
+    #[cfg(feature = "pgvector")]
+    mod vector {
+        use super::*;
+
+        fn vector_field() -> Arc<Field> {
+            use std::collections::HashMap;
+            Arc::new(
+                Field::new(
+                    "embedding",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new_list_field(DataType::Float32, true)),
+                        3,
+                    ),
+                    true,
+                )
+                .with_metadata(HashMap::from([(
+                    PG_VECTOR_KEY.to_string(),
+                    "vector".to_string(),
+                )])),
+            )
+        }
+
+        #[test]
+        fn pg_vector_field_maps_to_custom_vector_type() {
+            let ty = field_into_pg_type(&vector_field()).unwrap();
+            assert_eq!(ty.name(), "vector");
+            assert_eq!(ty.schema(), "public");
+            assert_eq!(ty.oid(), PG_VECTOR_TYPE_OID);
+        }
+
+        #[test]
+        fn plain_fixed_size_list_stays_float4_array() {
+            let field = Arc::new(Field::new(
+                "embedding",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new_list_field(DataType::Float32, true)),
+                    3,
+                ),
+                true,
+            ));
+            assert!(!is_pg_vector_field(&field));
+            assert_eq!(field_into_pg_type(&field).unwrap(), Type::FLOAT4_ARRAY);
+        }
     }
 }

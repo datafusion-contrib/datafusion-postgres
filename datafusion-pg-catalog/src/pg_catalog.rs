@@ -7,7 +7,7 @@ use datafusion::arrow::array::{
     ArrayRef, AsArray, BooleanBuilder, Int32Builder, RecordBatch, StringArray, StringBuilder,
     as_boolean_array,
 };
-use datafusion::arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use datafusion::arrow::ipc::reader::FileReader;
 use datafusion::catalog::streaming::StreamingTable;
 use datafusion::catalog::{MemTable, SchemaProvider, TableFunctionImpl};
@@ -652,7 +652,7 @@ pub struct PgCatalogStaticTables {
 
 impl PgCatalogStaticTables {
     pub fn try_new() -> Result<Self> {
-        Ok(Self {
+        let tables = Self {
             pg_aggregate: Self::create_arrow_table(
                 include_bytes!(concat!(
                     env!("CARGO_MANIFEST_DIR"),
@@ -1061,13 +1061,156 @@ impl PgCatalogStaticTables {
                 ))
                 .to_vec(),
             )?,
-        })
+        };
+
+        // pgvector support: expose the `vector` type (OID 16385) in `pg_type`
+        // so clients that resolve unknown result types (tokio-postgres, JDBC,
+        // ...) find it, and tag the internal `"char"` column for correct wire
+        // encoding.
+        #[cfg(feature = "pgvector")]
+        let tables = tables.with_pg_vector_support()?;
+
+        Ok(tables)
     }
 
     /// Create table from dumped arrow data
     fn create_arrow_table(data_bytes: Vec<u8>) -> Result<Arc<ArrowTable>> {
         ArrowTable::from_ipc_data(data_bytes).map(Arc::new)
     }
+
+    /// Return `self` with the pg_catalog pieces needed for pgvector-aware
+    /// clients that resolve unknown result types via `pg_type` introspection:
+    ///
+    /// * a `vector` type row (OID 16385) in `pg_type`, and
+    /// * the internal `"char"` wire type on `pg_type.typtype`.
+    ///
+    /// The vector row intentionally lives in `pg_catalog` (namespace OID 11) so
+    /// the `pg_type`/`pg_namespace` join the introspection query performs
+    /// resolves without depending on user-schema oids.
+    #[cfg(feature = "pgvector")]
+    fn with_pg_vector_support(mut self) -> Result<Self> {
+        const VECTOR_OID: i32 = 16385;
+
+        // 1. Tag pg_type.typtype as a Postgres internal `"char"` column so the
+        //    wire layer encodes it correctly for clients decoding `typtype`.
+        let pg_type = Arc::new(arrow_table_with_field_metadata(
+            &self.pg_type,
+            "typtype",
+            "pg.char",
+            "char",
+        )?);
+
+        // 2. Append the `vector` row to pg_type (all other columns get safe
+        //    defaults; the introspection query only reads the ones we set).
+        let pg_type = Arc::new(arrow_table_append_row(&pg_type, |field, scalar| {
+            match field.name().as_str() {
+                "oid" => *scalar = datafusion::scalar::ScalarValue::Int32(Some(VECTOR_OID)),
+                "typname" => {
+                    *scalar = datafusion::scalar::ScalarValue::Utf8(Some("vector".to_string()))
+                }
+                "typtype" => *scalar = datafusion::scalar::ScalarValue::Utf8(Some("b".to_string())),
+                // pg_catalog namespace OID 11 (see the doc comment above).
+                "typnamespace" => *scalar = datafusion::scalar::ScalarValue::Int32(Some(11)),
+                _ => {}
+            }
+        })?);
+
+        self.pg_type = pg_type;
+        Ok(self)
+    }
+}
+
+/// Rebuild `table` with `key = value` metadata added to the field named `name`.
+///
+/// Arrow keeps field metadata in the schema; this rebuilds the schema and every
+/// record batch so the wire layer (`arrow-pg`) sees the marker when encoding.
+#[cfg(feature = "pgvector")]
+fn arrow_table_with_field_metadata(
+    table: &ArrowTable,
+    name: &str,
+    key: &str,
+    value: &str,
+) -> Result<ArrowTable> {
+    let schema = table.schema();
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.name() == name {
+                let mut metadata = field.metadata().clone();
+                metadata.insert(key.to_string(), value.to_string());
+                (**field).clone().with_metadata(metadata)
+            } else {
+                (**field).clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    let new_schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
+    let mut batches = Vec::with_capacity(table.data().len());
+    for batch in table.data() {
+        batches.push(
+            RecordBatch::try_new(Arc::clone(&new_schema), batch.columns().to_vec())
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?,
+        );
+    }
+    Ok(ArrowTable {
+        schema: new_schema,
+        data: batches,
+    })
+}
+
+/// Return a copy of `table` with one extra row appended. `fill` lets callers
+/// override the default scalar produced for each column.
+///
+/// `fill` is invoked for every field with a fresh default scalar (int 0 /
+/// string "" / bool false / ...), matching the field's data type; non-default
+/// catalog values are set by the caller.
+#[cfg(feature = "pgvector")]
+fn arrow_table_append_row(
+    table: &ArrowTable,
+    mut fill: impl FnMut(&Field, &mut datafusion::scalar::ScalarValue),
+) -> Result<ArrowTable> {
+    let schema = table.schema();
+    let columns = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let mut scalar = default_scalar(field.data_type())?;
+            fill(field, &mut scalar);
+            scalar.to_array_of_size(1)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let row = RecordBatch::try_new(Arc::clone(&schema), columns)
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+    let mut data = table.data().to_vec();
+    data.push(row);
+    Ok(ArrowTable {
+        schema: Arc::clone(&schema),
+        data,
+    })
+}
+
+/// A single default [`ScalarValue`] for a catalog column of `data_type`.
+///
+/// Only the data types present in the exported `pg_type` schema are handled;
+/// anything else yields a `NotImplemented` error rather than guessing.
+#[cfg(feature = "pgvector")]
+fn default_scalar(data_type: &DataType) -> Result<datafusion::scalar::ScalarValue> {
+    use datafusion::scalar::ScalarValue;
+    Ok(match data_type {
+        DataType::Null => ScalarValue::Null,
+        DataType::Boolean => ScalarValue::Boolean(Some(false)),
+        DataType::Int16 => ScalarValue::Int16(Some(0)),
+        DataType::Int32 => ScalarValue::Int32(Some(0)),
+        DataType::Int64 => ScalarValue::Int64(Some(0)),
+        DataType::Utf8 => ScalarValue::Utf8(Some(String::new())),
+        DataType::LargeUtf8 => ScalarValue::LargeUtf8(Some(String::new())),
+        other => {
+            return Err(DataFusionError::NotImplemented(format!(
+                "no default catalog scalar for {other:?}"
+            )));
+        }
+    })
 }
 
 pub fn create_current_schemas_udf() -> ScalarUDF {

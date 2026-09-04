@@ -178,7 +178,17 @@ impl SimpleQueryHandler for DfSessionService {
         }
 
         let mut results = vec![];
-        'stmt: for statement in statements {
+        'stmt: for mut statement in statements {
+            // pgvector: `INSERT ... VALUES ('[1,2,3]')` into a `vector` column
+            // needs the string literal rewritten to an ARRAY literal against the
+            // target table's schema (see datafusion_pg_catalog::sql).
+            #[cfg(feature = "pgvector")]
+            datafusion_pg_catalog::sql::rewrite_vector_insert(
+                &self.session_context,
+                &mut statement,
+            )
+            .await;
+
             // Call query hooks with the parsed statement
             for hook in &self.query_hooks {
                 if let Some(result) = hook
@@ -268,9 +278,14 @@ impl ExtendedQueryHandler for DfSessionService {
             // TODO: in the case where query hooks all return None, we do the param handling again later.
             let param_types = planner::get_inferred_parameter_types(plan)
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            let wire_types = parameter_wire_types(plan)?;
+            let wire_type_refs: Vec<Option<&Type>> = wire_types.iter().map(Some).collect();
 
-            let param_values: ParamValues =
-                df::deserialize_parameters(portal, &ordered_param_types(&param_types))?;
+            let param_values: ParamValues = df::deserialize_parameters_with_server_types(
+                portal,
+                &ordered_param_types(&param_types),
+                &wire_type_refs,
+            )?;
 
             for hook in &self.query_hooks {
                 if let Some(result) = hook
@@ -291,9 +306,14 @@ impl ExtendedQueryHandler for DfSessionService {
         if let (_, Some((statement, plan))) = &portal.statement.statement {
             let param_types = planner::get_inferred_parameter_types(plan)
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            let wire_types = parameter_wire_types(plan)?;
+            let wire_type_refs: Vec<Option<&Type>> = wire_types.iter().map(Some).collect();
 
-            let param_values =
-                df::deserialize_parameters(portal, &ordered_param_types(&param_types))?;
+            let param_values = df::deserialize_parameters_with_server_types(
+                portal,
+                &ordered_param_types(&param_types),
+                &wire_type_refs,
+            )?;
 
             let plan = plan
                 .clone()
@@ -403,7 +423,14 @@ impl QueryParser for Parser {
             return Ok(None);
         }
 
-        let statement = statements.remove(0);
+        let mut statement = statements.remove(0);
+
+        // pgvector: rewrite vector string literals of INSERT ... VALUES against
+        // the target table's schema before DataFusion plans the statement.
+        #[cfg(feature = "pgvector")]
+        datafusion_pg_catalog::sql::rewrite_vector_insert(&self.session_context, &mut statement)
+            .await;
+
         let query = statement.to_string();
 
         let context = &self.session_context;
@@ -427,20 +454,7 @@ impl QueryParser for Parser {
 
     fn get_parameter_types(&self, stmt: &Self::Statement) -> PgWireResult<Vec<Type>> {
         if let (_, Some((_, plan))) = stmt {
-            let params = planner::get_inferred_parameter_types(plan)
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-
-            let mut param_types = Vec::with_capacity(params.len());
-            for param_type in ordered_param_types(&params).iter() {
-                if let Some(datatype) = param_type {
-                    let pgtype = into_pg_type(datatype)?;
-                    param_types.push(pgtype);
-                } else {
-                    param_types.push(Type::UNKNOWN);
-                }
-            }
-
-            Ok(param_types)
+            parameter_wire_types(plan)
         } else {
             Ok(vec![])
         }
@@ -468,6 +482,32 @@ impl QueryParser for Parser {
             Ok(vec![])
         }
     }
+}
+
+/// The parameter wire types the server reports in `ParameterDescription` for a
+/// prepared statement's plan: the physical Arrow type mapping by default, with
+/// overrides for semantically-typed columns (`pg.oid_alias` catalog columns,
+/// pgvector `vector`, ...).
+///
+/// The same list is reused when decoding bound parameters at Execute time,
+/// because pgwire does not persist the advertised types onto the portal.
+fn parameter_wire_types(plan: &LogicalPlan) -> PgWireResult<Vec<Type>> {
+    let params = planner::get_inferred_parameter_types(plan)
+        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+    let overrides = planner::parameter_override_types(plan);
+
+    let mut types = Vec::with_capacity(params.len());
+    for (id, datatype) in planner::ordered_parameter_entries(&params) {
+        if let Some(ty) = overrides.get(&id) {
+            types.push(ty.clone());
+        } else {
+            match datatype {
+                Some(datatype) => types.push(into_pg_type(&datatype)?),
+                None => types.push(Type::UNKNOWN),
+            }
+        }
+    }
+    Ok(types)
 }
 
 fn ordered_param_types(types: &HashMap<String, Option<DataType>>) -> Vec<Option<&DataType>> {

@@ -18,6 +18,8 @@ use super::rules::ResolveUnqualifiedIdentifier;
 use super::rules::RewriteArrayAnyAllOperation;
 use super::rules::RewritePgCatalogOperator;
 use super::rules::RewriteRegCastToSubquery;
+#[cfg(feature = "pgvector")]
+use super::rules::RewriteVectorOperators;
 use super::rules::SqlStatementRewriteRule;
 use super::rules::StripCallableQualifier;
 use super::rules::StripCollate;
@@ -309,28 +311,38 @@ impl PostgresCompatibilityParser {
             ));
         }
 
+        #[cfg_attr(not(feature = "pgvector"), allow(unused_mut))]
+        let mut rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![
+            // The blacklist substitution in `parse()` runs before any of
+            // these rules, so by the time they see the statement any
+            // blacklisted fragment has already been replaced.
+            Arc::new(AliasDuplicatedProjectionRewrite),
+            Arc::new(ResolveUnqualifiedIdentifier),
+            Arc::new(RewriteArrayAnyAllOperation),
+            Arc::new(PrependUnqualifiedPgTableName),
+            Arc::new(StripCallableQualifier),
+            Arc::new(FixArrayLiteral),
+            Arc::new(CurrentUserVariableToSessionUserFunctionCall),
+            Arc::new(StripCollate),
+            Arc::new(RewritePgCatalogOperator),
+            // Resolve forward oid-alias casts (`'x'::regclass`, ...) to oid
+            // values BEFORE RemoveSubqueryFromProjection runs, so the
+            // emitted scalar subqueries it produces get its LIMIT 1 stamp.
+            Arc::new(RewriteRegCastToSubquery::new()),
+            Arc::new(RemoveSubqueryFromProjection),
+            Arc::new(FixVersionColumnName),
+        ];
+
+        // pgvector support: distance operators (`<->` / `<#>` / `<=>`) and
+        // vector literals. Runs last -- it needs to see oid/array rewrites in
+        // operands already applied, and rewrites operators that no other rule
+        // touches.
+        #[cfg(feature = "pgvector")]
+        rewrite_rules.push(Arc::new(RewriteVectorOperators));
+
         Self {
             blacklist: mapping,
-            rewrite_rules: vec![
-                // The blacklist substitution in `parse()` runs before any of
-                // these rules, so by the time they see the statement any
-                // blacklisted fragment has already been replaced.
-                Arc::new(AliasDuplicatedProjectionRewrite),
-                Arc::new(ResolveUnqualifiedIdentifier),
-                Arc::new(RewriteArrayAnyAllOperation),
-                Arc::new(PrependUnqualifiedPgTableName),
-                Arc::new(StripCallableQualifier),
-                Arc::new(FixArrayLiteral),
-                Arc::new(CurrentUserVariableToSessionUserFunctionCall),
-                Arc::new(StripCollate),
-                Arc::new(RewritePgCatalogOperator),
-                // Resolve forward oid-alias casts (`'x'::regclass`, ...) to oid
-                // values BEFORE RemoveSubqueryFromProjection runs, so the
-                // emitted scalar subqueries it produces get its LIMIT 1 stamp.
-                Arc::new(RewriteRegCastToSubquery::new()),
-                Arc::new(RemoveSubqueryFromProjection),
-                Arc::new(FixVersionColumnName),
-            ],
+            rewrite_rules,
         }
     }
 

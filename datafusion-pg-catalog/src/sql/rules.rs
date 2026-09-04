@@ -1232,6 +1232,277 @@ impl SqlStatementRewriteRule for FixVersionColumnName {
     }
 }
 
+/// Rewrite pgvector distance operators and vector literals into plain SQL that
+/// DataFusion can plan, backed by its built-in array distance functions.
+///
+/// # Operators
+///
+/// | pgvector | meaning         | rewrite                              |
+/// | -------- | --------------- | ------------------------------------ |
+/// | `<->`    | L2 distance     | `array_distance(l, r)`               |
+/// | `<#>`    | negative dot    | `-inner_product(l, r)`               |
+/// | `<=>`    | cosine distance | `cosine_distance(l, r)`              |
+///
+/// sqlparser parses `<->` / `<=>` / `<#>` as the `LtDashGt`, `Spaceship` and
+/// `Custom("<#>")` [`BinaryOperator`]s (see the pgvector support notes).
+///
+/// # Vector literals
+///
+/// pgvector accepts a vector as a bracket string, either bare (`'[1,2,3]'`) or
+/// cast (`'[1,2,3]'::vector`). Both appear in the canonical usage:
+/// `ORDER BY embedding <-> '[1,2,3]'`. Because pgvector treats an unknown
+/// literal as the `vector` type for these operators, each operand that is such
+/// a string literal is rewritten to an `ARRAY[...]` of float literals. The
+/// built-in distance functions then coerce the `FixedSizeList(Float32, n)`
+/// column and the `List(Float64)` literal to a common `List(Float64)` and
+/// enforce the equal-length (dimension) requirement at runtime.
+///
+/// # Why a rule (not UDFs / casts)
+///
+/// * No schema is needed: a literal is recognized syntactically, exactly like
+///   [`RewriteArrayAnyAllOperation`] / [`FixArrayLiteral`].
+/// * Dimension of the literal is known at rewrite time, so no dynamically-typed
+///   `parse_vector`-style UDF is required.
+/// * The rewritten SQL is re-serialised and re-parsed by DataFusion (see
+///   `handlers.rs`), so the emitted form must be plain parseable SQL.
+///
+/// # Coverage
+///
+/// The generic AST visitor reaches vector operators in projections, `WHERE`,
+/// `HAVING` and joins; sqlparser's visitor does *not* descend into `ORDER BY`,
+/// so [`RewriteVectorOperatorsVisitor::rewrite_order_by`] handles those
+/// expressions explicitly (this is where pgvector queries place the operator).
+#[cfg(feature = "pgvector")]
+#[derive(Debug)]
+pub struct RewriteVectorOperators;
+
+#[cfg(feature = "pgvector")]
+#[derive(Clone, Copy)]
+enum DistanceFunc {
+    /// `<->` L2 distance.
+    ArrayDistance,
+    /// `<#>` negative inner product.
+    InnerProduct,
+    /// `<=>` cosine distance.
+    CosineDistance,
+}
+
+#[cfg(feature = "pgvector")]
+impl DistanceFunc {
+    fn name(self) -> &'static str {
+        match self {
+            DistanceFunc::ArrayDistance => "array_distance",
+            DistanceFunc::InnerProduct => "inner_product",
+            DistanceFunc::CosineDistance => "cosine_distance",
+        }
+    }
+
+    /// `<#>` is the *negative* inner product, so the call must be negated.
+    fn negate(self) -> bool {
+        matches!(self, DistanceFunc::InnerProduct)
+    }
+}
+
+#[cfg(feature = "pgvector")]
+impl RewriteVectorOperators {
+    /// The distance function backing a binary operator, if it is a pgvector
+    /// distance operator we handle.
+    fn operator_to_func(op: &BinaryOperator) -> Option<DistanceFunc> {
+        match op {
+            BinaryOperator::LtDashGt => Some(DistanceFunc::ArrayDistance),
+            BinaryOperator::Spaceship => Some(DistanceFunc::CosineDistance),
+            BinaryOperator::Custom(name) if name == "<#>" => Some(DistanceFunc::InnerProduct),
+            _ => None,
+        }
+    }
+
+    /// True when `data_type` is the pgvector `vector` type name.
+    pub(crate) fn is_vector_data_type(data_type: &DataType) -> bool {
+        let DataType::Custom(name, _) = data_type else {
+            return false;
+        };
+        name.0
+            .last()
+            .and_then(|part| part.as_ident())
+            .is_some_and(|ident| ident.value.eq_ignore_ascii_case("vector"))
+    }
+
+    /// Build a SQL `ARRAY[<floats>]` literal from the numeric text between the
+    /// brackets of a pgvector literal like `'[1,-2.5,3]'`. Returns `None` if the
+    /// text does not look like a (possibly empty-forbidden) float vector.
+    pub(crate) fn vector_literal_to_array(text: &str) -> Option<Expr> {
+        let text = text.trim();
+        if !(text.starts_with('[') && text.ends_with(']') && text.len() >= 2) {
+            return None;
+        }
+        let inner = &text[1..text.len() - 1];
+        if inner.trim().is_empty() {
+            return None;
+        }
+
+        let mut elems = Vec::new();
+        for part in inner.split(',') {
+            elems.push(Self::float_literal(part.trim())?);
+        }
+        Some(Expr::Array(Array {
+            elem: elems,
+            named: true,
+        }))
+    }
+
+    /// A float SQL literal for `s`. Negative values become a unary-minus
+    /// number; non-numeric or special (`nan`, `infinity`) values return `None`.
+    fn float_literal(s: &str) -> Option<Expr> {
+        if s.is_empty() {
+            return None;
+        }
+        let lower = s.to_lowercase();
+        if matches!(
+            lower.as_str(),
+            "nan" | "inf" | "+inf" | "-inf" | "infinity" | "+infinity" | "-infinity"
+        ) {
+            return None;
+        }
+        // Parse through f32 (pgvector stores float4) and re-render with the
+        // shortest decimal form (Rust Display never uses scientific notation,
+        // so the re-parsed SQL is a plain float literal).
+        let value: f32 = s.parse().ok()?;
+        let rendered = value.to_string();
+        let (neg, digits) = match rendered.strip_prefix('-') {
+            Some(d) => (true, d),
+            None => (false, rendered.as_str()),
+        };
+        let num = Expr::Value(Value::Number(digits.to_string(), false).with_empty_span());
+        if neg {
+            Some(Expr::UnaryOp {
+                op: UnaryOperator::Minus,
+                expr: Box::new(num),
+            })
+        } else {
+            Some(num)
+        }
+    }
+
+    /// Normalize a vector-typed operand for a distance operator: unwrap a
+    /// `'[...]'::vector` cast or a bare `'[...]'` string into an `ARRAY[...]`
+    /// literal. Anything else (columns, placeholders, functions, ...) passes
+    /// through unchanged.
+    fn coerce_vector_operand(expr: &Expr) -> Expr {
+        // `'[1,2,3]'::vector` / `'[1,2,3]'::public.vector`
+        if let Expr::Cast {
+            expr: inner,
+            data_type,
+            ..
+        } = expr
+            && Self::is_vector_data_type(data_type)
+            && let Expr::Value(ValueWithSpan {
+                value: Value::SingleQuotedString(text),
+                ..
+            }) = inner.as_ref()
+            && let Some(array) = Self::vector_literal_to_array(text)
+        {
+            return array;
+        }
+        // Bare `'[1,2,3]'`
+        if let Expr::Value(ValueWithSpan {
+            value: Value::SingleQuotedString(text),
+            ..
+        }) = expr
+            && let Some(array) = Self::vector_literal_to_array(text)
+        {
+            return array;
+        }
+        expr.clone()
+    }
+
+    /// Rewrite `expr` in place when it is a pgvector distance `BinaryOp`,
+    /// recursing into the (already-rewritten-safe) operands afterwards is not
+    /// needed because the generic visitor will visit them separately; this
+    /// method handles a single operator node.
+    fn rewrite_binary_op(expr: &mut Expr) -> bool {
+        let Expr::BinaryOp { left, op, right } = expr else {
+            return false;
+        };
+        let Some(func) = Self::operator_to_func(op) else {
+            return false;
+        };
+
+        let left = Self::coerce_vector_operand(left);
+        let right = Self::coerce_vector_operand(right);
+        let call = Expr::Function(Function {
+            name: ObjectName::from(vec![Ident::new(func.name())]),
+            args: FunctionArguments::List(FunctionArgumentList {
+                args: vec![
+                    FunctionArg::Unnamed(FunctionArgExpr::Expr(left)),
+                    FunctionArg::Unnamed(FunctionArgExpr::Expr(right)),
+                ],
+                duplicate_treatment: None,
+                clauses: vec![],
+            }),
+            uses_odbc_syntax: false,
+            parameters: FunctionArguments::None,
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+        });
+
+        *expr = if func.negate() {
+            Expr::UnaryOp {
+                op: UnaryOperator::Minus,
+                expr: Box::new(call),
+            }
+        } else {
+            call
+        };
+        true
+    }
+}
+
+#[cfg(feature = "pgvector")]
+#[derive(Debug)]
+struct RewriteVectorOperatorsVisitor;
+
+#[cfg(feature = "pgvector")]
+impl RewriteVectorOperatorsVisitor {
+    /// Rewrite the `ORDER BY` expressions of `query`. sqlparser's visitor does
+    /// not descend into `order_by`, so this is done explicitly -- pgvector's
+    /// canonical query places the distance operator exactly there.
+    fn rewrite_order_by(query: &mut Query) {
+        if let Some(order_by) = query.order_by.as_mut()
+            && let OrderByKind::Expressions(exprs) = &mut order_by.kind
+        {
+            for order_by_expr in exprs {
+                RewriteVectorOperators::rewrite_binary_op(&mut order_by_expr.expr);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "pgvector")]
+impl VisitorMut for RewriteVectorOperatorsVisitor {
+    type Break = ();
+
+    fn pre_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<Self::Break> {
+        RewriteVectorOperators::rewrite_binary_op(expr);
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_query(&mut self, query: &mut Query) -> ControlFlow<Self::Break> {
+        Self::rewrite_order_by(query);
+        ControlFlow::Continue(())
+    }
+}
+
+#[cfg(feature = "pgvector")]
+impl SqlStatementRewriteRule for RewriteVectorOperators {
+    fn rewrite(&self, mut s: Statement) -> Statement {
+        let mut visitor = RewriteVectorOperatorsVisitor;
+        let _ = s.visit(&mut visitor);
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1727,5 +1998,218 @@ mod tests {
         assert_rewrite!(&rules, "SELECT 'x'::regrole", "SELECT 'x'::regrole");
         // A numeric operand cast to a non-oid type is left alone.
         assert_rewrite!(&rules, "SELECT '1'::int4", "SELECT '1'::INT4");
+    }
+
+    #[cfg(feature = "pgvector")]
+    mod vector_rewrite {
+        use super::*;
+        use crate::sql::PostgresCompatibilityParser;
+        use datafusion::arrow::array::{FixedSizeListArray, Float32Array, Int64Array};
+        use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
+        use datafusion::arrow::record_batch::RecordBatch;
+        use datafusion::prelude::SessionContext;
+        use std::sync::Arc;
+
+        fn rewrite_vector(sql: &str) -> String {
+            let statement = parse(sql).expect("Failed to parse").remove(0);
+            let rules: Vec<Arc<dyn SqlStatementRewriteRule>> =
+                vec![Arc::new(RewriteVectorOperators)];
+            rewrite(statement, &rules).to_string()
+        }
+
+        #[test]
+        fn l2_operator_becomes_array_distance() {
+            let out =
+                rewrite_vector("SELECT * FROM items ORDER BY embedding <-> '[1,2,3]' LIMIT 5");
+            assert!(
+                out.contains("array_distance(embedding, ARRAY[1, 2, 3])"),
+                "unexpected rewrite: {out}"
+            );
+        }
+
+        #[test]
+        fn inner_product_operator_is_negated() {
+            let out =
+                rewrite_vector("SELECT * FROM items ORDER BY embedding <#> '[1,2,3]' LIMIT 5");
+            assert!(
+                out.contains("- inner_product(embedding, ARRAY[1, 2, 3])")
+                    || out.contains("-inner_product(embedding, ARRAY[1, 2, 3])"),
+                "unexpected rewrite: {out}"
+            );
+        }
+
+        #[test]
+        fn cosine_operator_becomes_cosine_distance() {
+            let out =
+                rewrite_vector("SELECT * FROM items ORDER BY embedding <=> '[1,2,3]' LIMIT 5");
+            assert!(
+                out.contains("cosine_distance(embedding, ARRAY[1, 2, 3])"),
+                "unexpected rewrite: {out}"
+            );
+        }
+
+        #[test]
+        fn cast_vector_literal_is_rewritten() {
+            let out = rewrite_vector(
+                "SELECT * FROM items ORDER BY embedding <-> '[1,2,3]'::vector LIMIT 5",
+            );
+            assert!(
+                out.contains("array_distance(embedding, ARRAY[1, 2, 3])"),
+                "unexpected rewrite: {out}"
+            );
+        }
+
+        #[test]
+        fn negative_and_float_elements_are_preserved() {
+            let out = rewrite_vector("SELECT embedding <-> '[-1.5, 2, 0]' FROM items");
+            assert!(
+                out.contains("array_distance(embedding, ARRAY[-1.5, 2, 0])"),
+                "unexpected rewrite: {out}"
+            );
+        }
+
+        #[test]
+        fn operator_in_where_is_rewritten() {
+            let out = rewrite_vector("SELECT id FROM items WHERE embedding <-> '[1,2,3]' < 1.0");
+            assert!(
+                out.contains("array_distance(embedding, ARRAY[1, 2, 3]) < 1.0"),
+                "unexpected rewrite: {out}"
+            );
+        }
+
+        /// End-to-end: parse the pgvector query through the compatibility
+        /// parser (as the server does), then execute the rewritten SQL against
+        /// a DataFusion context that holds a `FixedSizeList(Float32, 3)` column.
+        #[tokio::test]
+        async fn executes_pgvector_queries() {
+            let ctx = SessionContext::new();
+
+            // items(id, embedding vector(3))
+            let element =
+                ArrowField::new_list_field(datafusion::arrow::datatypes::DataType::Float32, true);
+            let fsl_type =
+                datafusion::arrow::datatypes::DataType::FixedSizeList(Arc::new(element), 3);
+            let schema = Arc::new(ArrowSchema::new(vec![
+                ArrowField::new("id", datafusion::arrow::datatypes::DataType::Int64, false),
+                ArrowField::new("embedding", fsl_type, false),
+            ]));
+            let id = Int64Array::from(vec![1, 2, 3]);
+            let values = Float32Array::from(vec![
+                1.0, 2.0, 3.0, // row 0
+                4.0, 5.0, 6.0, // row 1
+                7.0, 8.0, 9.0, // row 2
+            ]);
+            let embedding = FixedSizeListArray::try_new(
+                Arc::new(ArrowField::new_list_field(
+                    datafusion::arrow::datatypes::DataType::Float32,
+                    true,
+                )),
+                3,
+                Arc::new(values),
+                None,
+            )
+            .unwrap();
+            let batch =
+                RecordBatch::try_new(schema, vec![Arc::new(id), Arc::new(embedding)]).unwrap();
+            ctx.register_batch("items", batch).unwrap();
+
+            let parser = PostgresCompatibilityParser::new();
+
+            // SELECT id ORDER BY L2 distance to the query vector.
+            let sql = parser
+                .parse("SELECT id FROM items ORDER BY embedding <-> '[1,2,3]' LIMIT 2")
+                .unwrap()
+                .remove(0)
+                .to_string();
+            let batches = ctx.sql(&sql).await.unwrap().collect().await.unwrap();
+            let ids: Vec<i64> = batches[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+                .to_vec();
+            assert_eq!(ids, vec![1, 2], "nearest rows by L2 distance");
+
+            // Project the computed distances for each operator.
+            let checks = [
+                (
+                    "SELECT embedding <-> '[1,2,3]' AS d FROM items ORDER BY id",
+                    0.0,
+                ),
+                (
+                    "SELECT embedding <#> '[1,2,3]' AS d FROM items ORDER BY id",
+                    -(14.0),
+                ),
+                (
+                    "SELECT embedding <=> '[1,2,3]' AS d FROM items ORDER BY id",
+                    0.0,
+                ),
+            ];
+            for (query, expected_first) in checks {
+                let sql = parser.parse(query).unwrap().remove(0).to_string();
+                let batches = ctx.sql(&sql).await.unwrap().collect().await.unwrap();
+                let d = batches[0]
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<datafusion::arrow::array::Float64Array>()
+                    .unwrap();
+                let got = d.value(0);
+                assert!(
+                    (got - expected_first).abs() < 1e-6,
+                    "query {query:?} first distance = {got}, expected ~{expected_first}"
+                );
+            }
+        }
+
+        /// The `pg.vector` field metadata must survive DataFusion planning and
+        /// execution -- arrow-pg keys the wire type + text encoding off it, so
+        /// if it were dropped the server would report the column as float4[].
+        #[tokio::test]
+        async fn vector_field_metadata_survives_planning_and_execution() {
+            use std::collections::HashMap;
+
+            let ctx = SessionContext::new();
+            let element =
+                ArrowField::new_list_field(datafusion::arrow::datatypes::DataType::Float32, true);
+            let field = ArrowField::new(
+                "embedding",
+                datafusion::arrow::datatypes::DataType::FixedSizeList(Arc::new(element.clone()), 3),
+                false,
+            )
+            .with_metadata(HashMap::from([(
+                "pg.vector".to_string(),
+                "vector".to_string(),
+            )]));
+            let schema = Arc::new(ArrowSchema::new(vec![field]));
+            let values = Float32Array::from(vec![1.0, 2.0, 3.0]);
+            let embedding =
+                FixedSizeListArray::try_new(Arc::new(element), 3, Arc::new(values), None).unwrap();
+            let batch = RecordBatch::try_new(schema, vec![Arc::new(embedding)]).unwrap();
+            ctx.register_batch("items_meta", batch).unwrap();
+
+            let df = ctx.sql("SELECT embedding FROM items_meta").await.unwrap();
+            assert_eq!(
+                df.schema()
+                    .field(0)
+                    .metadata()
+                    .get("pg.vector")
+                    .map(String::as_str),
+                Some("vector"),
+                "metadata must be present on the planned output schema"
+            );
+
+            let batches = df.collect().await.unwrap();
+            assert_eq!(
+                batches[0]
+                    .schema()
+                    .field(0)
+                    .metadata()
+                    .get("pg.vector")
+                    .map(String::as_str),
+                Some("vector"),
+                "metadata must be present on the executed record batch schema"
+            );
+        }
     }
 }

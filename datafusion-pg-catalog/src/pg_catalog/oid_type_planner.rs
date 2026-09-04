@@ -44,6 +44,11 @@ use datafusion::sql::sqlparser::ast::{DataType as SQLDataType, ObjectNamePart};
 
 use crate::pg_catalog::oid_field::{self, OID_ALIAS_TYPE_NAMES};
 
+/// Field metadata key (arrow-pg contract) marking an Arrow list field as a
+/// pgvector `vector`. Must match `arrow_pg::datatypes::PG_VECTOR_KEY`.
+#[cfg(feature = "pgvector")]
+const PG_VECTOR_KEY: &str = "pg.vector";
+
 /// Recognize Postgres type names DataFusion rejects and map them to Arrow
 /// types/metadata at planning time.
 #[derive(Debug, Default)]
@@ -125,6 +130,60 @@ impl PgOidTypePlanner {
         }
         builtin_arrow_type(type_name)
     }
+
+    /// True when `sql_type` names the pgvector `vector` type (optionally
+    /// schema-qualified, e.g. `public.vector`).
+    #[cfg(feature = "pgvector")]
+    fn is_vector_type(sql_type: &SQLDataType) -> bool {
+        let SQLDataType::Custom(name, _) = sql_type else {
+            return false;
+        };
+        name.0
+            .last()
+            .and_then(|part| part.as_ident())
+            .is_some_and(|ident| ident.value.eq_ignore_ascii_case("vector"))
+    }
+
+    /// Map the pgvector `vector` / `vector(n)` SQL type to an Arrow field.
+    ///
+    /// `vector(n)` is a fixed-dimension vector and maps to
+    /// `FixedSizeList(Float32, n)`; a bare `vector` (no declared dimension)
+    /// maps to `List(Float32)`. Both carry the `pg.vector` field metadata that
+    /// `arrow-pg` uses to report the pgwire `vector` type and encode values in
+    /// the pgvector text format.
+    ///
+    /// Returns `None` when the type is not a vector we recognize, so the caller
+    /// can fall back to the other planners. A `vector` with an unparseable /
+    /// non-positive dimension is also left untouched (DataFusion will then
+    /// reject the unknown type with its own error).
+    #[cfg(feature = "pgvector")]
+    fn vector_field(sql_type: &SQLDataType) -> Option<Arc<Field>> {
+        if !Self::is_vector_type(sql_type) {
+            return None;
+        }
+        let SQLDataType::Custom(_, modifiers) = sql_type else {
+            return None;
+        };
+
+        let element = Field::new_list_field(DataType::Float32, true);
+        let arrow_type = match modifiers.as_slice() {
+            [] => DataType::List(Arc::new(element)),
+            [dim] => {
+                let dim: i32 = dim.trim().parse().ok()?;
+                if dim <= 0 {
+                    return None;
+                }
+                DataType::FixedSizeList(Arc::new(element), dim)
+            }
+            _ => return None,
+        };
+
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert(PG_VECTOR_KEY.to_string(), "vector".to_string());
+        Some(Arc::new(
+            Field::new("", arrow_type, true).with_metadata(metadata),
+        ))
+    }
 }
 
 /// Arrow [`DataType`] for a Postgres pg_catalog builtin type name, or `None`
@@ -159,6 +218,12 @@ fn builtin_arrow_type(name: &str) -> Option<DataType> {
 
 impl TypePlanner for PgOidTypePlanner {
     fn plan_type_field(&self, sql_type: &SQLDataType) -> Result<Option<Arc<Field>>> {
+        // 0. pgvector `vector(n)` / `vector` -> FixedSizeList/List of Float32
+        //    tagged with `pg.vector` metadata (see the arrow-pg contract).
+        #[cfg(feature = "pgvector")]
+        if let Some(field) = Self::vector_field(sql_type) {
+            return Ok(Some(field));
+        }
         // 1. Scalar oid-alias types (regclass, oid, ...) -> int4 with kind
         //    metadata. Arrays of these (`regtype[]`) are handled by DataFusion
         //    recursing into this planner for the element type, so no Array arm
@@ -318,5 +383,54 @@ mod tests {
         let dt = cast_target_type("SELECT 'x'::pg_catalog.int2 AS c");
         let field = planner.plan_type_field(&dt).unwrap().unwrap();
         assert_eq!(field.data_type(), &DataType::Int16);
+    }
+
+    #[cfg(feature = "pgvector")]
+    #[test]
+    fn vector_with_dimension_is_fixed_size_list_of_float32() {
+        let planner = PgOidTypePlanner;
+        let dt = cast_target_type("SELECT 'x'::vector(3) AS c");
+        let field = planner.plan_type_field(&dt).unwrap().unwrap();
+
+        let expected =
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Float32, true)), 3);
+        assert_eq!(field.data_type(), &expected);
+        assert_eq!(
+            field
+                .metadata()
+                .get(super::PG_VECTOR_KEY)
+                .map(String::as_str),
+            Some("vector")
+        );
+    }
+
+    #[cfg(feature = "pgvector")]
+    #[test]
+    fn bare_vector_is_a_list_of_float32() {
+        let planner = PgOidTypePlanner;
+        let dt = cast_target_type("SELECT 'x'::vector AS c");
+        let field = planner.plan_type_field(&dt).unwrap().unwrap();
+
+        let expected = DataType::List(Arc::new(Field::new_list_field(DataType::Float32, true)));
+        assert_eq!(field.data_type(), &expected);
+        assert_eq!(
+            field
+                .metadata()
+                .get(super::PG_VECTOR_KEY)
+                .map(String::as_str),
+            Some("vector")
+        );
+    }
+
+    #[cfg(feature = "pgvector")]
+    #[test]
+    fn vector_with_invalid_dimension_falls_through() {
+        let planner = PgOidTypePlanner;
+        let dt = cast_target_type("SELECT 'x'::vector(0) AS c");
+        assert_eq!(planner.plan_type_field(&dt).unwrap(), None);
+
+        // A non-vector custom type is untouched.
+        let dt = cast_target_type("SELECT 'x'::public.my_type AS c");
+        assert_eq!(planner.plan_type_field(&dt).unwrap(), None);
     }
 }

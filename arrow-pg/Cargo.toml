@@ -16,6 +16,9 @@ rust-version.workspace = true
 default = ["arrow"]
 arrow = ["dep:arrow"]
 datafusion = ["dep:datafusion"]
+# pgvector compatibility: teach the type mapping/encoding layer about the
+# pgvector `vector` wire type. See datafusion-pg-catalog `pgvector` feature.
+pgvector = []
 postgis = ["postgres-types/with-geo-types-0_7", "dep:geoarrow", "dep:geoarrow-schema", "dep:postgis", "dep:geo-postgis", "pgwire/pg-type-postgis", "dep:geo-traits"]
 
 [dependencies]

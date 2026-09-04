@@ -26,6 +26,12 @@ log = "0.4"
 postgres-types.workspace = true
 tokio = { version = "1.52", features = ["sync"] }
 
+[features]
+# pgvector compatibility: recognize the pgvector `vector(n)` SQL type and the
+# `<->` / `<#>` / `<=>` distance operators. Reuses DataFusion's built-in
+# array_distance / inner_product / cosine_distance functions.
+pgvector = []
+
 [dev-dependencies]
 env_logger = "0.11"
 criterion = { version = "0.8", features = ["html_reports"] }
