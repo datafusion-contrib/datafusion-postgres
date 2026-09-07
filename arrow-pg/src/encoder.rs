@@ -1,6 +1,9 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+#[cfg(feature = "pgvector")]
+use bytes::BytesMut;
+
 #[cfg(not(feature = "datafusion"))]
 use arrow::{array::*, datatypes::*};
 use chrono::NaiveTime;
@@ -208,27 +211,75 @@ fn encode_pg_char<T: Encoder>(
     }
 }
 
-/// Render the pgvector text form of a vector: `[1,2,3]`.
-///
-/// Element formatting uses Rust's shortest round-trip `Display` for `f32`
-/// (`1.0` -> `1`), matching pgvector's `vector_out`.
+/// A pgvector `vector` value that pgwire serializes in the format the client
+/// requested: binary (pgvector layout, big-endian `int16` dimension followed by
+/// big-endian IEEE float32s) or text (`[1,2,3]`).
 #[cfg(feature = "pgvector")]
-fn format_pg_vector(values: &[f32]) -> String {
-    let inner = values
-        .iter()
-        .map(|v| v.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-    format!("[{inner}]")
+#[derive(Debug)]
+struct PgVectorValue(Vec<f32>);
+
+#[cfg(feature = "pgvector")]
+impl postgres_types::ToSql for PgVectorValue {
+    fn to_sql(
+        &self,
+        ty: &postgres_types::Type,
+        out: &mut BytesMut,
+    ) -> Result<postgres_types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        use bytes::BufMut as _;
+        if !PgVectorValue::accepts(ty) {
+            return Err("vector value bound to a non-vector result type".into());
+        }
+        // pgvector binary layout: big-endian u16 dimension, an unused u16 that
+        // must be 0, then big-endian IEEE float32 elements.
+        out.put_u16(self.0.len() as u16);
+        out.put_u16(0);
+        for v in &self.0 {
+            out.put_f32(*v);
+        }
+        Ok(postgres_types::IsNull::No)
+    }
+
+    fn accepts(ty: &postgres_types::Type) -> bool {
+        ty.oid() == crate::datatypes::PG_VECTOR_TYPE_OID
+    }
+
+    fn to_sql_checked(
+        &self,
+        ty: &postgres_types::Type,
+        out: &mut BytesMut,
+    ) -> Result<postgres_types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        self.to_sql(ty, out)
+    }
+}
+
+#[cfg(feature = "pgvector")]
+impl pgwire::types::ToSqlText for PgVectorValue {
+    fn to_sql_text(
+        &self,
+        _ty: &postgres_types::Type,
+        out: &mut BytesMut,
+        _format_options: &pgwire::types::format::FormatOptions,
+    ) -> Result<postgres_types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        use bytes::BufMut as _;
+        // Element formatting uses Rust's shortest round-trip `Display` for
+        // `f32` (`1.0` -> `1`), matching pgvector's `vector_out`.
+        let inner = self
+            .0
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        out.put_slice(format!("[{inner}]").as_bytes());
+        Ok(postgres_types::IsNull::No)
+    }
 }
 
 /// Encode a pgvector `vector` column (an Arrow `List`/`FixedSizeList` of
 /// `Float32` tagged with the `pg.vector` field metadata) for a single row.
 ///
-/// The value is emitted in the pgvector text format `[1,2,3]`. The result
-/// `FieldInfo` for vector columns is forced to the text format by
-/// `arrow_schema_to_pg_fields`, so pgwire serializes the string verbatim via
-/// `ToSqlText` regardless of the client's requested result format.
+/// pgwire picks the encoding from the result `FieldInfo` format: text produces
+/// `[1,2,3]` (as psql shows), binary produces the pgvector wire layout that
+/// typed drivers decode.
 #[cfg(feature = "pgvector")]
 fn encode_pg_vector<T: Encoder>(
     encoder: &mut T,
@@ -237,7 +288,7 @@ fn encode_pg_vector<T: Encoder>(
     pg_field: &FieldInfo,
 ) -> PgWireResult<()> {
     if arr.is_null(idx) {
-        return encoder.encode_field(&None::<String>, pg_field);
+        return encoder.encode_field(&None::<PgVectorValue>, pg_field);
     }
 
     fn row_values(arr: &Arc<dyn Array>, idx: usize) -> PgWireResult<Vec<f32>> {
@@ -279,8 +330,7 @@ fn encode_pg_vector<T: Encoder>(
         Ok(values)
     }
 
-    let text = format_pg_vector(&row_values(arr, idx)?);
-    encoder.encode_field(&Some(text), pg_field)
+    encoder.encode_field(&Some(PgVectorValue(row_values(arr, idx)?)), pg_field)
 }
 
 fn get_date32_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDate> {
@@ -407,12 +457,16 @@ pub fn encode_value<T: Encoder>(
         );
     }
 
-    // pgvector `vector` columns are tagged with the `pg.vector` field
-    // metadata. Route them through the vector encoder (text `[1,2,3]`) before
-    // the generic list handling below, which would otherwise emit them as a
-    // Postgres float4[] (`{1,2,3}`).
+    // pgvector `vector` columns are tagged with the `pg.vector` field metadata.
+    // Route them through the vector encoder (text `[1,2,3]` / pgvector binary)
+    // before the generic list handling below, which would otherwise emit them
+    // as a Postgres float4[] (`{1,2,3}`). The resolved FieldInfo wire type is
+    // the authoritative signal: some optimizer rewrites drop the arrow field
+    // metadata while keeping the logical vector type.
     #[cfg(feature = "pgvector")]
-    if crate::datatypes::is_pg_vector_field(arrow_field) {
+    if crate::datatypes::is_pg_vector_field(arrow_field)
+        || pg_field.datatype().oid() == crate::datatypes::PG_VECTOR_TYPE_OID
+    {
         return encode_pg_vector(encoder, arr, idx, pg_field);
     }
 
@@ -985,6 +1039,69 @@ mod tests {
             let mut encoder = TextCapture::default();
             encode_value(&mut encoder, &array, 1, &arrow_field, &pg_field).unwrap();
             assert_eq!(encoder.encoded, "[4.5,0,7]");
+        }
+
+        #[derive(Default)]
+        struct BinaryCapture {
+            encoded: Vec<u8>,
+        }
+
+        impl Encoder for BinaryCapture {
+            type Item = Vec<u8>;
+
+            fn encode_field<T>(&mut self, value: &T, pg_field: &FieldInfo) -> PgWireResult<()>
+            where
+                T: ToSql + ToSqlText + Sized,
+            {
+                use postgres_types::ToSql as _;
+                let mut bytes = BytesMut::new();
+                value.to_sql(pg_field.datatype(), &mut bytes).unwrap();
+                self.encoded = bytes.to_vec();
+                Ok(())
+            }
+
+            fn take_row(&mut self) -> Self::Item {
+                std::mem::take(&mut self.encoded)
+            }
+        }
+
+        #[test]
+        fn encodes_vector_fixed_size_list_as_pgvector_binary() {
+            // pgvector binary layout: big-endian u16 dimension, an unused u16
+            // (0), then big-endian IEEE float32s. [1,2,3] ->
+            // 00 03 | 00 00 | 3f800000 40000000 40400000.
+            let values = Float32Array::from(vec![1.0, 2.0, 3.0]);
+            let array: Arc<dyn Array> = Arc::new(
+                FixedSizeListArray::try_new(
+                    Arc::new(Field::new_list_field(DataType::Float32, true)),
+                    3,
+                    Arc::new(values),
+                    None,
+                )
+                .unwrap(),
+            );
+
+            let arrow_field = vector_arrow_field(true);
+            let pg_field = FieldInfo::new(
+                "embedding".to_string(),
+                None,
+                None,
+                crate::datatypes::pg_vector_type(),
+                FieldFormat::Binary,
+            );
+
+            let mut encoder = BinaryCapture::default();
+            encode_value(&mut encoder, &array, 0, &arrow_field, &pg_field).unwrap();
+            assert_eq!(
+                encoder.encoded,
+                vec![
+                    0x00, 0x03, // dim = 3
+                    0x00, 0x00, // unused
+                    0x3f, 0x80, 0x00, 0x00, // 1.0
+                    0x40, 0x00, 0x00, 0x00, // 2.0
+                    0x40, 0x40, 0x00, 0x00, // 3.0
+                ]
+            );
         }
 
         #[test]

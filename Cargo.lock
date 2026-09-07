@@ -2491,13 +2491,14 @@ dependencies = [
  "geodatafusion",
  "getset",
  "log",
+ "pgvector",
  "pgwire",
+ "postgres",
  "postgres-types",
  "rust_decimal",
  "rustls-pemfile",
  "rustls-pki-types",
  "tokio",
- "tokio-postgres",
  "tokio-rustls",
 ]
 
@@ -4041,6 +4042,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgvector"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3673cba5b9a124916096a423b806a9f29620972c6c97b08db5f2053e9428b481"
+dependencies = [
+ "bytes",
+ "postgres-types",
+]
+
+[[package]]
 name = "pgwire"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4195,6 +4206,20 @@ dependencies = [
  "byteorder",
  "bytes",
  "postgres-types",
+]
+
+[[package]]
+name = "postgres"
+version = "0.19.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33ad20e0aa0b24f5a394eab4f78c781d248982b22b25cecc7e3aa46a681605bd"
+dependencies = [
+ "bytes",
+ "fallible-iterator",
+ "futures-util",
+ "log",
+ "tokio",
+ "tokio-postgres",
 ]
 
 [[package]]

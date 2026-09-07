@@ -178,10 +178,12 @@ impl SimpleQueryHandler for DfSessionService {
         }
 
         let mut results = vec![];
-        'stmt: for mut statement in statements {
+        'stmt: for statement in statements {
             // pgvector: `INSERT ... VALUES ('[1,2,3]')` into a `vector` column
             // needs the string literal rewritten to an ARRAY literal against the
             // target table's schema (see datafusion_pg_catalog::sql).
+            #[cfg(feature = "pgvector")]
+            let mut statement = statement;
             #[cfg(feature = "pgvector")]
             datafusion_pg_catalog::sql::rewrite_vector_insert(
                 &self.session_context,

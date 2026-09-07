@@ -298,17 +298,6 @@ pub fn arrow_schema_to_pg_fields(
         .enumerate()
         .map(|(idx, f)| {
             let pg_type = field_into_pg_type(f)?;
-
-            // pgvector `vector` has no binary wire encoding implemented yet, so
-            // always negotiate the text format (`[1,2,3]`) for vector columns,
-            // even when the client asked for binary.
-            #[cfg(feature = "pgvector")]
-            let col_format = if is_pg_vector_field(f) {
-                pgwire::api::results::FieldFormat::Text
-            } else {
-                format.format_for(idx)
-            };
-            #[cfg(not(feature = "pgvector"))]
             let col_format = format.format_for(idx);
 
             let mut field_info = FieldInfo::new(f.name().into(), None, None, pg_type, col_format);

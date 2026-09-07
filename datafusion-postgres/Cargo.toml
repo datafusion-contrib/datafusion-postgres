@@ -34,7 +34,8 @@ rustls-pki-types = "1.14"
 
 [dev-dependencies]
 env_logger = "0.11"
-tokio-postgres = "0.7"
+pgvector = { version = "0.4", features = ["postgres"] }
+postgres = "0.19"
 
 [features]
 default = []

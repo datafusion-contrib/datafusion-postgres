@@ -279,23 +279,26 @@ struct VectorParam(Vec<f32>);
 
 #[cfg(feature = "pgvector")]
 impl VectorParam {
-    /// The pgvector binary layout is a big-endian `int16` dimension followed by
-    /// that many big-endian IEEE float32 elements.
+    /// The pgvector binary layout is a big-endian `u16` dimension, an unused
+    /// `u16` that must be 0, then that many big-endian IEEE float32 elements.
     fn from_binary(raw: &[u8]) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        if raw.len() < 2 {
+        if raw.len() < 4 {
             return Err("vector parameter binary payload too short".into());
         }
-        let dim = i16::from_be_bytes([raw[0], raw[1]]);
-        if dim <= 0 {
+        let dim = u16::from_be_bytes([raw[0], raw[1]]) as usize;
+        let unused = u16::from_be_bytes([raw[2], raw[3]]);
+        if unused != 0 {
+            return Err("vector parameter binary payload has a non-zero unused word".into());
+        }
+        if dim == 0 {
             return Err("vector parameter dimension must be positive".into());
         }
-        let dim = dim as usize;
-        if raw.len() != 2 + dim * 4 {
+        if raw.len() != 4 + dim * 4 {
             return Err("vector parameter binary payload has wrong length".into());
         }
         let mut values = Vec::with_capacity(dim);
         for i in 0..dim {
-            let off = 2 + i * 4;
+            let off = 4 + i * 4;
             values.push(f32::from_be_bytes([
                 raw[off],
                 raw[off + 1],
