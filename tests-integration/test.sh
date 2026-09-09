@@ -15,7 +15,7 @@ done
 # Function to cleanup processes
 cleanup() {
     echo "🧹 Cleaning up processes..."
-    for pid in $CSV_PID $TRANSACTION_PID $PARQUET_PID $RBAC_PID $SSL_PID $POSTGIS_PID $FDW_PID; do
+    for pid in $CSV_PID $TRANSACTION_PID $PARQUET_PID $RBAC_PID $SSL_PID $POSTGIS_PID $FDW_PID $PGVECTOR_PID; do
         if [ ! -z "$pid" ]; then
             kill -9 $pid 2>/dev/null || true
         fi
@@ -248,6 +248,32 @@ else
     echo "⏭️  Skipped (--skip-postgis)"
 fi
 
+# Test 7: pgvector
+echo ""
+echo "🧪 Test 7: pgvector Support"
+echo "---------------------------"
+wait_for_port 5438
+../target/debug/datafusion-postgres-cli -p 5438 --csv delhi:delhiclimate.csv &
+PGVECTOR_PID=$!
+sleep 5
+
+# Check if server is actually running
+if ! ps -p $PGVECTOR_PID > /dev/null 2>&1; then
+    echo "❌ pgvector server failed to start"
+    exit 1
+fi
+
+if python test_pgvector.py; then
+    echo "✅ pgvector test passed"
+else
+    echo "❌ pgvector test failed"
+    kill -9 $PGVECTOR_PID 2>/dev/null || true
+    exit 1
+fi
+
+kill -9 $PGVECTOR_PID 2>/dev/null || true
+sleep 3
+
 echo ""
 echo "🎉 All enhanced integration tests passed!"
 echo "=========================================="
@@ -261,6 +287,7 @@ echo "  ✅ Array types and complex data type support"
 echo "  ✅ Improved pg_catalog system tables"
 echo "  ✅ PostgreSQL function compatibility"
 echo "  ✅ SSL/TLS encryption support"
+echo "  ✅ pgvector support (vector columns, literals, distance operators)"
 if [ -z "$SKIP_POSTGIS" ]; then
     echo "  ✅ PostGIS spatial functions support"
 fi
