@@ -51,13 +51,20 @@ wait_for_port() {
 echo "🚀 Running DataFusion PostgreSQL Integration Tests"
 echo "=================================================="
 
-# Build the project
+# Build the project, enabling the optional features whose tests will run.
 echo "Building datafusion-postgres..."
 cd ..
-if [ -n "$SKIP_POSTGIS" ]; then
-    cargo build
+BUILD_FEATURES=""
+if [ -z "$SKIP_PGVECTOR" ]; then
+    BUILD_FEATURES="${BUILD_FEATURES:+$BUILD_FEATURES }datafusion-postgres/pgvector"
+fi
+if [ -z "$SKIP_POSTGIS" ]; then
+    BUILD_FEATURES="${BUILD_FEATURES:+$BUILD_FEATURES }datafusion-postgres/postgis"
+fi
+if [ -n "$BUILD_FEATURES" ]; then
+    cargo build --features "$BUILD_FEATURES"
 else
-    cargo build --features datafusion-postgres/postgis
+    cargo build
 fi
 cd tests-integration
 

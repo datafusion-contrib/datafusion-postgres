@@ -139,7 +139,36 @@ jobs:
       run: nix develop --command podman info >/dev/null 2>&1 || true
     - run: |
         cd tests-integration
-        nix develop --command bash test.sh --skip-postgis
+        nix develop --command bash test.sh --skip-postgis --skip-pgvector
+
+  # pgvector has its own dedicated integration job so it can run (and fail)
+  # independently of the base suite.
+  integration-pgvector:
+    name: Integration tests (pgvector)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [test]
+    steps:
+    - uses: actions/checkout@v6
+    - uses: insightsengineering/disk-space-reclaimer@v1
+    - uses: cachix/install-nix-action@v31
+    - name: Build CLI and run pgvector integration tests
+      run: |
+        nix develop --command bash -ec '
+          set -e
+          cargo build -p datafusion-postgres-cli
+          cd tests-integration
+          ../target/debug/datafusion-postgres-cli -p 5438 --csv delhi:delhiclimate.csv &
+          pid=$!
+          trap "kill -9 $pid 2>/dev/null || true" EXIT
+          for i in $(seq 1 30); do
+            if python -c "import socket,sys; s=socket.socket(); sys.exit(0 if s.connect_ex((\"127.0.0.1\", 5438)) == 0 else 1)" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          python test_pgvector.py
+        '
 
   # Advisory: full integration suite including the PostGIS tests, built
   # with the postgis feature. Allowed to fail while geodatafusion lags.
@@ -157,7 +186,7 @@ jobs:
       run: nix develop --command podman info >/dev/null 2>&1 || true
     - run: |
         cd tests-integration
-        nix develop --command bash test.sh
+        nix develop --command bash test.sh --skip-pgvector
 
   msrv:
     name: MSRV
