@@ -92,6 +92,9 @@ jobs:
           - name: functions-full
             flags: "--features datafusion-pg-functions/full"
             optional: false
+          - name: pgvector
+            flags: "--features datafusion-postgres/pgvector"
+            optional: false
           - name: postgis
             flags: "--features datafusion-postgres/postgis"
             optional: true
