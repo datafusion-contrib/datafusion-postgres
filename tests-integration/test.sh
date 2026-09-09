@@ -2,13 +2,16 @@
 
 set -e
 
-# Optional flag: --skip-postgis
-# Skips the PostGIS integration test and builds without the postgis
-# feature, for use when the geodatafusion dependency is not ready.
+# Optional flags:
+#   --skip-postgis  Skips the PostGIS integration test and builds without the
+#                   postgis feature (for when geodatafusion lags upstream).
+#   --skip-pgvector Skips the pgvector integration test.
 SKIP_POSTGIS=""
+SKIP_PGVECTOR=""
 for arg in "$@"; do
     case $arg in
         --skip-postgis) SKIP_POSTGIS=1 ;;
+        --skip-pgvector) SKIP_PGVECTOR=1 ;;
     esac
 done
 
@@ -252,26 +255,30 @@ fi
 echo ""
 echo "🧪 Test 7: pgvector Support"
 echo "---------------------------"
-wait_for_port 5438
-../target/debug/datafusion-postgres-cli -p 5438 --csv delhi:delhiclimate.csv &
-PGVECTOR_PID=$!
-sleep 5
+if [ -z "$SKIP_PGVECTOR" ]; then
+    wait_for_port 5438
+    ../target/debug/datafusion-postgres-cli -p 5438 --csv delhi:delhiclimate.csv &
+    PGVECTOR_PID=$!
+    sleep 5
 
-# Check if server is actually running
-if ! ps -p $PGVECTOR_PID > /dev/null 2>&1; then
-    echo "❌ pgvector server failed to start"
-    exit 1
-fi
+    # Check if server is actually running
+    if ! ps -p $PGVECTOR_PID > /dev/null 2>&1; then
+        echo "❌ pgvector server failed to start"
+        exit 1
+    fi
 
-if python test_pgvector.py; then
-    echo "✅ pgvector test passed"
-else
-    echo "❌ pgvector test failed"
+    if python test_pgvector.py; then
+        echo "✅ pgvector test passed"
+    else
+        echo "❌ pgvector test failed"
+        kill -9 $PGVECTOR_PID 2>/dev/null || true
+        exit 1
+    fi
+
     kill -9 $PGVECTOR_PID 2>/dev/null || true
-    exit 1
+else
+    echo "⏭️  Skipped (--skip-pgvector)"
 fi
-
-kill -9 $PGVECTOR_PID 2>/dev/null || true
 sleep 3
 
 echo ""
@@ -287,7 +294,9 @@ echo "  ✅ Array types and complex data type support"
 echo "  ✅ Improved pg_catalog system tables"
 echo "  ✅ PostgreSQL function compatibility"
 echo "  ✅ SSL/TLS encryption support"
-echo "  ✅ pgvector support (vector columns, literals, distance operators)"
+if [ -z "$SKIP_PGVECTOR" ]; then
+    echo "  ✅ pgvector support (vector columns, literals, distance operators)"
+fi
 if [ -z "$SKIP_POSTGIS" ]; then
     echo "  ✅ PostGIS spatial functions support"
 fi
