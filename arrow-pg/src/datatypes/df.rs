@@ -466,15 +466,17 @@ where
         pg_type_hint: Option<Type>,
         inferenced_type: Option<&DataType>,
     ) -> PgWireResult<Type> {
-        // A concrete server-decided type wins -- it reflects the parameter's
-        // semantically-typed column (oid-alias, pgvector, ...). UNKNOWN is not
-        // authoritative so the historical hint/inferred fallbacks still apply.
-        if let Some(ty) = server_type
+        // The client-provided hint (Parse parameter type OIDs) wins: it is the
+        // type the client actually encoded the parameter with. The
+        // server-decided type is only a fallback for clients that send no
+        // types (e.g. tokio-postgres); it carries the semantically-typed
+        // overrides (oid-alias, pgvector) that the physical Arrow mapping
+        // would otherwise lose.
+        if let Some(ty) = pg_type_hint {
+            Ok(ty.clone())
+        } else if let Some(ty) = server_type
             && *ty != Type::UNKNOWN
         {
-            return Ok(ty.clone());
-        }
-        if let Some(ty) = pg_type_hint {
             Ok(ty.clone())
         } else if let Some(infer_type) = inferenced_type {
             into_pg_type(infer_type)
