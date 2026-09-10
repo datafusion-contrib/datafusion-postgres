@@ -2,6 +2,8 @@ pub mod auth;
 pub(crate) mod client;
 mod handlers;
 pub mod hooks;
+#[cfg(feature = "pgvector")]
+mod pgvector;
 mod planner;
 #[cfg(any(test, debug_assertions))]
 pub mod testing;

@@ -272,6 +272,44 @@ fn coerce_interval_value(value: Option<Interval>, target: &DataType) -> PgWireRe
     }
 }
 
+/// A Postgres `oid` parameter decoded as a signed `i32`.
+///
+/// Postgres has no unsigned integer types, and DataFusion catalog `oid` columns
+/// are stored as `Int32`, so decode the 4-byte OID value directly as `i32`
+/// rather than going through `u32`.
+#[derive(Debug)]
+struct OidParam(i32);
+
+impl<'a> postgres_types::FromSql<'a> for OidParam {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() != 4 {
+            return Err("oid parameter must be exactly 4 bytes".into());
+        }
+        Ok(OidParam(i32::from_be_bytes([
+            raw[0], raw[1], raw[2], raw[3],
+        ])))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty == &Type::OID
+    }
+}
+
+impl<'a> pgwire::types::FromSqlText<'a> for OidParam {
+    fn from_sql_text(
+        _ty: &Type,
+        input: &'a [u8],
+        _format_options: &FormatOptions,
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let text = std::str::from_utf8(input)?;
+        let value: i64 = text.trim().parse()?;
+        Ok(OidParam(value as i32))
+    }
+}
+
 /// Decode a pgvector `vector` parameter value sent by a client over the wire.
 #[cfg(feature = "pgvector")]
 #[derive(Debug)]
@@ -1043,16 +1081,19 @@ where
                 // Store MAC addresses as strings for now
                 deserialized_params.push(ScalarValue::Utf8(value));
             }
-            // PostgreSQL `oid` (unsigned 32-bit). Drivers bind these with u32;
-            // DataFusion catalog oid columns are Int32, so coerce when the
-            // inferred type is Int32.
+            // PostgreSQL `oid` (unsigned 32-bit on the wire, but Postgres has no
+            // unsigned integer types). DataFusion catalog oid columns are Int32,
+            // so decode as i32 and coerce if the inferred type differs.
             Type::OID => {
-                let value = portal.parameter::<u32>(i, &pg_type)?;
+                let value = portal.parameter::<OidParam>(i, &pg_type)?;
                 match inferenced_type {
-                    Some(DataType::Int32) => {
-                        deserialized_params.push(ScalarValue::Int32(value.map(|v| v as i32)));
+                    Some(target) if !matches!(target, DataType::Int32) => {
+                        deserialized_params
+                            .push(coerce_int_value(value.map(|v| v.0 as i64), target)?);
                     }
-                    _ => deserialized_params.push(ScalarValue::UInt32(value)),
+                    _ => {
+                        deserialized_params.push(ScalarValue::Int32(value.map(|v| v.0)));
+                    }
                 }
             }
             // TODO: add more advanced types (composite types, ranges, etc.)

@@ -129,6 +129,8 @@ impl DfSessionService {
             Arc::new(CursorStatementHook),
             Arc::new(SetShowHook),
             Arc::new(TransactionStatementHook),
+            #[cfg(feature = "pgvector")]
+            Arc::new(crate::pgvector::PgVectorInsertHook),
         ];
         Self::new_with_hooks(session_context, hooks)
     }
@@ -137,6 +139,11 @@ impl DfSessionService {
         session_context: Arc<SessionContext>,
         query_hooks: Vec<Arc<dyn QueryHook>>,
     ) -> DfSessionService {
+        // Install the pgvector expression planner (distance operators) before
+        // any statement is planned.
+        #[cfg(feature = "pgvector")]
+        crate::pgvector::install(&session_context);
+
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
             sql_parser: PostgresCompatibilityParser::new(),
@@ -179,18 +186,6 @@ impl SimpleQueryHandler for DfSessionService {
 
         let mut results = vec![];
         'stmt: for statement in statements {
-            // pgvector: `INSERT ... VALUES ('[1,2,3]')` into a `vector` column
-            // needs the string literal rewritten to an ARRAY literal against the
-            // target table's schema (see datafusion_pg_catalog::sql).
-            #[cfg(feature = "pgvector")]
-            let mut statement = statement;
-            #[cfg(feature = "pgvector")]
-            datafusion_pg_catalog::sql::rewrite_vector_insert(
-                &self.session_context,
-                &mut statement,
-            )
-            .await;
-
             // Call query hooks with the parsed statement
             for hook in &self.query_hooks {
                 if let Some(result) = hook
@@ -425,14 +420,7 @@ impl QueryParser for Parser {
             return Ok(None);
         }
 
-        let mut statement = statements.remove(0);
-
-        // pgvector: rewrite vector string literals of INSERT ... VALUES against
-        // the target table's schema before DataFusion plans the statement.
-        #[cfg(feature = "pgvector")]
-        datafusion_pg_catalog::sql::rewrite_vector_insert(&self.session_context, &mut statement)
-            .await;
-
+        let statement = statements.remove(0);
         let query = statement.to_string();
 
         let context = &self.session_context;
