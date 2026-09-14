@@ -305,7 +305,10 @@ fn encode_pg_vector<T: Encoder>(
                         ))
                     })?;
                 let size = list.value_length() as usize;
-                let start = idx * size;
+                // Respect the array's own offset: a sliced FixedSizeListArray
+                // (offset > 0, e.g. a batch sliced by LIMIT) starts its rows
+                // further into the flattened values.
+                let start = list.value_offset(idx) as usize;
                 (0..size).map(|i| values.value(start + i)).collect()
             }
             DataType::List(_) => {
@@ -1039,6 +1042,36 @@ mod tests {
             let mut encoder = TextCapture::default();
             encode_value(&mut encoder, &array, 1, &arrow_field, &pg_field).unwrap();
             assert_eq!(encoder.encoded, "[4.5,0,7]");
+        }
+
+        #[test]
+        fn encodes_sliced_fixed_size_list_vector() {
+            // A sliced FixedSizeListArray has a non-zero offset; row indexing
+            // must account for it instead of using `idx * size`.
+            let values = Float32Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+            let array: Arc<dyn Array> = Arc::new(
+                FixedSizeListArray::try_new(
+                    Arc::new(Field::new_list_field(DataType::Float32, true)),
+                    3,
+                    Arc::new(values),
+                    None,
+                )
+                .unwrap(),
+            );
+            let sliced = array.slice(1, 2); // rows [4,5,6] and [7,8,9]
+
+            let arrow_field = vector_arrow_field(true);
+            let pg_field = FieldInfo::new(
+                "embedding".to_string(),
+                None,
+                None,
+                crate::datatypes::pg_vector_type(),
+                FieldFormat::Text,
+            );
+
+            let mut encoder = TextCapture::default();
+            encode_value(&mut encoder, &sliced, 0, &arrow_field, &pg_field).unwrap();
+            assert_eq!(encoder.encoded, "[4,5,6]");
         }
 
         #[derive(Default)]

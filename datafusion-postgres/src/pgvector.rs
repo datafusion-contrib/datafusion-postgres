@@ -16,7 +16,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::UInt64Array;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::execution::FunctionRegistry;
 use datafusion::execution::session_state::SessionStateBuilder;
@@ -26,29 +25,27 @@ use datafusion::logical_expr::{Expr, LogicalPlan, ScalarUDF};
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
 use datafusion::sql::sqlparser::ast::{
-    Array, BinaryOperator, DataType as SQLDataType, Expr as SQLExpr, ObjectName, SetExpr,
-    Statement, TableObject, UnaryOperator, Value, ValueWithSpan,
+    Array, BinaryOperator, Expr as SQLExpr, ObjectName, SetExpr, Statement, TableObject,
+    UnaryOperator, Value, ValueWithSpan,
 };
 use pgwire::api::ClientInfo;
-use pgwire::api::results::{Response, Tag};
+use pgwire::api::results::Response;
 use pgwire::error::{PgWireError, PgWireResult};
 
+use crate::arrow_pg::datatypes::df::parse_vector_text;
 use crate::hooks::{HookClient, QueryHook};
 
 /// Install the pgvector expression planner into `session_context`.
 ///
-/// Looks up the distance UDFs the planner rewrites onto; if they are missing
-/// (e.g. a context without the default nested functions) installation is
-/// skipped so the server keeps working, just without pgvector operators.
-pub fn install(session_context: &SessionContext) {
+/// Looks up the distance UDFs the planner rewrites onto (they come from
+/// DataFusion's default nested functions) and appends the planner to the
+/// session's expression planners, and switches the SQL parser dialect to
+/// Postgres. Errors are returned rather than ignored.
+pub fn install(session_context: &SessionContext) -> datafusion::error::Result<()> {
     let state = session_context.state();
-    let (Ok(array_distance), Ok(inner_product), Ok(cosine_distance)) = (
-        state.udf("array_distance"),
-        state.udf("inner_product"),
-        state.udf("cosine_distance"),
-    ) else {
-        return;
-    };
+    let array_distance = state.udf("array_distance")?;
+    let inner_product = state.udf("inner_product")?;
+    let cosine_distance = state.udf("cosine_distance")?;
 
     let planner = Arc::new(PgVectorExprPlanner {
         array_distance,
@@ -67,9 +64,9 @@ pub fn install(session_context: &SessionContext) {
     // the simple protocol are re-serialized and parsed by DataFusion, so the
     // session parser must use the Postgres dialect for the planner to see them.
     let mut config = session_context.copied_config();
-    let _ = config
+    config
         .options_mut()
-        .set("datafusion.sql_parser.dialect", "postgres");
+        .set("datafusion.sql_parser.dialect", "postgres")?;
 
     let state_ref = session_context.state_ref();
     let existing = state_ref.read().clone();
@@ -78,6 +75,8 @@ pub fn install(session_context: &SessionContext) {
         .with_expr_planners(planners)
         .build();
     *state_ref.write() = new_state;
+
+    Ok(())
 }
 
 /// A DataFusion [`ExprPlanner`] implementing the pgvector distance operators.
@@ -140,7 +139,7 @@ fn utf8_literal(scalar: &ScalarValue) -> Option<&str> {
 
 /// Parse `[1,2,3]` into a `List(Float32)` scalar literal.
 fn parse_vector_list(text: &str) -> Option<ScalarValue> {
-    let values = parse_vector_floats(text)?;
+    let values = parse_vector_text(text)?;
     let scalars: Vec<ScalarValue> = values
         .into_iter()
         .map(|v| ScalarValue::Float32(Some(v)))
@@ -201,36 +200,9 @@ impl QueryHook for PgVectorInsertHook {
         }
 
         let query = statement.to_string();
-        let timeout = crate::client::get_statement_timeout(client);
         let result = async {
-            let df = match timeout {
-                Some(duration) => tokio::time::timeout(duration, session_context.sql(&query))
-                    .await
-                    .map_err(|_| {
-                        PgWireError::UserError(Box::new(pgwire::error::ErrorInfo::new(
-                            "ERROR".to_string(),
-                            "57014".to_string(),
-                            "canceling statement due to statement timeout".to_string(),
-                        )))
-                    })?
-                    .map_err(|e| PgWireError::ApiError(Box::new(e)))?,
-                None => session_context
-                    .sql(&query)
-                    .await
-                    .map_err(|e| PgWireError::ApiError(Box::new(e)))?,
-            };
-            let batches = df
-                .collect()
-                .await
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-            let rows_affected = batches
-                .first()
-                .and_then(|batch| batch.column_by_name("count"))
-                .and_then(|col| col.as_any().downcast_ref::<UInt64Array>())
-                .map_or(0, |array| array.value(0) as usize);
-            Ok::<_, PgWireError>(Response::Execution(
-                Tag::new("INSERT").with_oid(0).with_rows(rows_affected),
-            ))
+            let df = crate::client::execute_statement(client, session_context, &query).await?;
+            crate::handlers::map_rows_affected_for_insert(&df).await
         }
         .await;
 
@@ -407,7 +379,7 @@ fn vector_literal_text(expr: &SQLExpr) -> Option<String> {
             expr: inner,
             data_type,
             ..
-        } if is_vector_sql_type(data_type) => {
+        } if datafusion_pg_catalog::sql::is_vector_type(data_type) => {
             if let SQLExpr::Value(ValueWithSpan {
                 value: Value::SingleQuotedString(text),
                 ..
@@ -422,37 +394,9 @@ fn vector_literal_text(expr: &SQLExpr) -> Option<String> {
     }
 }
 
-/// True when `data_type` is the pgvector `vector` type name.
-fn is_vector_sql_type(data_type: &SQLDataType) -> bool {
-    let SQLDataType::Custom(name, _) = data_type else {
-        return false;
-    };
-    name.0
-        .last()
-        .and_then(|part| part.as_ident())
-        .is_some_and(|ident| ident.value.eq_ignore_ascii_case("vector"))
-}
-
-/// Parse the floats of a pgvector literal `[1,-2.5,3]`.
-fn parse_vector_floats(text: &str) -> Option<Vec<f32>> {
-    let text = text.trim();
-    if !(text.starts_with('[') && text.ends_with(']') && text.len() >= 2) {
-        return None;
-    }
-    let inner = &text[1..text.len() - 1];
-    if inner.trim().is_empty() {
-        return None;
-    }
-    let mut values = Vec::new();
-    for part in inner.split(',') {
-        values.push(part.trim().parse::<f32>().ok()?);
-    }
-    Some(values)
-}
-
 /// Build a SQL `ARRAY[<floats>]` literal from a pgvector literal string.
 fn vector_literal_to_array(text: &str) -> Option<SQLExpr> {
-    let values = parse_vector_floats(text)?;
+    let values = parse_vector_text(text)?;
     let mut elems = Vec::with_capacity(values.len());
     for value in values {
         elems.push(float_literal(value));
@@ -488,16 +432,16 @@ mod tests {
     #[test]
     fn parses_vector_literal_floats() {
         assert_eq!(
-            parse_vector_floats("[1, -2.5, 3]"),
+            parse_vector_text("[1, -2.5, 3]"),
             Some(vec![1.0, -2.5, 3.0])
         );
     }
 
     #[test]
     fn rejects_non_vector_literals() {
-        assert_eq!(parse_vector_floats("[a,b]"), None);
-        assert_eq!(parse_vector_floats("1,2,3"), None);
-        assert_eq!(parse_vector_floats("[]"), None);
+        assert_eq!(parse_vector_text("[a,b]"), None);
+        assert_eq!(parse_vector_text("1,2,3"), None);
+        assert_eq!(parse_vector_text("[]"), None);
     }
 
     #[test]

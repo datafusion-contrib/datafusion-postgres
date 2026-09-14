@@ -27,10 +27,11 @@ postgres-types.workspace = true
 tokio = { version = "1.52", features = ["sync"] }
 
 [features]
-# pgvector compatibility: recognize the pgvector `vector(n)` SQL type and the
-# `<->` / `<#>` / `<=>` distance operators. Reuses DataFusion's built-in
-# array_distance / inner_product / cosine_distance functions.
-pgvector = []
+# pgvector compatibility: plan the pgvector `vector(n)` SQL type (as a
+# FixedSizeList/List of Float32) and expose the `vector` row in `pg_catalog`.
+# The distance operators (`<->` / `<#>` / `<=>`) and INSERT literal rewriting
+# are implemented in datafusion-postgres, not here.
+pgvector = ["arrow-pg/pgvector"]
 
 [dev-dependencies]
 env_logger = "0.11"

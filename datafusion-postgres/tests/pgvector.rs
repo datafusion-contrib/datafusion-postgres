@@ -25,8 +25,8 @@ use datafusion_postgres::auth::AuthManager;
 use datafusion_postgres::testing::MockClient;
 use datafusion_postgres::{ServerOptions, serve};
 
-/// pgvector `vector` type OID, matching `arrow_pg::datatypes::PG_VECTOR_TYPE_OID`.
-const VECTOR_OID: u32 = 16385;
+/// pgvector `vector` type OID (the canonical constant from `arrow-pg`).
+use datafusion_postgres::arrow_pg::datatypes::PG_VECTOR_TYPE_OID as VECTOR_OID;
 
 /// Register `items(id bigint, embedding vector(3))` as an empty table whose
 /// `embedding` field carries the `pg.vector` metadata.
@@ -75,7 +75,12 @@ async fn service() -> (SessionContext, DfSessionService) {
     .expect("failed to setup pg_catalog");
     register_items(&session_context);
 
-    let service = DfSessionService::new(Arc::new(session_context.clone()));
+    // The pgvector planner/hook are installed by the `serve*` entry points;
+    // when building a `DfSessionService` directly they must be wired manually.
+    datafusion_postgres::pgvector::install(&session_context).expect("install pgvector planner");
+    let hooks: Vec<Arc<dyn datafusion_postgres::hooks::QueryHook>> =
+        vec![Arc::new(datafusion_postgres::pgvector::PgVectorInsertHook)];
+    let service = DfSessionService::new_with_hooks(Arc::new(session_context.clone()), hooks);
     (session_context, service)
 }
 

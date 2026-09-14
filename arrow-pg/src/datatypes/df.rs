@@ -350,24 +350,36 @@ impl VectorParam {
     /// The pgvector text form is `[1,2,3]`.
     fn from_text(raw: &[u8]) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let text = std::str::from_utf8(raw)?;
-        let text = text.trim();
-        if !(text.starts_with('[') && text.ends_with(']')) {
-            return Err("vector parameter text must look like [1,2,3]".into());
-        }
-        let inner = text[1..text.len() - 1].trim();
-        if inner.is_empty() {
-            return Err("vector parameter must not be empty".into());
-        }
-        let mut values = Vec::new();
-        for part in inner.split(',') {
-            values.push(
-                part.trim().parse::<f32>().map_err(|_| {
-                    format!("invalid vector element '{}' in parameter", part.trim())
-                })?,
-            );
-        }
-        Ok(VectorParam(values))
+        parse_vector_text(text)
+            .map(VectorParam)
+            .ok_or_else(|| "invalid pgvector text parameter (expected e.g. [1,2,3])".into())
     }
+}
+
+/// Parse a pgvector text literal such as `[1,2,3]` into its `f32` elements.
+///
+/// This is the single home for the pgvector text format: it is used by the
+/// wire parameter decoder above and by the SQL-level rewrite in
+/// `datafusion-postgres`. It rejects malformed input and non-finite elements
+/// (`inf`/`NaN`), which cannot be re-rendered as valid SQL number literals.
+pub fn parse_vector_text(text: &str) -> Option<Vec<f32>> {
+    let text = text.trim();
+    if !(text.starts_with('[') && text.ends_with(']') && text.len() >= 2) {
+        return None;
+    }
+    let inner = &text[1..text.len() - 1];
+    if inner.trim().is_empty() {
+        return None;
+    }
+    let mut values = Vec::new();
+    for part in inner.split(',') {
+        let value: f32 = part.trim().parse().ok()?;
+        if !value.is_finite() {
+            return None;
+        }
+        values.push(value);
+    }
+    Some(values)
 }
 
 #[cfg(feature = "pgvector")]

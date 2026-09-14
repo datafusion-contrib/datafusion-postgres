@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -52,18 +51,6 @@ pub struct HandlerFactory {
 }
 
 impl HandlerFactory {
-    pub fn new(session_context: Arc<SessionContext>) -> Self {
-        let session_service = Arc::new(DfSessionService::new(session_context));
-        let connection_manager = Arc::new(ConnectionManager::new());
-        HandlerFactory {
-            session_service,
-            cancel_handler: Arc::new(DefaultCancelHandler::new(connection_manager.clone())),
-            startup_handler: Arc::new(SimpleStartupHandler {
-                connection_manager: connection_manager.clone(),
-            }),
-        }
-    }
-
     pub fn new_with_hooks(
         session_context: Arc<SessionContext>,
         query_hooks: Vec<Arc<dyn QueryHook>>,
@@ -125,25 +112,13 @@ pub struct DfSessionService {
 
 impl DfSessionService {
     pub fn new(session_context: Arc<SessionContext>) -> DfSessionService {
-        let hooks: Vec<Arc<dyn QueryHook>> = vec![
-            Arc::new(CursorStatementHook),
-            Arc::new(SetShowHook),
-            Arc::new(TransactionStatementHook),
-            #[cfg(feature = "pgvector")]
-            Arc::new(crate::pgvector::PgVectorInsertHook),
-        ];
-        Self::new_with_hooks(session_context, hooks)
+        Self::new_with_hooks(session_context, default_query_hooks())
     }
 
     pub fn new_with_hooks(
         session_context: Arc<SessionContext>,
         query_hooks: Vec<Arc<dyn QueryHook>>,
     ) -> DfSessionService {
-        // Install the pgvector expression planner (distance operators) before
-        // any statement is planned.
-        #[cfg(feature = "pgvector")]
-        crate::pgvector::install(&session_context);
-
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
             sql_parser: PostgresCompatibilityParser::new(),
@@ -155,6 +130,19 @@ impl DfSessionService {
             query_hooks,
         }
     }
+}
+
+/// The built-in query hooks (cursor, `SET`/`SHOW`, transactions).
+///
+/// pgvector's `INSERT` hook and expression planner are installed by the
+/// `serve*` entry points rather than here, so a `DfSessionService` built by
+/// hand is not silently mutated.
+pub(crate) fn default_query_hooks() -> Vec<Arc<dyn QueryHook>> {
+    vec![
+        Arc::new(CursorStatementHook),
+        Arc::new(SetShowHook),
+        Arc::new(TransactionStatementHook),
+    ]
 }
 
 #[async_trait]
@@ -197,32 +185,8 @@ impl SimpleQueryHandler for DfSessionService {
                 }
             }
 
-            let df_result = {
-                let query = statement.to_string();
-
-                let timeout = client::get_statement_timeout(client);
-                if let Some(timeout_duration) = timeout {
-                    tokio::time::timeout(timeout_duration, self.session_context.sql(&query))
-                        .await
-                        .map_err(|_| {
-                            PgWireError::UserError(Box::new(pgwire::error::ErrorInfo::new(
-                                "ERROR".to_string(),
-                                "57014".to_string(), // query_canceled error code
-                                "canceling statement due to statement timeout".to_string(),
-                            )))
-                        })?
-                } else {
-                    self.session_context.sql(&query).await
-                }
-            };
-
-            // Handle query execution errors and transaction state
-            let df = match df_result {
-                Ok(df) => df,
-                Err(e) => {
-                    return Err(PgWireError::ApiError(Box::new(e)));
-                }
-            };
+            let query = statement.to_string();
+            let df = client::execute_statement(client, &self.session_context, &query).await?;
 
             if matches!(statement, sqlparser::ast::Statement::Insert(_)) {
                 let resp = map_rows_affected_for_insert(&df).await?;
@@ -277,10 +241,19 @@ impl ExtendedQueryHandler for DfSessionService {
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
             let wire_types = parameter_wire_types(plan)?;
             let wire_type_refs: Vec<Option<&Type>> = wire_types.iter().map(Some).collect();
+            let inferenced: Vec<Option<DataType>> =
+                planner::ordered_parameter_entries(&param_types)
+                    .into_iter()
+                    .map(|(_, datatype)| datatype)
+                    .collect();
+            let inferenced_refs: Vec<Option<&DataType>> = inferenced
+                .iter()
+                .map(|datatype| datatype.as_ref())
+                .collect();
 
             let param_values: ParamValues = df::deserialize_parameters_with_server_types(
                 portal,
-                &ordered_param_types(&param_types),
+                &inferenced_refs,
                 &wire_type_refs,
             )?;
 
@@ -305,10 +278,19 @@ impl ExtendedQueryHandler for DfSessionService {
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
             let wire_types = parameter_wire_types(plan)?;
             let wire_type_refs: Vec<Option<&Type>> = wire_types.iter().map(Some).collect();
+            let inferenced: Vec<Option<DataType>> =
+                planner::ordered_parameter_entries(&param_types)
+                    .into_iter()
+                    .map(|(_, datatype)| datatype)
+                    .collect();
+            let inferenced_refs: Vec<Option<&DataType>> = inferenced
+                .iter()
+                .map(|datatype| datatype.as_ref())
+                .collect();
 
             let param_values = df::deserialize_parameters_with_server_types(
                 portal,
-                &ordered_param_types(&param_types),
+                &inferenced_refs,
                 &wire_type_refs,
             )?;
 
@@ -368,7 +350,7 @@ impl ExtendedQueryHandler for DfSessionService {
     }
 }
 
-async fn map_rows_affected_for_insert(df: &DataFrame) -> PgWireResult<Response> {
+pub(crate) async fn map_rows_affected_for_insert(df: &DataFrame) -> PgWireResult<Response> {
     // For INSERT queries, we need to execute the query to get the row count
     // and return an Execution response with the proper tag
     let result = df
@@ -500,18 +482,6 @@ fn parameter_wire_types(plan: &LogicalPlan) -> PgWireResult<Vec<Type>> {
     Ok(types)
 }
 
-fn ordered_param_types(types: &HashMap<String, Option<DataType>>) -> Vec<Option<&DataType>> {
-    // Datafusion stores the parameters as a map.  In our case, the keys will be
-    // `$1`, `$2` etc.  The values will be the parameter types.
-    let mut types = types.iter().collect::<Vec<_>>();
-    types.sort_by_key(|(key, _)| {
-        key.trim_start_matches('$')
-            .parse::<u32>()
-            .unwrap_or(u32::MAX)
-    });
-    types.into_iter().map(|pt| pt.1.as_ref()).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use datafusion::prelude::SessionContext;
@@ -557,29 +527,6 @@ mod tests {
         ) -> Option<PgWireResult<Response>> {
             None
         }
-    }
-
-    #[test]
-    fn test_ordered_param_types_sorts_placeholders_numerically() {
-        let params = HashMap::from([
-            ("$1".to_string(), Some(DataType::Boolean)),
-            ("$2".to_string(), Some(DataType::Int64)),
-            ("$10".to_string(), Some(DataType::Utf8)),
-        ]);
-
-        let ordered = ordered_param_types(&params)
-            .into_iter()
-            .map(|ty| ty.cloned())
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            ordered,
-            vec![
-                Some(DataType::Boolean),
-                Some(DataType::Int64),
-                Some(DataType::Utf8)
-            ]
-        );
     }
 
     #[tokio::test]

@@ -11,16 +11,13 @@
 
 use std::sync::Arc;
 
+use arrow_pg::datatypes::PG_VECTOR_TYPE_OID;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::scalar::ScalarValue;
 
 use super::{ArrowTable, PgCatalogStaticTables};
-
-/// Fixed OID reported for pgvector `vector` columns, matching
-/// `arrow_pg::datatypes::PG_VECTOR_TYPE_OID`.
-const VECTOR_OID: i32 = 16385;
 
 /// Canonical OID of the `pg_catalog` namespace (`PG_CATALOG_NAMESPACE`).
 const PG_CATALOG_NAMESPACE_OID: i32 = 11;
@@ -45,7 +42,7 @@ pub(crate) fn with_pg_vector_support(
     //    defaults; the introspection query only reads the ones we set).
     let pg_type = Arc::new(append_row(&pg_type, |field, scalar| {
         match field.name().as_str() {
-            "oid" => *scalar = ScalarValue::Int32(Some(VECTOR_OID)),
+            "oid" => *scalar = ScalarValue::Int32(Some(PG_VECTOR_TYPE_OID as i32)),
             "typname" => *scalar = ScalarValue::Utf8(Some("vector".to_string())),
             "typtype" => *scalar = ScalarValue::Utf8(Some("b".to_string())),
             "typnamespace" => *scalar = ScalarValue::Int32(Some(PG_CATALOG_NAMESPACE_OID)),

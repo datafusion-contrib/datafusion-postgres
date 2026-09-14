@@ -44,11 +44,6 @@ use datafusion::sql::sqlparser::ast::{DataType as SQLDataType, ObjectNamePart};
 
 use crate::pg_catalog::oid_field::{self, OID_ALIAS_TYPE_NAMES};
 
-/// Field metadata key (arrow-pg contract) marking an Arrow list field as a
-/// pgvector `vector`. Must match `arrow_pg::datatypes::PG_VECTOR_KEY`.
-#[cfg(feature = "pgvector")]
-const PG_VECTOR_KEY: &str = "pg.vector";
-
 /// Recognize Postgres type names DataFusion rejects and map them to Arrow
 /// types/metadata at planning time.
 #[derive(Debug, Default)]
@@ -131,19 +126,6 @@ impl PgOidTypePlanner {
         builtin_arrow_type(type_name)
     }
 
-    /// True when `sql_type` names the pgvector `vector` type (optionally
-    /// schema-qualified, e.g. `public.vector`).
-    #[cfg(feature = "pgvector")]
-    fn is_vector_type(sql_type: &SQLDataType) -> bool {
-        let SQLDataType::Custom(name, _) = sql_type else {
-            return false;
-        };
-        name.0
-            .last()
-            .and_then(|part| part.as_ident())
-            .is_some_and(|ident| ident.value.eq_ignore_ascii_case("vector"))
-    }
-
     /// Map the pgvector `vector` / `vector(n)` SQL type to an Arrow field.
     ///
     /// `vector(n)` is a fixed-dimension vector and maps to
@@ -158,7 +140,7 @@ impl PgOidTypePlanner {
     /// reject the unknown type with its own error).
     #[cfg(feature = "pgvector")]
     fn vector_field(sql_type: &SQLDataType) -> Option<Arc<Field>> {
-        if !Self::is_vector_type(sql_type) {
+        if !crate::sql::is_vector_type(sql_type) {
             return None;
         }
         let SQLDataType::Custom(_, modifiers) = sql_type else {
@@ -179,7 +161,10 @@ impl PgOidTypePlanner {
         };
 
         let mut metadata = std::collections::HashMap::new();
-        metadata.insert(PG_VECTOR_KEY.to_string(), "vector".to_string());
+        metadata.insert(
+            arrow_pg::datatypes::PG_VECTOR_KEY.to_string(),
+            "vector".to_string(),
+        );
         Some(Arc::new(
             Field::new("", arrow_type, true).with_metadata(metadata),
         ))
@@ -398,7 +383,7 @@ mod tests {
         assert_eq!(
             field
                 .metadata()
-                .get(super::PG_VECTOR_KEY)
+                .get(arrow_pg::datatypes::PG_VECTOR_KEY)
                 .map(String::as_str),
             Some("vector")
         );
@@ -416,7 +401,7 @@ mod tests {
         assert_eq!(
             field
                 .metadata()
-                .get(super::PG_VECTOR_KEY)
+                .get(arrow_pg::datatypes::PG_VECTOR_KEY)
                 .map(String::as_str),
             Some("vector")
         );
