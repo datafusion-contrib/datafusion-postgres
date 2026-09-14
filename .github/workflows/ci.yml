@@ -92,6 +92,9 @@ jobs:
           - name: functions-full
             flags: "--features datafusion-pg-functions/full"
             optional: false
+          - name: pgvector
+            flags: "--features datafusion-postgres/pgvector"
+            optional: false
           - name: postgis
             flags: "--features datafusion-postgres/postgis"
             optional: true
@@ -136,6 +139,24 @@ jobs:
       run: nix develop --command podman info >/dev/null 2>&1 || true
     - run: |
         cd tests-integration
+        nix develop --command bash test.sh --skip-postgis --skip-pgvector
+
+  # pgvector has its own dedicated integration job so it can run (and fail)
+  # independently of the base suite. `--skip-postgis` builds with the pgvector
+  # feature and runs the full python suite including the pgvector tests.
+  integration-pgvector:
+    name: Integration tests (pgvector)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [test]
+    steps:
+    - uses: actions/checkout@v6
+    - uses: insightsengineering/disk-space-reclaimer@v1
+    - uses: cachix/install-nix-action@v31
+    - name: Initialize podman
+      run: nix develop --command podman info >/dev/null 2>&1 || true
+    - run: |
+        cd tests-integration
         nix develop --command bash test.sh --skip-postgis
 
   # Advisory: full integration suite including the PostGIS tests, built
@@ -154,7 +175,7 @@ jobs:
       run: nix develop --command podman info >/dev/null 2>&1 || true
     - run: |
         cd tests-integration
-        nix develop --command bash test.sh
+        nix develop --command bash test.sh --skip-pgvector
 
   msrv:
     name: MSRV

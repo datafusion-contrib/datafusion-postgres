@@ -35,7 +35,13 @@ rustls-pki-types = "1.14"
 
 [dev-dependencies]
 env_logger = "0.11"
+pgvector = { version = "0.4", features = ["postgres"] }
+postgres = "0.19"
 
 [features]
 default = []
 postgis = ["geodatafusion", "arrow-pg/postgis"]
+# pgvector compatibility: `vector(n)` column type plus the `<->` / `<#>` /
+# `<=>` distance operators, backed by DataFusion's built-in array distance
+# functions. See datafusion-pg-catalog / arrow-pg `pgvector` features.
+pgvector = ["datafusion-pg-catalog/pgvector", "arrow-pg/pgvector"]

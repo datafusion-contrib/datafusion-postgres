@@ -309,28 +309,30 @@ impl PostgresCompatibilityParser {
             ));
         }
 
+        let rewrite_rules: Vec<Arc<dyn SqlStatementRewriteRule>> = vec![
+            // The blacklist substitution in `parse()` runs before any of
+            // these rules, so by the time they see the statement any
+            // blacklisted fragment has already been replaced.
+            Arc::new(AliasDuplicatedProjectionRewrite),
+            Arc::new(ResolveUnqualifiedIdentifier),
+            Arc::new(RewriteArrayAnyAllOperation),
+            Arc::new(PrependUnqualifiedPgTableName),
+            Arc::new(StripCallableQualifier),
+            Arc::new(FixArrayLiteral),
+            Arc::new(CurrentUserVariableToSessionUserFunctionCall),
+            Arc::new(StripCollate),
+            Arc::new(RewritePgCatalogOperator),
+            // Resolve forward oid-alias casts (`'x'::regclass`, ...) to oid
+            // values BEFORE RemoveSubqueryFromProjection runs, so the
+            // emitted scalar subqueries it produces get its LIMIT 1 stamp.
+            Arc::new(RewriteRegCastToSubquery::new()),
+            Arc::new(RemoveSubqueryFromProjection),
+            Arc::new(FixVersionColumnName),
+        ];
+
         Self {
             blacklist: mapping,
-            rewrite_rules: vec![
-                // The blacklist substitution in `parse()` runs before any of
-                // these rules, so by the time they see the statement any
-                // blacklisted fragment has already been replaced.
-                Arc::new(AliasDuplicatedProjectionRewrite),
-                Arc::new(ResolveUnqualifiedIdentifier),
-                Arc::new(RewriteArrayAnyAllOperation),
-                Arc::new(PrependUnqualifiedPgTableName),
-                Arc::new(StripCallableQualifier),
-                Arc::new(FixArrayLiteral),
-                Arc::new(CurrentUserVariableToSessionUserFunctionCall),
-                Arc::new(StripCollate),
-                Arc::new(RewritePgCatalogOperator),
-                // Resolve forward oid-alias casts (`'x'::regclass`, ...) to oid
-                // values BEFORE RemoveSubqueryFromProjection runs, so the
-                // emitted scalar subqueries it produces get its LIMIT 1 stamp.
-                Arc::new(RewriteRegCastToSubquery::new()),
-                Arc::new(RemoveSubqueryFromProjection),
-                Arc::new(FixVersionColumnName),
-            ],
+            rewrite_rules,
         }
     }
 

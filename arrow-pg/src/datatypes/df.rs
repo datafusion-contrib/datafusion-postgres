@@ -272,6 +272,204 @@ fn coerce_interval_value(value: Option<Interval>, target: &DataType) -> PgWireRe
     }
 }
 
+/// A Postgres `oid` parameter decoded as a signed `i32`.
+///
+/// Postgres has no unsigned integer types, and DataFusion catalog `oid` columns
+/// are stored as `Int32`, so decode the 4-byte OID value directly as `i32`
+/// rather than going through `u32`.
+#[derive(Debug)]
+struct OidParam(i32);
+
+impl<'a> postgres_types::FromSql<'a> for OidParam {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() != 4 {
+            return Err("oid parameter must be exactly 4 bytes".into());
+        }
+        Ok(OidParam(i32::from_be_bytes([
+            raw[0], raw[1], raw[2], raw[3],
+        ])))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty == &Type::OID
+    }
+}
+
+impl<'a> pgwire::types::FromSqlText<'a> for OidParam {
+    fn from_sql_text(
+        _ty: &Type,
+        input: &'a [u8],
+        _format_options: &FormatOptions,
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let text = std::str::from_utf8(input)?;
+        let value: i64 = text.trim().parse()?;
+        Ok(OidParam(value as i32))
+    }
+}
+
+/// Decode a pgvector `vector` parameter value sent by a client over the wire.
+#[cfg(feature = "pgvector")]
+#[derive(Debug)]
+struct VectorParam(Vec<f32>);
+
+#[cfg(feature = "pgvector")]
+impl VectorParam {
+    /// The pgvector binary layout is a big-endian `u16` dimension, an unused
+    /// `u16` that must be 0, then that many big-endian IEEE float32 elements.
+    fn from_binary(raw: &[u8]) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        if raw.len() < 4 {
+            return Err("vector parameter binary payload too short".into());
+        }
+        let dim = u16::from_be_bytes([raw[0], raw[1]]) as usize;
+        let unused = u16::from_be_bytes([raw[2], raw[3]]);
+        if unused != 0 {
+            return Err("vector parameter binary payload has a non-zero unused word".into());
+        }
+        if dim == 0 {
+            return Err("vector parameter dimension must be positive".into());
+        }
+        if raw.len() != 4 + dim * 4 {
+            return Err("vector parameter binary payload has wrong length".into());
+        }
+        let mut values = Vec::with_capacity(dim);
+        for i in 0..dim {
+            let off = 4 + i * 4;
+            values.push(f32::from_be_bytes([
+                raw[off],
+                raw[off + 1],
+                raw[off + 2],
+                raw[off + 3],
+            ]));
+        }
+        Ok(VectorParam(values))
+    }
+
+    /// The pgvector text form is `[1,2,3]`.
+    fn from_text(raw: &[u8]) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let text = std::str::from_utf8(raw)?;
+        parse_vector_text(text)
+            .map(VectorParam)
+            .ok_or_else(|| "invalid pgvector text parameter (expected e.g. [1,2,3])".into())
+    }
+}
+
+/// Parse a pgvector text literal such as `[1,2,3]` into its `f32` elements.
+///
+/// This is the single home for the pgvector text format: it is used by the
+/// wire parameter decoder above and by the SQL-level rewrite in
+/// `datafusion-postgres`. It rejects malformed input and non-finite elements
+/// (`inf`/`NaN`), which cannot be re-rendered as valid SQL number literals.
+pub fn parse_vector_text(text: &str) -> Option<Vec<f32>> {
+    let text = text.trim();
+    if !(text.starts_with('[') && text.ends_with(']') && text.len() >= 2) {
+        return None;
+    }
+    let inner = &text[1..text.len() - 1];
+    if inner.trim().is_empty() {
+        return None;
+    }
+    let mut values = Vec::new();
+    for part in inner.split(',') {
+        let value: f32 = part.trim().parse().ok()?;
+        if !value.is_finite() {
+            return None;
+        }
+        values.push(value);
+    }
+    Some(values)
+}
+
+#[cfg(feature = "pgvector")]
+impl<'a> postgres_types::FromSql<'a> for VectorParam {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        VectorParam::from_binary(raw)
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.oid() == crate::datatypes::PG_VECTOR_TYPE_OID
+    }
+}
+
+#[cfg(feature = "pgvector")]
+impl<'a> pgwire::types::FromSqlText<'a> for VectorParam {
+    fn from_sql_text(
+        _ty: &Type,
+        input: &'a [u8],
+        _format_options: &FormatOptions,
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        VectorParam::from_text(input)
+    }
+}
+
+/// Turn a decoded vector parameter into the DataFusion scalar expected by the
+/// `vector(n)` column it is bound to.
+#[cfg(feature = "pgvector")]
+fn vector_param_to_scalar(
+    value: Option<VectorParam>,
+    inferred: Option<&DataType>,
+) -> PgWireResult<ScalarValue> {
+    use datafusion::arrow::array::FixedSizeListArray;
+    use datafusion::arrow::buffer::NullBuffer;
+    use datafusion::arrow::datatypes::Field as ArrowField;
+
+    let (dim, inner) = match inferred {
+        Some(DataType::FixedSizeList(field, n)) => (*n as usize, Arc::new(field.as_ref().clone())),
+        Some(DataType::List(field)) => (0, Arc::new(field.as_ref().clone())),
+        _ => (
+            0,
+            Arc::new(ArrowField::new_list_field(DataType::Float32, true)),
+        ),
+    };
+
+    let Some(VectorParam(values)) = value else {
+        // SQL NULL vector: a single null FixedSizeList element.
+        let inner = ArrowField::new_list_field(DataType::Float32, true);
+        let values = datafusion::arrow::array::Float32Array::from(vec![0.0f32; dim]);
+        let array = FixedSizeListArray::try_new(
+            Arc::new(inner),
+            dim as i32,
+            Arc::new(values),
+            Some(NullBuffer::from(vec![false])),
+        )
+        .map_err(|e| invalid_parameter_error(e.to_string()))?;
+        return Ok(ScalarValue::FixedSizeList(Arc::new(array)));
+    };
+
+    // Fixed-dimension vector column (`vector(n)`): honor the declared size.
+    if dim > 0 {
+        if values.len() != dim {
+            return Err(invalid_parameter_error(format!(
+                "expected {dim} dimensions for vector parameter, got {}",
+                values.len()
+            )));
+        }
+        let array = FixedSizeListArray::try_new(
+            Arc::new(inner.as_ref().clone()),
+            dim as i32,
+            Arc::new(datafusion::arrow::array::Float32Array::from(values)),
+            None,
+        )
+        .map_err(|e| invalid_parameter_error(e.to_string()))?;
+        return Ok(ScalarValue::FixedSizeList(Arc::new(array)));
+    }
+
+    // Bare `vector` (no declared dimension): a plain list of float32.
+    let scalars: Vec<ScalarValue> = values
+        .into_iter()
+        .map(|v| ScalarValue::Float32(Some(v)))
+        .collect();
+    Ok(ScalarValue::List(ScalarValue::new_list_nullable(
+        &scalars,
+        &DataType::Float32,
+    )))
+}
+
 /// Deserialize client provided parameter data.
 ///
 /// First we try to use the type information from `pg_type_hint`, which is
@@ -279,6 +477,9 @@ fn coerce_interval_value(value: Option<Interval>, target: &DataType) -> PgWireRe
 /// If the type is empty or unknown, we fallback to datafusion inferenced type
 /// from `inferenced_types`.
 /// An error will be raised when neither sources can provide type information.
+///
+/// This is a convenience wrapper that passes no server-decided parameter types
+/// (see [`deserialize_parameters_with_server_types`]).
 pub fn deserialize_parameters<S>(
     portal: &Portal<S>,
     inferenced_types: &[Option<&DataType>],
@@ -286,11 +487,46 @@ pub fn deserialize_parameters<S>(
 where
     S: Clone,
 {
+    deserialize_parameters_with_server_types(portal, inferenced_types, &[])
+}
+
+/// Deserialize client provided parameter data using the server-decided
+/// parameter wire types.
+///
+/// pgwire does not persist the parameter types it advertised in
+/// `ParameterDescription` onto the portal, so the caller recomputes them from
+/// the logical plan (see the planner's parameter overrides) and passes them in
+/// `server_types` (positionally aligned with the parameters). A value of `None`
+/// for a position means "no server-decided type", falling back to the client's
+/// `pg_type_hint` and then the DataFusion-inferred type.
+///
+/// This is what lets semantically-typed parameters (e.g. a pgvector `vector`
+/// bound to a `vector(n)` column) be decoded with their real wire format rather
+/// than the physical Arrow type mapping (`FixedSizeList` -> `float4[]`).
+pub fn deserialize_parameters_with_server_types<S>(
+    portal: &Portal<S>,
+    inferenced_types: &[Option<&DataType>],
+    server_types: &[Option<&Type>],
+) -> PgWireResult<ParamValues>
+where
+    S: Clone,
+{
     fn get_pg_type(
+        server_type: Option<&Type>,
         pg_type_hint: Option<Type>,
         inferenced_type: Option<&DataType>,
     ) -> PgWireResult<Type> {
+        // The client-provided hint (Parse parameter type OIDs) wins: it is the
+        // type the client actually encoded the parameter with. The
+        // server-decided type is only a fallback for clients that send no
+        // types (e.g. tokio-postgres); it carries the semantically-typed
+        // overrides (oid-alias, pgvector) that the physical Arrow mapping
+        // would otherwise lose.
         if let Some(ty) = pg_type_hint {
+            Ok(ty.clone())
+        } else if let Some(ty) = server_type
+            && *ty != Type::UNKNOWN
+        {
             Ok(ty.clone())
         } else if let Some(infer_type) = inferenced_type {
             into_pg_type(infer_type)
@@ -303,7 +539,9 @@ where
     let mut deserialized_params = Vec::with_capacity(param_len);
     for i in 0..param_len {
         let inferenced_type = inferenced_types.get(i).and_then(|v| v.to_owned());
+        let server_type = server_types.get(i).and_then(|t| *t);
         let pg_type = get_pg_type(
+            server_type,
             portal
                 .statement
                 .parameter_types
@@ -314,6 +552,15 @@ where
         // enumerate all supported parameter types and deserialize the
         // type to ScalarValue, with data coercion when server-inferred
         // types are available
+
+        // pgvector `vector` parameters (binary or text form).
+        #[cfg(feature = "pgvector")]
+        if pg_type.oid() == crate::datatypes::PG_VECTOR_TYPE_OID {
+            let value: Option<VectorParam> = portal.parameter(i, &pg_type)?;
+            deserialized_params.push(vector_param_to_scalar(value, inferenced_type)?);
+            continue;
+        }
+
         match pg_type {
             Type::BOOL => {
                 let value = portal.parameter::<bool>(i, &pg_type)?;
@@ -845,6 +1092,21 @@ where
                 let value = portal.parameter::<String>(i, &pg_type)?;
                 // Store MAC addresses as strings for now
                 deserialized_params.push(ScalarValue::Utf8(value));
+            }
+            // PostgreSQL `oid` (unsigned 32-bit on the wire, but Postgres has no
+            // unsigned integer types). DataFusion catalog oid columns are Int32,
+            // so decode as i32 and coerce if the inferred type differs.
+            Type::OID => {
+                let value = portal.parameter::<OidParam>(i, &pg_type)?;
+                match inferenced_type {
+                    Some(target) if !matches!(target, DataType::Int32) => {
+                        deserialized_params
+                            .push(coerce_int_value(value.map(|v| v.0 as i64), target)?);
+                    }
+                    _ => {
+                        deserialized_params.push(ScalarValue::Int32(value.map(|v| v.0)));
+                    }
+                }
             }
             // TODO: add more advanced types (composite types, ranges, etc.)
             _ => {

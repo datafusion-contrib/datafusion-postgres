@@ -26,6 +26,13 @@ log = "0.4"
 postgres-types.workspace = true
 tokio = { version = "1.52", features = ["sync"] }
 
+[features]
+# pgvector compatibility: plan the pgvector `vector(n)` SQL type (as a
+# FixedSizeList/List of Float32) and expose the `vector` row in `pg_catalog`.
+# The distance operators (`<->` / `<#>` / `<=>`) and INSERT literal rewriting
+# are implemented in datafusion-postgres, not here.
+pgvector = ["arrow-pg/pgvector"]
+
 [dev-dependencies]
 env_logger = "0.11"
 criterion = { version = "0.8", features = ["html_reports"] }

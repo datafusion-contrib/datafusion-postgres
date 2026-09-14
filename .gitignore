@@ -2,6 +2,7 @@
 .direnv
 .envrc
 .vscode
+.idea
 .aider*
 /tests-integration/test_env
 

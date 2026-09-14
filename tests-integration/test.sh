@@ -2,20 +2,23 @@
 
 set -e
 
-# Optional flag: --skip-postgis
-# Skips the PostGIS integration test and builds without the postgis
-# feature, for use when the geodatafusion dependency is not ready.
+# Optional flags:
+#   --skip-postgis  Skips the PostGIS integration test and builds without the
+#                   postgis feature (for when geodatafusion lags upstream).
+#   --skip-pgvector Skips the pgvector integration test.
 SKIP_POSTGIS=""
+SKIP_PGVECTOR=""
 for arg in "$@"; do
     case $arg in
         --skip-postgis) SKIP_POSTGIS=1 ;;
+        --skip-pgvector) SKIP_PGVECTOR=1 ;;
     esac
 done
 
 # Function to cleanup processes
 cleanup() {
     echo "🧹 Cleaning up processes..."
-    for pid in $CSV_PID $TRANSACTION_PID $PARQUET_PID $RBAC_PID $SSL_PID $POSTGIS_PID $FDW_PID; do
+    for pid in $CSV_PID $TRANSACTION_PID $PARQUET_PID $RBAC_PID $SSL_PID $POSTGIS_PID $FDW_PID $PGVECTOR_PID; do
         if [ ! -z "$pid" ]; then
             kill -9 $pid 2>/dev/null || true
         fi
@@ -48,13 +51,20 @@ wait_for_port() {
 echo "🚀 Running DataFusion PostgreSQL Integration Tests"
 echo "=================================================="
 
-# Build the project
+# Build the project, enabling the optional features whose tests will run.
 echo "Building datafusion-postgres..."
 cd ..
-if [ -n "$SKIP_POSTGIS" ]; then
-    cargo build
+BUILD_FEATURES=""
+if [ -z "$SKIP_PGVECTOR" ]; then
+    BUILD_FEATURES="${BUILD_FEATURES:+$BUILD_FEATURES }datafusion-postgres/pgvector"
+fi
+if [ -z "$SKIP_POSTGIS" ]; then
+    BUILD_FEATURES="${BUILD_FEATURES:+$BUILD_FEATURES }datafusion-postgres/postgis"
+fi
+if [ -n "$BUILD_FEATURES" ]; then
+    cargo build --features "$BUILD_FEATURES"
 else
-    cargo build --features datafusion-postgres/postgis
+    cargo build
 fi
 cd tests-integration
 
@@ -248,6 +258,36 @@ else
     echo "⏭️  Skipped (--skip-postgis)"
 fi
 
+# Test 7: pgvector
+echo ""
+echo "🧪 Test 7: pgvector Support"
+echo "---------------------------"
+if [ -z "$SKIP_PGVECTOR" ]; then
+    wait_for_port 5438
+    ../target/debug/datafusion-postgres-cli -p 5438 --csv delhi:delhiclimate.csv &
+    PGVECTOR_PID=$!
+    sleep 5
+
+    # Check if server is actually running
+    if ! ps -p $PGVECTOR_PID > /dev/null 2>&1; then
+        echo "❌ pgvector server failed to start"
+        exit 1
+    fi
+
+    if python test_pgvector.py; then
+        echo "✅ pgvector test passed"
+    else
+        echo "❌ pgvector test failed"
+        kill -9 $PGVECTOR_PID 2>/dev/null || true
+        exit 1
+    fi
+
+    kill -9 $PGVECTOR_PID 2>/dev/null || true
+else
+    echo "⏭️  Skipped (--skip-pgvector)"
+fi
+sleep 3
+
 echo ""
 echo "🎉 All enhanced integration tests passed!"
 echo "=========================================="
@@ -261,6 +301,9 @@ echo "  ✅ Array types and complex data type support"
 echo "  ✅ Improved pg_catalog system tables"
 echo "  ✅ PostgreSQL function compatibility"
 echo "  ✅ SSL/TLS encryption support"
+if [ -z "$SKIP_PGVECTOR" ]; then
+    echo "  ✅ pgvector support (vector columns, literals, distance operators)"
+fi
 if [ -z "$SKIP_POSTGIS" ]; then
     echo "  ✅ PostGIS spatial functions support"
 fi

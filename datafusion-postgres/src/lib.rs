@@ -2,6 +2,8 @@ pub mod auth;
 pub(crate) mod client;
 mod handlers;
 pub mod hooks;
+#[cfg(feature = "pgvector")]
+pub mod pgvector;
 mod planner;
 #[cfg(any(test, debug_assertions))]
 pub mod testing;
@@ -88,17 +90,15 @@ pub async fn serve(
     session_context: Arc<SessionContext>,
     opts: &ServerOptions,
 ) -> Result<(), std::io::Error> {
-    #[cfg(feature = "postgis")]
-    geodatafusion::register(&session_context);
-
-    // Create the handler factory with authentication
-    let factory = Arc::new(HandlerFactory::new(session_context));
-
-    serve_with_handlers(factory, opts).await
+    serve_with_hooks(session_context, opts, handlers::default_query_hooks()).await
 }
 
 /// Serve the Datafusion `SessionContext` with Postgres protocol, using custom
 /// query processing hooks.
+///
+/// The optional pgvector support (the distance-operator expression planner and
+/// the `INSERT` literal hook) is installed here, where the session context can
+/// be modified, and appended to `hooks`.
 pub async fn serve_with_hooks(
     session_context: Arc<SessionContext>,
     opts: &ServerOptions,
@@ -106,6 +106,14 @@ pub async fn serve_with_hooks(
 ) -> Result<(), std::io::Error> {
     #[cfg(feature = "postgis")]
     geodatafusion::register(&session_context);
+
+    #[cfg(feature = "pgvector")]
+    let hooks = {
+        let mut hooks = hooks;
+        crate::pgvector::install(&session_context).map_err(std::io::Error::other)?;
+        hooks.push(Arc::new(crate::pgvector::PgVectorInsertHook));
+        hooks
+    };
 
     // Create the handler factory with authentication
     let factory = Arc::new(HandlerFactory::new_with_hooks(session_context, hooks));

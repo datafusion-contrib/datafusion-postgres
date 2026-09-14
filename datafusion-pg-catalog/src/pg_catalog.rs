@@ -46,6 +46,8 @@ pub mod pg_settings;
 pub mod pg_stat_gssapi;
 pub mod pg_tables;
 pub mod pg_views;
+#[cfg(feature = "pgvector")]
+pub mod pgvector;
 pub mod quote_ident_udf;
 
 const PG_CATALOG_TABLE_PG_AGGREGATE: &str = "pg_aggregate";
@@ -652,7 +654,7 @@ pub struct PgCatalogStaticTables {
 
 impl PgCatalogStaticTables {
     pub fn try_new() -> Result<Self> {
-        Ok(Self {
+        let tables = Self {
             pg_aggregate: Self::create_arrow_table(
                 include_bytes!(concat!(
                     env!("CARGO_MANIFEST_DIR"),
@@ -1061,7 +1063,16 @@ impl PgCatalogStaticTables {
                 ))
                 .to_vec(),
             )?,
-        })
+        };
+
+        // pgvector support: expose the `vector` type (OID 16385) in `pg_type`
+        // so clients that resolve unknown result types (tokio-postgres, JDBC,
+        // ...) find it, and tag the internal `"char"` column for correct wire
+        // encoding.
+        #[cfg(feature = "pgvector")]
+        let tables = pgvector::with_pg_vector_support(tables)?;
+
+        Ok(tables)
     }
 
     /// Create table from dumped arrow data
