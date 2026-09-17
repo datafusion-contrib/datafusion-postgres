@@ -237,7 +237,10 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
             Ok(t @ Type::DATE) => (t.oid(), 4, true, "i", "p"),
             Ok(t @ Type::TIME) => (t.oid(), 8, true, "d", "p"),
             Ok(t @ Type::TIMESTAMP) => (t.oid(), 8, true, "d", "p"),
+            Ok(t @ Type::TIMESTAMPTZ) => (t.oid(), 8, true, "d", "p"),
             Ok(t @ Type::NUMERIC) => (t.oid(), -1, false, "i", "m"),
+            Ok(t @ Type::INT4_ARRAY) => (t.oid(), -1, false, "i", "x"),
+            Ok(t @ Type::TEXT_ARRAY) => (t.oid(), -1, false, "i", "x"),
             _ => (Type::TEXT.oid(), -1, false, "i", "x"), // Default to text for unknown types
         }
     }
