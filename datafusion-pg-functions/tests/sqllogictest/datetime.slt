@@ -1,0 +1,341 @@
+# Integration tests for the PostgreSQL date/time functions implemented in
+# `datafusion-pg-functions/src/datetime/`.
+#
+# Each section exercises one UDF via the full SQL -> plan -> execute path
+# against a `SessionContext` that has had `register_all` applied.
+#
+# Conventions:
+#   * Expected values were checked against PostgreSQL 16.15. Intervals are
+#     rendered in Arrow's display format (e.g. `2 days 2 hours 10 mins`),
+#     not PostgreSQL's (`2 days 02:10:00`); the PostgreSQL result is noted
+#     above each case.
+#   * NULL inputs must propagate to NULL.
+#   * Only `Interval(MonthDayNano)` is reachable from SQL here: DataFusion
+#     cannot CAST to `Interval(DayTime)` or `Interval(YearMonth)`. Those input
+#     types are covered by each function's unit tests.
+#   * Arrow displays months without folding them into years, so PostgreSQL's
+#     `1 year 2 mons` appears here as `14 mons`.
+
+# ============================================================================
+# justify_hours(interval) -- promote 24-hour periods to days
+# ============================================================================
+
+# PostgreSQL: 2 days 02:10:00
+query ?
+SELECT justify_hours(INTERVAL '50 hours 10 minutes')
+----
+2 days 2 hours 10 mins
+
+# PostgreSQL: 1 day
+query ?
+SELECT justify_hours(INTERVAL '24 hours')
+----
+1 days
+
+# PostgreSQL: 23:59:59.999999 (unchanged)
+query ?
+SELECT justify_hours(INTERVAL '23 hours 59 minutes 59.999999 seconds')
+----
+23 hours 59 mins 59.999999000 secs
+
+# PostgreSQL: 1 day 01:00:00
+query ?
+SELECT justify_hours(INTERVAL '25 hours')
+----
+1 days 1 hours
+
+# PostgreSQL: -1 days -01:00:00
+query ?
+SELECT justify_hours(INTERVAL '-25 hours')
+----
+-1 days -1 hours
+
+# Mixed signs. PostgreSQL: -01:00:00
+query ?
+SELECT justify_hours(INTERVAL '1 day -25 hours')
+----
+-1 hours
+
+# Mixed signs. PostgreSQL: 01:00:00
+query ?
+SELECT justify_hours(INTERVAL '-1 day 25 hours')
+----
+1 hours
+
+# Sign borrow. PostgreSQL: 23:00:00
+query ?
+SELECT justify_hours(INTERVAL '1 day -1 hour')
+----
+23 hours
+
+# Months are never changed. PostgreSQL: 2 mons 2 days 01:00:00
+query ?
+SELECT justify_hours(INTERVAL '2 months 49 hours')
+----
+2 mons 2 days 1 hours
+
+# Days and time are reconciled, months are not. PostgreSQL: 1 mon -23:00:00
+query ?
+SELECT justify_hours(INTERVAL '1 month -1 day 1 hour')
+----
+1 mons -23 hours
+
+# PostgreSQL: 2 days 00:00:00.000001
+query ?
+SELECT justify_hours(INTERVAL '48 hours 0.000001 seconds')
+----
+2 days 0.000001000 secs
+
+# PostgreSQL: 1041 days 16:00:00
+query ?
+SELECT justify_hours(INTERVAL '1000 days 1000 hours')
+----
+1041 days 16 hours
+
+# PostgreSQL: 00:00:00
+query ?
+SELECT justify_hours(INTERVAL '0 seconds')
+----
+0 secs
+
+# Sub-microsecond time is kept and justified exactly. PostgreSQL rounds the
+# input to whole microseconds when parsing, so it returns 1 day here.
+query ?
+SELECT justify_hours(INTERVAL '1 day -1 nanosecond')
+----
+23 hours 59 mins 59.999999999 secs
+
+# NULL propagates
+query ?
+SELECT justify_hours(CAST(NULL AS INTERVAL))
+----
+NULL
+
+query ?
+SELECT justify_hours(NULL)
+----
+NULL
+
+# Row-wise vectorized batch
+query ?
+SELECT justify_hours(v) FROM (VALUES
+  (INTERVAL '25 hours'),
+  (CAST(NULL AS INTERVAL)),
+  (INTERVAL '1 day -1 hour'),
+  (INTERVAL '3 months -49 hours')
+) AS t(v)
+----
+1 days 1 hours
+NULL
+23 hours
+3 mons -2 days -1 hours
+
+# Overflow. PostgreSQL: ERROR: interval out of range
+query error interval out of range
+SELECT justify_hours(INTERVAL '2147483647 days 24 hours')
+
+# ============================================================================
+# justify_days(interval) -- promote 30-day periods to months
+# ============================================================================
+
+# Documented example. PostgreSQL: 1 year 2 mons 5 days
+query ?
+SELECT justify_days(INTERVAL '1 year 65 days')
+----
+14 mons 5 days
+
+# PostgreSQL: 1 mon
+query ?
+SELECT justify_days(INTERVAL '30 days')
+----
+1 mons
+
+# PostgreSQL: 29 days (unchanged)
+query ?
+SELECT justify_days(INTERVAL '29 days')
+----
+29 days
+
+# PostgreSQL: -1 mons -1 days
+query ?
+SELECT justify_days(INTERVAL '-31 days')
+----
+-1 mons -1 days
+
+# Mixed signs. PostgreSQL: 29 days
+query ?
+SELECT justify_days(INTERVAL '1 month -1 day')
+----
+29 days
+
+# Mixed signs. PostgreSQL: -29 days
+query ?
+SELECT justify_days(INTERVAL '-1 month 1 day')
+----
+-29 days
+
+# PostgreSQL: -1 mons -10 days
+query ?
+SELECT justify_days(INTERVAL '1 year -400 days')
+----
+-1 mons -10 days
+
+# The time field is never changed. PostgreSQL: 1 mon 5 days 50:00:00
+query ?
+SELECT justify_days(INTERVAL '35 days 50 hours')
+----
+1 mons 5 days 50 hours
+
+# The time field is never changed. PostgreSQL: 1 mon -01:00:00
+query ?
+SELECT justify_days(INTERVAL '1 month -1 hour')
+----
+1 mons -1 hours
+
+# Largest day count. PostgreSQL: 5965232 years 4 mons 7 days
+query ?
+SELECT justify_days(INTERVAL '2147483647 days')
+----
+71582788 mons 7 days
+
+# PostgreSQL: 178956970 years 7 mons (the largest month count)
+query ?
+SELECT justify_days(INTERVAL '2147483646 months 30 days')
+----
+2147483647 mons
+
+# NULL propagates
+query ?
+SELECT justify_days(NULL)
+----
+NULL
+
+# Row-wise vectorized batch
+query ?
+SELECT justify_days(v) FROM (VALUES
+  (INTERVAL '31 days'),
+  (CAST(NULL AS INTERVAL)),
+  (INTERVAL '1 month -35 days'),
+  (INTERVAL '3 months -91 days 1 hour')
+) AS t(v)
+----
+1 mons 1 days
+NULL
+-5 days
+-1 days 1 hours
+
+# Overflow. PostgreSQL: ERROR: interval out of range
+query error interval out of range
+SELECT justify_days(INTERVAL '2147483647 months 30 days')
+
+query error interval out of range
+SELECT justify_days(INTERVAL '-2147483648 months -30 days')
+
+# ============================================================================
+# justify_interval(interval) -- justify days and time, with sign adjustment
+# ============================================================================
+
+# Documented example. PostgreSQL: 29 days 23:00:00
+query ?
+SELECT justify_interval(INTERVAL '1 month -1 hour')
+----
+29 days 23 hours
+
+# PostgreSQL: -29 days -23:00:00
+query ?
+SELECT justify_interval(INTERVAL '-1 month 1 hour')
+----
+-29 days -23 hours
+
+# PostgreSQL: 1 mon 7 days 02:00:00
+query ?
+SELECT justify_interval(INTERVAL '35 days 50 hours')
+----
+1 mons 7 days 2 hours
+
+# PostgreSQL: -1 mons -7 days -02:00:00
+query ?
+SELECT justify_interval(INTERVAL '-35 days -50 hours')
+----
+-1 mons -7 days -2 hours
+
+# PostgreSQL: 1 mon 23:00:00
+query ?
+SELECT justify_interval(INTERVAL '29 days 47 hours')
+----
+1 mons 23 hours
+
+# PostgreSQL: 2 mons
+query ?
+SELECT justify_interval(INTERVAL '1 month 29 days 24 hours')
+----
+2 mons
+
+# Mixed signs. PostgreSQL: 29 days 23:00:00
+query ?
+SELECT justify_interval(INTERVAL '1 month 1 day -25 hours')
+----
+29 days 23 hours
+
+# Mixed signs. PostgreSQL: -1 days
+query ?
+SELECT justify_interval(INTERVAL '2 months -59 days -48 hours')
+----
+-1 days
+
+# Month borrow driven by the time field. PostgreSQL: 29 days 23:59:59.999999
+query ?
+SELECT justify_interval(INTERVAL '1 month -0.000001 seconds')
+----
+29 days 23 hours 59 mins 59.999999000 secs
+
+# Sub-microsecond time is kept and justified exactly. PostgreSQL rounds the
+# input to whole microseconds when parsing, so it returns 1 mon here.
+query ?
+SELECT justify_interval(INTERVAL '1 month -1 nanosecond')
+----
+29 days 23 hours 59 mins 59.999999999 secs
+
+# PostgreSQL: 1 year 2 mons 1 day 04:00:00
+query ?
+SELECT justify_interval(INTERVAL '1 year 2 months -3 days 100 hours')
+----
+14 mons 1 days 4 hours
+
+# Largest day count with a negative time. PostgreSQL: 5965232 years 4 mons 6 days 23:00:00
+query ?
+SELECT justify_interval(INTERVAL '2147483647 days -1 hour')
+----
+71582788 mons 6 days 23 hours
+
+# NULL propagates
+query ?
+SELECT justify_interval(NULL)
+----
+NULL
+
+# Row-wise vectorized batch
+query ?
+SELECT justify_interval(v) FROM (VALUES
+  (INTERVAL '1 month -1 hour'),
+  (CAST(NULL AS INTERVAL)),
+  (INTERVAL '1 day -1 hour'),
+  (INTERVAL '3 months -91 days 1 hour')
+) AS t(v)
+----
+29 days 23 hours
+NULL
+23 hours
+-23 hours
+
+# Overflow. PostgreSQL: ERROR: interval out of range
+query error interval out of range
+SELECT justify_interval(INTERVAL '2147483647 months 30 days')
+
+# justify_days accepts this, but justify_interval also folds the 24 hours
+# into a day and overflows. PostgreSQL: ERROR: interval out of range
+query error interval out of range
+SELECT justify_interval(INTERVAL '2147483647 months 29 days 24 hours')
+
+query error interval out of range
+SELECT justify_interval(INTERVAL '-2147483648 months -29 days -24 hours')

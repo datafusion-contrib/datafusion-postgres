@@ -107,4 +107,4 @@ tokio = { workspace = true, features = ["macros", "rt", "fs"] }
 [[test]]
 name = "sqllogictest"
 path = "tests/sqllogictest.rs"
-required-features = ["math", "string"]
+required-features = ["math", "string", "datetime"]

@@ -65,7 +65,7 @@ implementation strategy in DataFusion.
 | [Bit String](#functions-bitstring) | 9 | 6 | 0 | 0 | 0 | 0 | 0+3 | 3 |
 | [Pattern Matching](#functions-matching) | 15 | 7 | 2 | 0 | 2 | 0 | 3+2 | 0 |
 | [Data Type Formatting](#functions-formatting) | 10 | 3 | 0 | 0 | 7 | 0 | 0+0 | 0 |
-| [Date/Time](#functions-datetime) | 33 | 11 | 0 | 0 | 21 | 0 | 0+1 | 0 |
+| [Date/Time](#functions-datetime) | 33 | 11 | 3 | 0 | 18 | 0 | 0+1 | 0 |
 | [Enum Support](#functions-enum) | 3 | 0 | 0 | 0 | 0 | 0 | 0+0 | 3 |
 | [Geometric](#functions-geometry) | 23 | 1 | 0 | 0 | 0 | 0 | 0+0 | 22 |
 | [Network Address](#functions-net) | 14 | 1 | 0 | 0 | 0 | 0 | 0+0 | 13 |
@@ -85,7 +85,7 @@ implementation strategy in DataFusion.
 | [System Administration](#functions-admin) | 105 | 0 | 2 | 0 | 5 | 0 | 0+0 | 98 |
 | [Trigger](#functions-trigger) | 3 | 0 | 0 | 0 | 0 | 0 | 0+0 | 3 |
 | [Event Trigger](#functions-event-triggers) | 5 | 0 | 0 | 0 | 0 | 0 | 0+0 | 5 |
-| **TOTAL** | **768** | **198** | **54** | **4** | **71** | **65** | **21** | **371** |
+| **TOTAL** | **768** | **198** | **57** | **4** | **68** | **65** | **21** | **371** |
 
 ---
 
@@ -386,9 +386,9 @@ implementation strategy in DataFusion.
 | `date_trunc` | fn | ✅ | — | 4 | truncate timestamp with time zone to specified units in specified time zone | Native DataFusion |
 | `extract` | both | 🚧 | P2 | 6 | extract field from timestamp with time zone |  |
 | `isfinite` | fn | 🚧 | P2 | 4 | finite timestamp? |  |
-| `justify_days` | fn | 🚧 | P2 | 1 | promote groups of 30 days to numbers of months |  |
-| `justify_hours` | fn | 🚧 | P2 | 1 | promote groups of 24 hours to numbers of days |  |
-| `justify_interval` | fn | 🚧 | P2 | 1 | promote groups of 24 hours to numbers of days and promote groups of 30 days to numbers of months |  |
+| `justify_days` | fn | 🔧 | — | 1 | promote groups of 30 days to numbers of months | Accepts any Arrow interval unit; returns `Interval(MonthDayNano)`. Time field passed through unchanged. |
+| `justify_hours` | fn | 🔧 | — | 1 | promote groups of 24 hours to numbers of days | Accepts any Arrow interval unit; returns `Interval(MonthDayNano)`. Keeps sub-microsecond nanoseconds (PG stores microseconds). |
+| `justify_interval` | fn | 🔧 | — | 1 | promote groups of 24 hours to numbers of days and promote groups of 30 days to numbers of months | Accepts any Arrow interval unit; returns `Interval(MonthDayNano)`. Keeps sub-microsecond nanoseconds (PG stores microseconds). |
 | `localtime` | fn | 🚧 | P2 | 0 | Current date and time, no time zone |  |
 | `localtimestamp` | fn | 🚧 | P2 | 0 | Current timestamp, no time zone |  |
 | `make_date` | fn | ✅ | — | 1 | construct date | Native DataFusion |
