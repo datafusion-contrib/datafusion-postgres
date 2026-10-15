@@ -34,15 +34,19 @@
 //! Accepts `Timestamp` of any unit, with or without a time zone, `Date32`,
 //! `Date64`, string literals (cast to `Timestamp(Nanosecond)`), or NULL, and
 //! always returns `Interval(MonthDayNano)`. The two arguments may have
-//! different types.
+//! different types. When one carries a time zone, both are cast to the first
+//! such zone before the subtraction (see below).
 //!
 //! # Deviations from PostgreSQL
 //!
-//! - **Time zones:** PostgreSQL takes the calendar fields of a `timestamptz`
-//!   in the session's `TimeZone`. Here a timestamp with a time zone uses its
-//!   own zone, and one without is taken as written. The two agree when the
-//!   session zone is the zone the timestamps carry. As in PostgreSQL, which
-//!   argument is earlier is decided by the instants, not the local fields.
+//! - **Time zones:** PostgreSQL takes the calendar fields of both arguments
+//!   in the session's `TimeZone`. Here they are taken in the zone of the
+//!   first argument that has one: the other argument is cast to it, so a
+//!   timestamp in another zone keeps its instant, and a plain timestamp,
+//!   date or literal is read as local time in that zone. Without any zone,
+//!   timestamps are taken as written. This matches PostgreSQL when the
+//!   session zone is that zone. As in PostgreSQL, which argument is earlier
+//!   is decided by the instants, not the local fields.
 //! - **Precision:** Arrow timestamps can carry nanoseconds; the fraction is
 //!   kept to the nanosecond, where PostgreSQL stores microseconds.
 //! - **Infinity:** Arrow timestamps have no `infinity`, so PostgreSQL's
@@ -116,16 +120,30 @@ impl ScalarUDFImpl for AgeUDF {
         if !matches!(arg_types.len(), 1 | 2) {
             return plan_err!("age expects 1 or 2 arguments, got {}", arg_types.len());
         }
+        // PostgreSQL takes the fields of both arguments in one time zone, the
+        // session's. Do the same: when an argument carries a zone, cast every
+        // argument to the first such zone. Plain timestamps, dates and string
+        // literals are then read as local time in that zone, as PostgreSQL
+        // reads them in the session zone; a timestamp with another zone keeps
+        // its instant.
+        let zone = arg_types.iter().find_map(|t| match t {
+            DataType::Timestamp(_, Some(tz)) => Some(Arc::clone(tz)),
+            _ => None,
+        });
         arg_types
             .iter()
             .map(|t| match t {
-                DataType::Timestamp(_, _)
-                | DataType::Date32
-                | DataType::Date64
-                | DataType::Null => Ok(t.clone()),
+                DataType::Timestamp(unit, tz) => Ok(DataType::Timestamp(
+                    *unit,
+                    zone.clone().or_else(|| tz.clone()),
+                )),
+                DataType::Date32 | DataType::Date64 if zone.is_some() => {
+                    Ok(DataType::Timestamp(TimeUnit::Microsecond, zone.clone()))
+                }
+                DataType::Date32 | DataType::Date64 | DataType::Null => Ok(t.clone()),
                 // An untyped literal, as in `age('2024-03-01', '2024-01-31')`.
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-                    Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+                    Ok(DataType::Timestamp(TimeUnit::Nanosecond, zone.clone()))
                 }
                 other => plan_err!("age expects timestamp or date arguments, got {other}"),
             })
@@ -589,6 +607,104 @@ mod tests {
         assert_eq!(
             col.as_primitive::<IntervalMonthDayNanoType>().value(0),
             mdn(0, 0, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn mixed_time_zones_are_taken_in_one_zone() {
+        // PostgreSQL 16.15 with TimeZone = 'America/New_York'. Without a
+        // shared zone these came out as mixed-sign intervals such as
+        // `-1 mons 30 days 14:00:00`.
+        let ny =
+            |s: &str| format!("arrow_cast(TIMESTAMP '{s}', 'Timestamp(ns, \"America/New_York\")')");
+        let kolkata =
+            |s: &str| format!("arrow_cast(TIMESTAMP '{s}', 'Timestamp(ns, \"Asia/Kolkata\")')");
+        let cases = [
+            // age('2024-01-01 12:00-05', '2024-01-01 22:00+05:30') = 00:30:00
+            (
+                format!(
+                    "age({}, {})",
+                    ny("2024-01-01 12:00:00"),
+                    kolkata("2024-01-01 22:00:00")
+                ),
+                mdn(0, 0, hms(0, 30, 0)),
+            ),
+            // age(timestamptz '2024-01-01 12:00-05', timestamp '2024-01-01 14:00') = -02:00:00
+            (
+                format!(
+                    "age({}, TIMESTAMP '2024-01-01 14:00:00')",
+                    ny("2024-01-01 12:00:00")
+                ),
+                mdn(0, 0, -hms(2, 0, 0)),
+            ),
+            // age(timestamp '2024-01-01 14:00', timestamptz '2024-01-01 12:00-05') = 02:00:00
+            (
+                format!(
+                    "age(TIMESTAMP '2024-01-01 14:00:00', {})",
+                    ny("2024-01-01 12:00:00")
+                ),
+                mdn(0, 0, hms(2, 0, 0)),
+            ),
+            // age(date '2024-03-10', timestamptz '2024-03-09 21:00-05') = 03:00:00
+            (
+                format!("age(DATE '2024-03-10', {})", ny("2024-03-09 21:00:00")),
+                mdn(0, 0, hms(3, 0, 0)),
+            ),
+            // age('2024-01-01 14:00:00', timestamptz '2024-01-01 12:00-05') = 02:00:00
+            (
+                format!("age('2024-01-01 14:00:00', {})", ny("2024-01-01 12:00:00")),
+                mdn(0, 0, hms(2, 0, 0)),
+            ),
+        ];
+        for (sql, expected) in cases {
+            let col = query_one(&format!("SELECT {sql}")).await;
+            assert_eq!(
+                col.as_primitive::<IntervalMonthDayNanoType>().value(0),
+                expected,
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn arguments_are_coerced_to_one_zone() {
+        let ny: Option<Arc<str>> = Some(Arc::from("America/New_York"));
+        let ts = |unit, tz: &Option<Arc<str>>| DataType::Timestamp(unit, tz.clone());
+        let udf = AgeUDF::new();
+        assert_eq!(
+            udf.coerce_types(&[ts(TimeUnit::Second, &None), DataType::Date32])
+                .unwrap(),
+            vec![ts(TimeUnit::Second, &None), DataType::Date32],
+            "without a zone nothing changes"
+        );
+        assert_eq!(
+            udf.coerce_types(&[DataType::Date32, ts(TimeUnit::Nanosecond, &ny)])
+                .unwrap(),
+            vec![
+                ts(TimeUnit::Microsecond, &ny),
+                ts(TimeUnit::Nanosecond, &ny)
+            ]
+        );
+        let kolkata: Option<Arc<str>> = Some(Arc::from("Asia/Kolkata"));
+        assert_eq!(
+            udf.coerce_types(&[
+                ts(TimeUnit::Nanosecond, &kolkata),
+                ts(TimeUnit::Millisecond, &ny)
+            ])
+            .unwrap(),
+            vec![
+                ts(TimeUnit::Nanosecond, &kolkata),
+                ts(TimeUnit::Millisecond, &kolkata)
+            ],
+            "the first zone wins"
+        );
+        assert_eq!(
+            udf.coerce_types(&[DataType::Utf8, ts(TimeUnit::Microsecond, &ny)])
+                .unwrap(),
+            vec![
+                ts(TimeUnit::Nanosecond, &ny),
+                ts(TimeUnit::Microsecond, &ny)
+            ]
         );
     }
 
