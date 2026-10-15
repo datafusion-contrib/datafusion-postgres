@@ -374,7 +374,7 @@ implementation strategy in DataFusion.
 
 | Function | Kind | Status | Pri | #overloads | Description | Notes |
 |---|:---:|:---:|:---:|---:|---|---|
-| `age` | fn | 🔧 | — | 5 | date difference preserving months and years | `age(timestamp, timestamp)` and `age(timestamp)`. Accepts any Arrow timestamp unit, with or without a time zone, and dates; returns `Interval(MonthDayNano)`. A timestamp with a time zone uses its own zone, not the session's. Keeps sub-microsecond nanoseconds (PG stores microseconds). The `xid` form is listed under System Information. |
+| `age` | fn | 🔧 | — | 5 | date difference preserving months and years | `age(timestamp, timestamp)` and `age(timestamp)`. Accepts any Arrow timestamp unit, with or without a time zone, and dates; returns `Interval(MonthDayNano)`. Both arguments are taken in the time zone of the first one that has a zone, not the session's. Keeps sub-microsecond nanoseconds (PG stores microseconds). The `xid` form is listed under System Information. |
 | `clock_timestamp` | fn | 🚧 | P2 | 1 | current clock time |  |
 | `current_date` | fn | ✅ | — | 0 | Current date | Native DataFusion (SQL special form). |
 | `current_time` | fn | ✅ | — | 0 | Current time of day | Native DataFusion (SQL special form). |
