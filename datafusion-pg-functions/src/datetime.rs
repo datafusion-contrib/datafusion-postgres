@@ -4,6 +4,7 @@
 //! Operators" section of [`functions.md`](../functions.md), one file per
 //! function:
 //!
+//! - [`age`] — difference between two timestamps in years, months and days.
 //! - [`justify_days`] — promote 30-day periods of an interval to months.
 //! - [`justify_hours`] — promote 24-hour periods of an interval to days.
 //! - [`justify_interval`] — normalize days and time, with sign adjustment.
@@ -16,6 +17,7 @@
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::ScalarUDF;
 
+pub mod age;
 mod interval;
 pub mod justify_days;
 pub mod justify_hours;
@@ -27,6 +29,7 @@ pub mod justify_interval;
 /// Returns the number of UDFs that were registered.
 pub fn register(registry: &mut dyn FunctionRegistry) -> usize {
     let udfs: Vec<ScalarUDF> = vec![
+        age::create_age_udf(),
         justify_days::create_justify_days_udf(),
         justify_hours::create_justify_hours_udf(),
         justify_interval::create_justify_interval_udf(),

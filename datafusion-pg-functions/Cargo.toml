@@ -59,7 +59,7 @@ bitstring = []
 # Conditional Expressions (and comparison / logical)
 conditional = []
 # Date/Time Functions and Operators
-datetime = []
+datetime = ["dep:chrono"]
 # Hash / digest helpers (pgcrypto-style)
 crypto = []
 # Array Functions and Operators
@@ -91,6 +91,7 @@ row = []
 
 [dependencies]
 datafusion = { workspace = true, features = ["nested_expressions"] }
+chrono = { workspace = true, optional = true }
 libm = { version = "0.2", optional = true }
 rand = { version = "0.10", optional = true }
 regex = { version = "1", optional = true }

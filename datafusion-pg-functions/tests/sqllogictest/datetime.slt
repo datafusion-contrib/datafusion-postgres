@@ -339,3 +339,102 @@ SELECT justify_interval(INTERVAL '2147483647 months 29 days 24 hours')
 
 query error interval out of range
 SELECT justify_interval(INTERVAL '-2147483648 months -29 days -24 hours')
+
+# ============================================================================
+# age(timestamp, timestamp) / age(timestamp) -- years, months and days between
+# ============================================================================
+
+# The example in the PostgreSQL manual. PostgreSQL: 43 years 9 mons 27 days
+query ?
+SELECT age(TIMESTAMP '2001-04-10 00:00:00', TIMESTAMP '1957-06-13 00:00:00')
+----
+525 mons 27 days
+
+# PostgreSQL: 1 year 2 mons 15 days 21:30:00
+query ?
+SELECT age(TIMESTAMP '2024-03-31 10:00:00', TIMESTAMP '2023-01-15 12:30:00')
+----
+14 mons 15 days 21 hours 30 mins
+
+# The earlier timestamp comes first. PostgreSQL: -1 years -2 mons -15 days -21:30:00
+query ?
+SELECT age(TIMESTAMP '2023-01-15 12:30:00', TIMESTAMP '2024-03-31 10:00:00')
+----
+-14 mons -15 days -21 hours -30 mins
+
+# A day borrow takes the length of the earlier timestamp's month (January,
+# 31 days). PostgreSQL: 1 mon 1 day
+query ?
+SELECT age(TIMESTAMP '2024-03-01 00:00:00', TIMESTAMP '2024-01-31 00:00:00')
+----
+1 mons 1 days
+
+# PostgreSQL: -1 mons -1 days
+query ?
+SELECT age(TIMESTAMP '2024-01-31 00:00:00', TIMESTAMP '2024-03-01 00:00:00')
+----
+-1 mons -1 days
+
+# Leap years. PostgreSQL: 11 mons 28 days, and 1 year 1 day
+query ??
+SELECT age(TIMESTAMP '2025-02-28 00:00:00', TIMESTAMP '2024-02-29 00:00:00'),
+       age(TIMESTAMP '2024-02-29 00:00:00', TIMESTAMP '2023-02-28 00:00:00')
+----
+11 mons 28 days 12 mons 1 days
+
+# Borrowing across the fraction of a second. PostgreSQL: 00:00:00.000001
+query ?
+SELECT age(TIMESTAMP '2024-01-02 00:00:00', TIMESTAMP '2024-01-01 23:59:59.999999')
+----
+0.000001000 secs
+
+# Equal timestamps. PostgreSQL: 00:00:00
+query ?
+SELECT age(TIMESTAMP '2024-06-15 08:00:00', TIMESTAMP '2024-06-15 08:00:00')
+----
+0 secs
+
+# Dates and string literals. PostgreSQL: 1 mon 1 day for both
+query ??
+SELECT age(DATE '2024-03-01', DATE '2024-01-31') AS dates,
+       age('2024-03-01', '2024-01-31') AS strings
+----
+1 mons 1 days 1 mons 1 days
+
+# NULL propagates
+query ??
+SELECT age(NULL, TIMESTAMP '2024-01-01 00:00:00'), age(TIMESTAMP '2024-01-01 00:00:00', NULL)
+----
+NULL NULL
+
+# One argument: measured from today's date at midnight
+query BB
+SELECT age(current_date()) = INTERVAL '0 days',
+       age(TIMESTAMP '2000-02-29 00:00:00') = age(current_date(), TIMESTAMP '2000-02-29 00:00:00')
+----
+true true
+
+# The result can be taken apart with date_part. PostgreSQL: 33
+query I
+SELECT date_part('year', age(TIMESTAMP '2024-03-31 00:00:00', TIMESTAMP '1990-07-04 00:00:00'))
+----
+33
+
+# Row-wise vectorized batch
+query ?
+SELECT age(a, b) FROM (VALUES
+  (TIMESTAMP '2024-05-31 00:00:00', TIMESTAMP '2024-04-30 00:00:00'),
+  (CAST(NULL AS TIMESTAMP), TIMESTAMP '2024-04-30 00:00:00'),
+  (TIMESTAMP '1900-03-01 00:00:00', TIMESTAMP '1900-02-28 00:00:00'),
+  (TIMESTAMP '2000-01-01 00:00:00', TIMESTAMP '1970-01-01 00:00:00')
+) AS t(a, b)
+----
+1 mons 1 days
+NULL
+1 days
+360 mons
+
+# Only timestamps and dates are accepted.
+# PostgreSQL: ERROR: function age(timestamp without time zone, integer) does not exist
+query error age expects timestamp or date arguments
+SELECT age(TIMESTAMP '2024-01-01 00:00:00', 5)

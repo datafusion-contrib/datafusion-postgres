@@ -1606,6 +1606,7 @@ name = "datafusion-pg-functions"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "datafusion",
  "env_logger",
  "icu_casemap",
