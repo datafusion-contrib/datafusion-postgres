@@ -65,7 +65,7 @@ implementation strategy in DataFusion.
 | [Bit String](#functions-bitstring) | 9 | 6 | 0 | 0 | 0 | 0 | 0+3 | 3 |
 | [Pattern Matching](#functions-matching) | 15 | 7 | 2 | 0 | 2 | 0 | 3+2 | 0 |
 | [Data Type Formatting](#functions-formatting) | 10 | 3 | 0 | 0 | 7 | 0 | 0+0 | 0 |
-| [Date/Time](#functions-datetime) | 33 | 11 | 3 | 0 | 18 | 0 | 0+1 | 0 |
+| [Date/Time](#functions-datetime) | 33 | 11 | 4 | 0 | 17 | 0 | 0+1 | 0 |
 | [Enum Support](#functions-enum) | 3 | 0 | 0 | 0 | 0 | 0 | 0+0 | 3 |
 | [Geometric](#functions-geometry) | 23 | 1 | 0 | 0 | 0 | 0 | 0+0 | 22 |
 | [Network Address](#functions-net) | 14 | 1 | 0 | 0 | 0 | 0 | 0+0 | 13 |
@@ -85,7 +85,7 @@ implementation strategy in DataFusion.
 | [System Administration](#functions-admin) | 105 | 0 | 2 | 0 | 5 | 0 | 0+0 | 98 |
 | [Trigger](#functions-trigger) | 3 | 0 | 0 | 0 | 0 | 0 | 0+0 | 3 |
 | [Event Trigger](#functions-event-triggers) | 5 | 0 | 0 | 0 | 0 | 0 | 0+0 | 5 |
-| **TOTAL** | **768** | **198** | **57** | **4** | **68** | **65** | **21** | **371** |
+| **TOTAL** | **768** | **198** | **58** | **4** | **67** | **65** | **21** | **371** |
 
 ---
 
@@ -374,7 +374,7 @@ implementation strategy in DataFusion.
 
 | Function | Kind | Status | Pri | #overloads | Description | Notes |
 |---|:---:|:---:|:---:|---:|---|---|
-| `age` | fn | 🚧 | P2 | 5 | age of a transaction ID, in transactions before current transaction |  |
+| `age` | fn | 🔧 | — | 5 | date difference preserving months and years | `age(timestamp, timestamp)` and `age(timestamp)`. Accepts any Arrow timestamp unit, with or without a time zone, and dates; returns `Interval(MonthDayNano)`. Both arguments are taken in the time zone of the first one that has a zone, not the session's. Keeps sub-microsecond nanoseconds (PG stores microseconds). The `xid` form is listed under System Information. |
 | `clock_timestamp` | fn | 🚧 | P2 | 1 | current clock time |  |
 | `current_date` | fn | ✅ | — | 0 | Current date | Native DataFusion (SQL special form). |
 | `current_time` | fn | ✅ | — | 0 | Current time of day | Native DataFusion (SQL special form). |
