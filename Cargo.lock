@@ -388,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-pg"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -1588,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-pg-catalog"
-version = "0.18.3"
+version = "0.19.0"
 dependencies = [
  "arrow-pg",
  "async-trait",
@@ -1603,7 +1603,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-pg-functions"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1732,7 +1732,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-postgres"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "arrow-pg",
  "async-trait",
@@ -1759,7 +1759,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-postgres-cli"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "datafusion",
  "datafusion-postgres",
