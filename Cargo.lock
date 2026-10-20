@@ -2256,8 +2256,9 @@ dependencies = [
 
 [[package]]
 name = "geodatafusion"
-version = "0.5.0"
-source = "git+https://github.com/sunng87/geodatafusion.git?branch=datafusion-55#df04592c0f0285acce5b8299dc974dd92f6dede5"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ec9c5155e8679cb1b78e5fd020c17163adf72a032a1bb42b86e10b08cc7a2ae"
 dependencies = [
  "arrow-arith",
  "arrow-array",
