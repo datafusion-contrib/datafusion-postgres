@@ -18,7 +18,7 @@ repository = "https://github.com/datafusion-contrib/datafusion-postgres/"
 documentation = "https://docs.rs/crate/datafusion-postgres/"
 
 [workspace.dependencies]
-arrow = "59"
+arrow = "60"
 arrow-schema = "59"
 bytes = "1.11.1"
 chrono = { version = "0.4", features = ["std"] }
