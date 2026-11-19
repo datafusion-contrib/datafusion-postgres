@@ -31,8 +31,9 @@ geoarrow = { version = "0.9", optional = true }
 geoarrow-schema = { version = "0.9", optional = true }
 pg_interval = { version = "0.6" }
 pgwire = { workspace = true, default-features = false, features = ["server-api", "pg-ext-types"] }
-postgres-types.workspace = true
+postgres-types = { workspace = true, features = ["with-uuid-1"] }
 rust_decimal.workspace = true
+uuid.workspace = true
 serde_json = { version = "1", features = ["arbitrary_precision"] }
 postgis = { version = "0.9", optional = true }
 geo-postgis = { version = "0.2", optional = true }

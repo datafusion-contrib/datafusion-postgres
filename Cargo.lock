@@ -408,6 +408,7 @@ dependencies = [
  "rust_decimal",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -3469,6 +3470,7 @@ dependencies = [
  "postgres-protocol",
  "serde_core",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

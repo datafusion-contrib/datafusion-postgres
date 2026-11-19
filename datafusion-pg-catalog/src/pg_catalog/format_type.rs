@@ -92,6 +92,7 @@ fn format_postgres_type(type_oid: i32, typemod: i32) -> String {
         // Numeric types
         700 => "real".to_string(),
         701 => "double precision".to_string(),
+        790 => "money".to_string(),
 
         // Character types with length
         1042 => {
@@ -162,6 +163,7 @@ fn format_postgres_type(type_oid: i32, typemod: i32) -> String {
             }
         }
         1186 => "interval".to_string(),
+        869 => "inet".to_string(),
 
         // Bit types
         1560 => {
@@ -213,6 +215,8 @@ fn get_array_base_type(array_oid: i32) -> Option<i32> {
         1014 => Some(1042), // _bpchar -> bpchar
         1015 => Some(1043), // _varchar -> varchar
         1021 => Some(700),  // _float4 -> float4
+        1041 => Some(869),  // _inet -> inet
+        791 => Some(790),   // _money -> money
         1022 => Some(701),  // _float8 -> float8
         1231 => Some(1700), // _numeric -> numeric
         1182 => Some(1082), // _date -> date

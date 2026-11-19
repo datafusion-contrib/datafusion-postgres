@@ -148,9 +148,25 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
                                     attstattargets.push(-1); // Default statistics target
                                     attlens.push(type_len);
                                     attnums.push(attnum);
-                                    attndimss.push(0); // No array support for now
+                                    attndimss.push(
+                                        if matches!(
+                                            field.data_type(),
+                                            DataType::List(_)
+                                                | DataType::LargeList(_)
+                                                | DataType::FixedSizeList(_, _)
+                                                | DataType::ListView(_)
+                                                | DataType::LargeListView(_)
+                                        ) {
+                                            1
+                                        } else {
+                                            0
+                                        },
+                                    );
                                     attcacheoffs.push(-1); // Not cached
-                                    atttymods.push(-1); // No type modifiers
+                                    atttymods.push(
+                                        arrow_pg::datatypes::pg_typmod_for_field(field)
+                                            .unwrap_or(-1),
+                                    );
                                     attbyvals.push(by_val);
                                     attaligns.push(align.to_string());
                                     attstorages.push(storage.to_string());
@@ -228,27 +244,28 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
     /// semantic markers such as `pg.json`, `pg.vector`, `pg.char` and
     /// `pg.oid_alias` are reflected in `pg_attribute.atttypid`.
     fn datafusion_to_pg_type(field: &Arc<Field>) -> (u32, i16, bool, &'static str, &'static str) {
-        match arrow_pg::datatypes::field_into_pg_type(field) {
-            Ok(t @ Type::BOOL) => (t.oid(), 1, true, "c", "p"),
-            Ok(t @ Type::CHAR) => (t.oid(), 1, true, "c", "p"),
-            Ok(t @ Type::INT2) => (t.oid(), 2, true, "s", "p"),
-            Ok(t @ Type::INT4) => (t.oid(), 4, true, "i", "p"),
-            Ok(t @ Type::INT8) => (t.oid(), 8, true, "d", "p"),
-            Ok(t @ Type::FLOAT4) => (t.oid(), 4, true, "i", "p"),
-            Ok(t @ Type::FLOAT8) => (t.oid(), 8, true, "d", "p"),
-            Ok(t @ Type::TEXT) => (t.oid(), -1, false, "i", "x"),
-            Ok(t @ Type::BYTEA) => (t.oid(), -1, false, "i", "x"),
-            Ok(t @ Type::DATE) => (t.oid(), 4, true, "i", "p"),
-            Ok(t @ Type::TIME) => (t.oid(), 8, true, "d", "p"),
-            Ok(t @ Type::TIMESTAMP) => (t.oid(), 8, true, "d", "p"),
-            Ok(t @ Type::TIMESTAMPTZ) => (t.oid(), 8, true, "d", "p"),
-            Ok(t @ Type::NUMERIC) => (t.oid(), -1, false, "i", "m"),
-            Ok(t @ Type::JSON) => (t.oid(), -1, false, "i", "x"),
-            Ok(t @ Type::JSONB) => (t.oid(), -1, false, "i", "x"),
-            Ok(t @ Type::INT4_ARRAY) => (t.oid(), -1, false, "i", "x"),
-            Ok(t @ Type::TEXT_ARRAY) => (t.oid(), -1, false, "i", "x"),
-            _ => (Type::TEXT.oid(), -1, false, "i", "x"), // Default to text for unknown types
-        }
+        let ty = arrow_pg::datatypes::field_into_pg_type(field).unwrap_or(Type::TEXT);
+        let (len, by_val, align, storage) = match ty {
+            Type::BOOL | Type::CHAR => (1, true, "c", "p"),
+            Type::INT2 => (2, true, "s", "p"),
+            Type::INT4 | Type::FLOAT4 => (4, true, "i", "p"),
+            Type::INT8 | Type::FLOAT8 | Type::MONEY => (8, true, "d", "p"),
+            Type::DATE => (4, true, "i", "p"),
+            Type::TIME | Type::TIMESTAMP | Type::TIMESTAMPTZ => (8, true, "d", "p"),
+            Type::INTERVAL => (16, false, "d", "p"),
+            Type::UUID => (16, false, "c", "p"),
+            Type::NUMERIC => (-1, false, "i", "m"),
+            Type::TEXT
+            | Type::BYTEA
+            | Type::JSON
+            | Type::JSONB
+            | Type::VARCHAR
+            | Type::BPCHAR
+            | Type::INET => (-1, false, "i", "x"),
+            _ if ty.oid() >= 1000 => (-1, false, "i", "x"), // array types
+            _ => (-1, false, "i", "x"),
+        };
+        (ty.oid(), len, by_val, align, storage)
     }
 }
 
