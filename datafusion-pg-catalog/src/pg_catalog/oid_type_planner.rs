@@ -96,6 +96,50 @@ impl PgOidTypePlanner {
         }
     }
 
+    /// Map a Postgres `json` / `jsonb` / `pg_catalog.json[b]` SQL type to a
+    /// UTF-8 Arrow field carrying the canonical Arrow JSON extension and the
+    /// `pg.json` marker.
+    ///
+    /// `jsonb` differs from `json` only in the marker: both are stored as JSON
+    /// text, and the marker tells the wire layer which Postgres OID to report
+    /// and whether to use the `jsonb` binary version header.
+    fn json_field(sql_type: &SQLDataType) -> Option<Arc<Field>> {
+        let kind = match sql_type {
+            SQLDataType::JSON => "json",
+            SQLDataType::JSONB => "jsonb",
+            SQLDataType::Custom(name, args) => {
+                if !args.is_empty() {
+                    return None;
+                }
+                let last = name.0.last()?;
+                let ObjectNamePart::Identifier(ident) = last else {
+                    return None;
+                };
+                match ident.value.to_ascii_lowercase().as_str() {
+                    "json" => "json",
+                    "jsonb" => "jsonb",
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        let metadata = [
+            (
+                "ARROW:extension:name".to_string(),
+                arrow_pg::datatypes::ARROW_JSON_EXTENSION_NAME.to_string(),
+            ),
+            (
+                arrow_pg::datatypes::PG_JSON_KEY.to_string(),
+                kind.to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        Some(Arc::new(
+            Field::new("", DataType::Utf8, true).with_metadata(metadata),
+        ))
+    }
+
     /// Map a `pg_catalog.<name>` custom type to the Arrow [`DataType`] of its
     /// unqualified builtin.
     ///
@@ -203,20 +247,25 @@ fn builtin_arrow_type(name: &str) -> Option<DataType> {
 
 impl TypePlanner for PgOidTypePlanner {
     fn plan_type_field(&self, sql_type: &SQLDataType) -> Result<Option<Arc<Field>>> {
-        // 0. pgvector `vector(n)` / `vector` -> FixedSizeList/List of Float32
+        // 0. Postgres `json` / `jsonb` (and their pg_catalog forms) -> Utf8
+        //    with the canonical Arrow JSON extension and the `pg.json` marker.
+        if let Some(field) = Self::json_field(sql_type) {
+            return Ok(Some(field));
+        }
+        // 1. pgvector `vector(n)` / `vector` -> FixedSizeList/List of Float32
         //    tagged with `pg.vector` metadata (see the arrow-pg contract).
         #[cfg(feature = "pgvector")]
         if let Some(field) = Self::vector_field(sql_type) {
             return Ok(Some(field));
         }
-        // 1. Scalar oid-alias types (regclass, oid, ...) -> int4 with kind
+        // 2. Scalar oid-alias types (regclass, oid, ...) -> int4 with kind
         //    metadata. Arrays of these (`regtype[]`) are handled by DataFusion
         //    recursing into this planner for the element type, so no Array arm
         //    is needed here.
         if let Some(kind) = Self::kind_for(sql_type) {
             return Ok(Some(Self::oid_field(&kind)));
         }
-        // 2. pg_catalog-qualified builtins (pg_catalog.text, pg_catalog.int2,
+        // 3. pg_catalog-qualified builtins (pg_catalog.text, pg_catalog.int2,
         //    ...). sqlparser represents these as `Custom`, which DataFusion
         //    otherwise rejects; map them to their builtin Arrow type. As above,
         //    `pg_catalog.int2[]` works via element-type recursion.
@@ -298,6 +347,40 @@ mod tests {
             let field = planner.plan_type_field(&dt).unwrap().unwrap();
             assert_eq!(field.data_type(), &DataType::Int32, "{sql}");
             assert!(field.metadata().is_empty(), "{sql}");
+        }
+    }
+
+    #[test]
+    fn json_and_jsonb_map_to_utf8_with_json_metadata() {
+        let planner = PgOidTypePlanner;
+        for (sql, kind) in [
+            ("json", "json"),
+            ("jsonb", "jsonb"),
+            ("pg_catalog.json", "json"),
+            ("pg_catalog.jsonb", "jsonb"),
+        ] {
+            let dt = cast_target_type(&format!("SELECT 'x'::{sql} AS c"));
+            let field = planner
+                .plan_type_field(&dt)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{sql} should be handled by the planner"));
+            assert_eq!(field.data_type(), &DataType::Utf8, "{sql}");
+            assert_eq!(
+                field
+                    .metadata()
+                    .get(arrow_pg::datatypes::PG_JSON_KEY)
+                    .map(String::as_str),
+                Some(kind),
+                "{sql}"
+            );
+            assert_eq!(
+                field
+                    .metadata()
+                    .get("ARROW:extension:name")
+                    .map(String::as_str),
+                Some(arrow_pg::datatypes::ARROW_JSON_EXTENSION_NAME),
+                "{sql}"
+            );
         }
     }
 

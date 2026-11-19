@@ -1,8 +1,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-#[cfg(feature = "pgvector")]
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 
 #[cfg(not(feature = "datafusion"))]
 use arrow::{array::*, datatypes::*};
@@ -16,7 +15,7 @@ use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::messages::copy::CopyData;
 use pgwire::messages::data::DataRow;
 use pgwire::types::ToSqlText;
-use postgres_types::ToSql;
+use postgres_types::{IsNull, ToSql, Type};
 use rust_decimal::Decimal;
 use timezone::Tz;
 
@@ -433,6 +432,49 @@ fn get_numeric_128_value(
         .map(Some)
 }
 
+/// A JSON value in its Postgres wire representation.
+///
+/// The text format is the raw JSON document. The binary format is also the raw
+/// document for `json`, while `jsonb` prefixes it with the one-byte format
+/// version PostgreSQL uses (currently version 1).
+#[derive(Debug)]
+struct JsonText<'a> {
+    text: &'a str,
+    jsonb: bool,
+}
+
+impl ToSqlText for JsonText<'_> {
+    fn to_sql_text(
+        &self,
+        _ty: &Type,
+        out: &mut bytes::BytesMut,
+        _format_options: &pgwire::types::format::FormatOptions,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        out.put_slice(self.text.as_bytes());
+        Ok(IsNull::No)
+    }
+}
+
+impl ToSql for JsonText<'_> {
+    fn to_sql(
+        &self,
+        _ty: &Type,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        if self.jsonb {
+            out.put_u8(1);
+        }
+        out.put_slice(self.text.as_bytes());
+        Ok(IsNull::No)
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(*ty, Type::JSON | Type::JSONB)
+    }
+
+    postgres_types::to_sql_checked!();
+}
+
 pub fn encode_value<T: Encoder>(
     encoder: &mut T,
     arr: &Arc<dyn Array>,
@@ -490,6 +532,32 @@ pub fn encode_value<T: Encoder>(
             .is_some_and(|kind| kind == "oid")
     {
         return encode_pg_oid_binary(encoder, arr, idx, pg_field);
+    }
+
+    // Postgres `json` / `jsonb` columns: the storage is UTF-8 JSON text with
+    // the Arrow canonical JSON extension. `jsonb` adds the one-byte binary
+    // format version; `json` (and the text format of both) is the raw
+    // document. The resolved FieldInfo type is authoritative so an optimizer
+    // rewrite that drops the field metadata still encodes the right format.
+    let jsonb = match *pg_field.datatype() {
+        Type::JSON => Some(false),
+        Type::JSONB => Some(true),
+        _ => crate::datatypes::pg_json_type(arrow_field).map(|ty| ty == Type::JSONB),
+    };
+    if let Some(jsonb) = jsonb {
+        let value = match arrow_type {
+            DataType::Utf8 => get_utf8_value(arr, idx),
+            DataType::Utf8View => get_utf8_view_value(arr, idx),
+            DataType::LargeUtf8 => get_large_utf8_value(arr, idx),
+            other => {
+                return Err(PgWireError::ApiError(ToSqlError::from(format!(
+                    "json column {other} is not UTF-8"
+                ))));
+            }
+        };
+        let value = value.map(|text| JsonText { text, jsonb });
+        encoder.encode_field(&value, pg_field)?;
+        return Ok(());
     }
 
     match arrow_type {

@@ -33,10 +33,12 @@ pg_interval = { version = "0.6" }
 pgwire = { workspace = true, default-features = false, features = ["server-api", "pg-ext-types"] }
 postgres-types.workspace = true
 rust_decimal.workspace = true
+serde_json = { version = "1", features = ["arbitrary_precision"] }
 postgis = { version = "0.9", optional = true }
 geo-postgis = { version = "0.2", optional = true }
 geo-traits = { version = "0.3", optional = true }
 
 [dev-dependencies]
 async-trait = "0.1"
+postgres-types = { workspace = true, features = ["with-serde_json-1"] }
 tokio = { version = "1.52", features = ["full"]}

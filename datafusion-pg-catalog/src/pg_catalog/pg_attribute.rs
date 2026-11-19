@@ -140,7 +140,7 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
                                 {
                                     let attnum = (column_idx + 1) as i16; // PostgreSQL column numbers start at 1
                                     let (pg_type_oid, type_len, by_val, align, storage) =
-                                        Self::datafusion_to_pg_type(field.data_type());
+                                        Self::datafusion_to_pg_type(field);
 
                                     attrelids.push(table_oid as i32);
                                     attnames.push(field.name().clone());
@@ -222,9 +222,13 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
         Ok(batch)
     }
 
-    /// Map DataFusion data types to PostgreSQL type information
-    fn datafusion_to_pg_type(data_type: &DataType) -> (u32, i16, bool, &'static str, &'static str) {
-        match arrow_pg::datatypes::into_pg_type(data_type) {
+    /// Map a DataFusion column to PostgreSQL type information.
+    ///
+    /// The field (not just its physical `DataType`) is the source of truth so
+    /// semantic markers such as `pg.json`, `pg.vector`, `pg.char` and
+    /// `pg.oid_alias` are reflected in `pg_attribute.atttypid`.
+    fn datafusion_to_pg_type(field: &Arc<Field>) -> (u32, i16, bool, &'static str, &'static str) {
+        match arrow_pg::datatypes::field_into_pg_type(field) {
             Ok(t @ Type::BOOL) => (t.oid(), 1, true, "c", "p"),
             Ok(t @ Type::CHAR) => (t.oid(), 1, true, "c", "p"),
             Ok(t @ Type::INT2) => (t.oid(), 2, true, "s", "p"),
@@ -239,6 +243,8 @@ impl<C: CatalogInfo> PgAttributeTable<C> {
             Ok(t @ Type::TIMESTAMP) => (t.oid(), 8, true, "d", "p"),
             Ok(t @ Type::TIMESTAMPTZ) => (t.oid(), 8, true, "d", "p"),
             Ok(t @ Type::NUMERIC) => (t.oid(), -1, false, "i", "m"),
+            Ok(t @ Type::JSON) => (t.oid(), -1, false, "i", "x"),
+            Ok(t @ Type::JSONB) => (t.oid(), -1, false, "i", "x"),
             Ok(t @ Type::INT4_ARRAY) => (t.oid(), -1, false, "i", "x"),
             Ok(t @ Type::TEXT_ARRAY) => (t.oid(), -1, false, "i", "x"),
             _ => (Type::TEXT.oid(), -1, false, "i", "x"), // Default to text for unknown types

@@ -272,6 +272,95 @@ fn coerce_interval_value(value: Option<Interval>, target: &DataType) -> PgWireRe
     }
 }
 
+/// A Postgres `json` / `jsonb` parameter decoded from either the text or
+/// binary wire format.
+///
+/// The binary form of `jsonb` starts with a one-byte format version (1); the
+/// remaining bytes are the JSON document. `json` has no version header.
+#[derive(Debug)]
+struct JsonParam(String);
+
+impl<'a> postgres_types::FromSql<'a> for JsonParam {
+    fn from_sql(
+        ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let raw = if *ty == Type::JSONB {
+            let (version, rest) = raw.split_first().ok_or("empty jsonb binary parameter")?;
+            // PostgreSQL currently only emits format version 1.
+            if *version != 1 {
+                return Err("unsupported jsonb encoding version".into());
+            }
+            rest
+        } else {
+            raw
+        };
+        Ok(JsonParam(std::str::from_utf8(raw)?.to_owned()))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(*ty, Type::JSON | Type::JSONB)
+    }
+}
+
+impl<'a> pgwire::types::FromSqlText<'a> for JsonParam {
+    fn from_sql_text(
+        _ty: &Type,
+        input: &'a [u8],
+        _format_options: &FormatOptions,
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(JsonParam(std::str::from_utf8(input)?.to_owned()))
+    }
+}
+
+/// Validate a `json` value without changing its text.
+fn validate_json(text: &str) -> PgWireResult<()> {
+    serde_json::from_str::<serde_json::Value>(text).map_err(|error| {
+        PgWireError::UserError(Box::new(ErrorInfo::new(
+            "ERROR".to_owned(),
+            "22P02".to_owned(),
+            format!("invalid input syntax for type json: {error}"),
+        )))
+    })?;
+    Ok(())
+}
+
+/// Sort object keys recursively so `jsonb` has a stable text form even when
+/// `serde_json` is built with `preserve_order`.
+fn canonicalize_jsonb(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<_> = map.into_iter().collect();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            serde_json::Value::Object(entries.into_iter().collect())
+        }
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(canonicalize_jsonb).collect())
+        }
+        other => other,
+    }
+}
+
+/// Parse and canonicalize a `jsonb` value the way PostgreSQL stores it:
+/// duplicate keys keep their last value, object keys are ordered, and
+/// insignificant whitespace is removed.
+fn normalize_jsonb(text: &str) -> PgWireResult<String> {
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|error| {
+        PgWireError::UserError(Box::new(ErrorInfo::new(
+            "ERROR".to_owned(),
+            "22P02".to_owned(),
+            format!("invalid input syntax for type jsonb: {error}"),
+        )))
+    })?;
+    serde_json::to_string(&canonicalize_jsonb(value)).map_err(|error| {
+        PgWireError::UserError(Box::new(ErrorInfo::new(
+            "ERROR".to_owned(),
+            "XX000".to_owned(),
+            format!("could not serialize jsonb value: {error}"),
+        )))
+    })
+}
+
 /// A Postgres `oid` parameter decoded as a signed `i32`.
 ///
 /// Postgres has no unsigned integer types, and DataFusion catalog `oid` columns
@@ -767,8 +856,26 @@ where
                 deserialized_params.push(ScalarValue::Utf8(value));
             }
             Type::JSON | Type::JSONB => {
-                let value = portal.parameter::<String>(i, &pg_type)?;
-                // Store JSON as string for now
+                let value = portal
+                    .parameter::<JsonParam>(i, &pg_type)
+                    .map_err(|error| {
+                        PgWireError::UserError(Box::new(ErrorInfo::new(
+                            "ERROR".to_owned(),
+                            "22P02".to_owned(),
+                            format!("invalid input syntax for type {}: {error}", pg_type.name()),
+                        )))
+                    })?;
+                let value = match value {
+                    Some(JsonParam(text)) => {
+                        if pg_type == Type::JSONB {
+                            Some(normalize_jsonb(&text)?)
+                        } else {
+                            validate_json(&text)?;
+                            Some(text)
+                        }
+                    }
+                    None => None,
+                };
                 deserialized_params.push(ScalarValue::Utf8(value));
             }
             Type::INTERVAL => {
@@ -1156,7 +1263,10 @@ mod tests {
     use pg_interval::Interval;
     use pgwire::{
         api::{portal::Portal, stmt::StoredStatement},
-        messages::{data::FORMAT_CODE_BINARY, extendedquery::Bind},
+        messages::{
+            data::{FORMAT_CODE_BINARY, FORMAT_CODE_TEXT},
+            extendedquery::Bind,
+        },
     };
     use postgres_types::{ToSql, Type};
     use rust_decimal::Decimal;
@@ -1745,11 +1855,65 @@ mod tests {
         );
     }
 
-    // -- UUID, JSON --
-    // These types don't have FromSql<String> support in pgwire, so they
-    // fall through to the `_` wildcard branch which calls
-    // `portal.parameter::<String>()`. Testing them requires a postgres
-    // round-trip, so we skip unit tests for these.
+    // -- JSON --
+
+    #[test]
+    fn test_json_parameter_preserves_text() {
+        let portal = make_portal(&serde_json::json!({"b": 2, "a": 1}), Type::JSON);
+        assert_eq!(
+            get_result(&portal, None),
+            ScalarValue::Utf8(Some(r#"{"a":1,"b":2}"#.to_string()))
+        );
+    }
+
+    #[test]
+    fn test_jsonb_parameter_is_normalized() {
+        let portal = make_portal(&serde_json::json!({"b": 2, "a": 1}), Type::JSONB);
+        assert_eq!(
+            get_result(&portal, None),
+            ScalarValue::Utf8(Some(r#"{"a":1,"b":2}"#.to_string()))
+        );
+    }
+
+    #[test]
+    fn test_json_parameter_text_format_keeps_source_text() {
+        let statement = StoredStatement::new("id".into(), "s", vec![Some(Type::JSON)]);
+        let bind = Bind::new(
+            None,
+            None,
+            vec![FORMAT_CODE_TEXT],
+            vec![Some(Bytes::from_static(b"{ \"b\": 2, \"a\": 1 }"))],
+            vec![],
+        );
+        let portal = Portal::try_new(&bind, Arc::new(statement)).unwrap();
+        assert_eq!(
+            get_result(&portal, None),
+            ScalarValue::Utf8(Some(r#"{ "b": 2, "a": 1 }"#.to_string()))
+        );
+    }
+
+    #[test]
+    fn test_invalid_json_parameter_is_22p02() {
+        let statement = StoredStatement::new("id".into(), "s", vec![Some(Type::JSONB)]);
+        let bind = Bind::new(
+            None,
+            None,
+            vec![FORMAT_CODE_TEXT],
+            vec![Some(Bytes::from_static(b"{not json"))],
+            vec![],
+        );
+        let portal = Portal::try_new(&bind, Arc::new(statement)).unwrap();
+        let error = deserialize_parameters(&portal, &[None]).unwrap_err();
+        let text = error.to_string();
+        assert!(
+            text.contains("22P02") || text.contains("invalid input syntax"),
+            "{text}"
+        );
+    }
+
+    // -- UUID --
+    // UUID falls through the string path; testing it requires a postgres
+    // round-trip, so it has no unit test here.
 
     // -- Advanced types (MONEY, INET, MACADDR) --
     // Same as above: pgwire's FromSql<String> doesn't accept MONEY/INET/MACADDR.

@@ -171,6 +171,45 @@ pub const PG_VECTOR_TYPE_OID: u32 = 16385;
 /// pick the right encoding per result format.
 pub const PG_CHAR_KEY: &str = "pg.char";
 
+/// The Arrow canonical JSON extension name (`arrow.json`).
+///
+/// JSON columns are stored as UTF-8 text with this extension marker. The
+/// canonical extension is what tells SQL engines, Vortex and Parquet that the
+/// string holds JSON without changing the physical Arrow type.
+pub const ARROW_JSON_EXTENSION_NAME: &str = "arrow.json";
+
+/// Field metadata key marking a UTF-8 Arrow field as a Postgres `json` or
+/// `jsonb` column.
+///
+/// The value is `"json"` or `"jsonb"`. A field carrying this marker must also
+/// carry [`ARROW_JSON_EXTENSION_NAME`]; the marker is what distinguishes a
+/// Postgres `jsonb` column from the canonical Arrow JSON extension (which maps
+/// to Postgres `json` on its own).
+pub const PG_JSON_KEY: &str = "pg.json";
+
+/// The Postgres JSON type named by a [`PG_JSON_KEY`] marker, if the field is
+/// both marked and carries the Arrow canonical JSON extension.
+///
+/// Requiring the extension marker keeps `jsonb_col::text` a `TEXT` cast:
+/// DataFusion's type-only cast propagates field metadata while stripping the
+/// extension keys, so the stale `pg.json` marker alone must not claim JSON.
+pub fn pg_json_type(field: &Field) -> Option<Type> {
+    let kind = field.metadata().get(PG_JSON_KEY)?;
+    if field.extension_type_name() != Some(ARROW_JSON_EXTENSION_NAME) {
+        return None;
+    }
+    match kind.as_str() {
+        "json" => Some(Type::JSON),
+        "jsonb" => Some(Type::JSONB),
+        _ => None,
+    }
+}
+
+/// True when `field` carries the Arrow canonical JSON extension marker.
+pub fn is_arrow_json_field(field: &Field) -> bool {
+    field.extension_type_name() == Some(ARROW_JSON_EXTENSION_NAME)
+}
+
 /// Map an oid-alias kind name ([`PG_OID_ALIAS_KEY`] value) to its Postgres
 /// [`Type`], e.g. `"oid"` -> OID 26, `"regtype"` -> OID 2206.
 ///
@@ -251,9 +290,19 @@ pub fn field_into_pg_type(field: &Arc<Field>) -> PgWireResult<Type> {
         return Ok(pg_vector_type());
     }
 
+    // A pg.json-tagged column with the Arrow canonical JSON extension is a
+    // Postgres json/jsonb column. Check this before the generic extension
+    // dispatch so jsonb wins over the canonical extension's default `json`.
+    if let Some(json_type) = pg_json_type(field) {
+        return Ok(json_type);
+    }
+
     let arrow_type = field.data_type();
 
     match field.extension_type_name() {
+        // The Arrow canonical JSON extension without a `pg.json` marker is a
+        // Postgres `json` column.
+        Some(ARROW_JSON_EXTENSION_NAME) => Ok(Type::JSON),
         // As of arrow 56, there are additional extension logical type that is
         // defined using field metadata, for instance, json or geo.
         //
@@ -440,6 +489,55 @@ mod tests {
         // An ordinary Int32 column with no pg.oid_alias metadata is unchanged.
         let field = Arc::new(Field::new("c", DataType::Int32, false));
         assert_eq!(field_into_pg_type(&field).unwrap(), Type::INT4);
+    }
+
+    fn json_field(kind: Option<&str>) -> Arc<Field> {
+        let mut metadata = std::collections::HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            ARROW_JSON_EXTENSION_NAME.to_string(),
+        )]);
+        if let Some(kind) = kind {
+            metadata.insert(PG_JSON_KEY.to_string(), kind.to_string());
+        }
+        Arc::new(Field::new("payload", DataType::Utf8, true).with_metadata(metadata))
+    }
+
+    #[test]
+    fn pg_json_marker_selects_json_or_jsonb() {
+        assert_eq!(
+            field_into_pg_type(&json_field(Some("json"))).unwrap(),
+            Type::JSON
+        );
+        assert_eq!(
+            field_into_pg_type(&json_field(Some("jsonb"))).unwrap(),
+            Type::JSONB
+        );
+        assert_eq!(
+            field_into_pg_type(&json_field(Some("json"))).unwrap().oid(),
+            Type::JSON.oid()
+        );
+        assert_eq!(
+            field_into_pg_type(&json_field(Some("jsonb")))
+                .unwrap()
+                .oid(),
+            Type::JSONB.oid()
+        );
+    }
+
+    #[test]
+    fn arrow_json_without_pg_marker_is_json() {
+        assert_eq!(field_into_pg_type(&json_field(None)).unwrap(), Type::JSON);
+    }
+
+    #[test]
+    fn pg_json_marker_without_extension_is_text() {
+        // `jsonb_col::text` is a type-only cast: DataFusion keeps the source
+        // `pg.json` metadata but strips the extension keys, so the stale marker
+        // must not make the result JSONB again.
+        let field = Arc::new(Field::new("payload", DataType::Utf8, true).with_metadata(
+            std::collections::HashMap::from([(PG_JSON_KEY.to_string(), "jsonb".to_string())]),
+        ));
+        assert_eq!(field_into_pg_type(&field).unwrap(), Type::TEXT);
     }
 
     #[cfg(feature = "pgvector")]

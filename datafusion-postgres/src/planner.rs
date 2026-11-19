@@ -104,6 +104,10 @@ pub fn parameter_override_types(plan: &LogicalPlan) -> HashMap<String, Type> {
                     if arrow_pg::datatypes::is_pg_vector_field(field) {
                         overrides.insert(id.to_string(), arrow_pg::datatypes::pg_vector_type());
                     }
+                    // Postgres `json` / `jsonb`
+                    if let Some(ty) = arrow_pg::datatypes::pg_json_type(field) {
+                        overrides.insert(id.to_string(), ty);
+                    }
                 }
                 Ok(TreeNodeRecursion::Continue)
             });

@@ -406,6 +406,7 @@ dependencies = [
  "postgis",
  "postgres-types",
  "rust_decimal",
+ "serde_json",
  "tokio",
 ]
 
@@ -1752,6 +1753,7 @@ dependencies = [
  "rust_decimal",
  "rustls-pemfile",
  "rustls-pki-types",
+ "serde_json",
  "socket2",
  "tokio",
  "tokio-rustls",
