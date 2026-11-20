@@ -191,7 +191,7 @@ fn format_postgres_type(type_oid: i32, typemod: i32) -> String {
             // For array types, we need to look up the base type
             // This is a simplified approach - in practice you'd query pg_types
             if let Some(base_oid) = get_array_base_type(oid) {
-                format!("{}[]", format_postgres_type(base_oid, -1))
+                format!("{}[]", format_postgres_type(base_oid, typemod))
             } else {
                 format!("oid({oid})")
             }
