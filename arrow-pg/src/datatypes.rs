@@ -394,7 +394,7 @@ pub fn field_into_pg_type(field: &Arc<Field>) -> PgWireResult<Type> {
 
     // PostgreSQL money is stored as an Arrow decimal, but reports the MONEY
     // OID. The marker is explicit because the physical type is NUMERIC.
-    if is_pg_money_field(field) {
+    if is_pg_money_field(field) && matches!(field.data_type(), DataType::Decimal128(_, _)) {
         return Ok(Type::MONEY);
     }
 
