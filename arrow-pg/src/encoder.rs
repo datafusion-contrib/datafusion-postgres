@@ -286,22 +286,44 @@ fn encode_pg_uuid<T: Encoder>(
     if arr.is_null(idx) {
         return encoder.encode_field(&None::<PgUuidValue>, pg_field);
     }
-    let array = arr
-        .as_any()
-        .downcast_ref::<FixedSizeBinaryArray>()
-        .ok_or_else(|| {
-            PgWireError::ApiError(ToSqlError::from("UUID column is not FixedSizeBinary(16)"))
-        })?;
-    let bytes = array.value(idx);
-    if bytes.len() != 16 {
-        return Err(PgWireError::ApiError(ToSqlError::from(format!(
-            "UUID value has {} bytes, expected 16",
-            bytes.len()
-        ))));
-    }
-    let mut value = [0u8; 16];
-    value.copy_from_slice(bytes);
-    encoder.encode_field(&Some(PgUuidValue(value)), pg_field)
+    let value = match arr.data_type() {
+        DataType::FixedSizeBinary(16) => {
+            let array = arr
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .expect("FixedSizeBinary(16) array");
+            let bytes = array.value(idx);
+            let mut value = [0u8; 16];
+            value.copy_from_slice(bytes);
+            PgUuidValue(value)
+        }
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            let text = if let Some(array) = arr.as_any().downcast_ref::<StringArray>() {
+                array.value(idx)
+            } else if let Some(array) = arr.as_any().downcast_ref::<LargeStringArray>() {
+                array.value(idx)
+            } else {
+                arr.as_any()
+                    .downcast_ref::<StringViewArray>()
+                    .expect("UTF-8 array")
+                    .value(idx)
+            };
+            let uuid = uuid::Uuid::parse_str(text.trim()).map_err(|error| {
+                PgWireError::UserError(Box::new(ErrorInfo::new(
+                    "ERROR".to_string(),
+                    "22P02".to_string(),
+                    format!("invalid input syntax for type uuid: {text:?}: {error}"),
+                )))
+            })?;
+            PgUuidValue(*uuid.as_bytes())
+        }
+        other => {
+            return Err(PgWireError::ApiError(ToSqlError::from(format!(
+                "UUID column must be UTF-8 or FixedSizeBinary(16), got {other}"
+            ))));
+        }
+    };
+    encoder.encode_field(&Some(value), pg_field)
 }
 
 /// A PostgreSQL money value in int64 cents.

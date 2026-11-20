@@ -105,6 +105,23 @@ pub fn encode_list<T: Encoder>(
     pg_field: &FieldInfo,
 ) -> PgWireResult<()> {
     match arr.data_type() {
+        DataType::Utf8 if pg_field.datatype().oid() == 2951 => {
+            let array = arr.as_any().downcast_ref::<StringArray>().unwrap();
+            let values: Result<Vec<Option<PgUuidValue>>, _> = array
+                .iter()
+                .map(|value| {
+                    value
+                        .map(|text| {
+                            uuid::Uuid::parse_str(text.trim())
+                                .map(|uuid| PgUuidValue(*uuid.as_bytes()))
+                                .map_err(|error| PgWireError::ApiError(Box::new(error)))
+                        })
+                        .transpose()
+                })
+                .collect();
+            encoder.encode_field(&values?, pg_field)?;
+            Ok(())
+        }
         DataType::FixedSizeBinary(16) if pg_field.datatype().oid() == 2951 => {
             let array = arr.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
             let values: Vec<Option<PgUuidValue>> = (0..array.len())
