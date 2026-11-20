@@ -280,6 +280,12 @@ fn coerce_interval_value(value: Option<Interval>, target: &DataType) -> PgWireRe
 #[derive(Debug, Clone, Copy)]
 struct UuidParam([u8; 16]);
 
+impl UuidParam {
+    fn canonical_text(self) -> String {
+        uuid::Uuid::from_bytes(self.0).hyphenated().to_string()
+    }
+}
+
 impl<'a> postgres_types::FromSql<'a> for UuidParam {
     fn from_sql(
         _ty: &Type,
@@ -1231,7 +1237,7 @@ where
                     }
                 }
             }
-            Type::TEXT_ARRAY | Type::VARCHAR_ARRAY => {
+            Type::TEXT_ARRAY | Type::VARCHAR_ARRAY | Type::BPCHAR_ARRAY => {
                 let value = portal.parameter::<Vec<Option<String>>>(i, &pg_type)?;
                 match value {
                     Some(values) => {
@@ -1247,6 +1253,117 @@ where
                             true,
                             1,
                         ));
+                    }
+                }
+            }
+            // Semantic arrays whose binary elements need a custom decoder. A
+            // client binds these whenever the parameter description reports
+            // UUID[], MONEY[] or a numeric[] with Decimal256 precision.
+            Type::UUID_ARRAY => {
+                let value = portal.parameter::<Vec<Option<UuidParam>>>(i, &pg_type)?;
+                match value {
+                    Some(values) => {
+                        let scalar_values: Vec<ScalarValue> = values
+                            .into_iter()
+                            .map(|uuid| ScalarValue::Utf8(uuid.map(|uuid| uuid.canonical_text())))
+                            .collect();
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(&scalar_values, &DataType::Utf8),
+                        ));
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(
+                            DataType::Utf8,
+                            true,
+                            1,
+                        ));
+                    }
+                }
+            }
+            Type::MONEY_ARRAY => {
+                let value = portal.parameter::<Vec<Option<MoneyParam>>>(i, &pg_type)?;
+                let (precision, scale) = match inferenced_type {
+                    Some(DataType::List(field)) => match field.data_type() {
+                        DataType::Decimal128(precision, scale) => (*precision, *scale),
+                        _ => (19, 2),
+                    },
+                    _ => (19, 2),
+                };
+                match value {
+                    Some(values) => {
+                        let scalar_values: Vec<ScalarValue> = values
+                            .into_iter()
+                            .map(|money| {
+                                ScalarValue::Decimal128(
+                                    money.map(|money| money_mantissa(money.0, scale)),
+                                    precision,
+                                    scale,
+                                )
+                            })
+                            .collect();
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(
+                                &scalar_values,
+                                &DataType::Decimal128(precision, scale),
+                            ),
+                        ));
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(
+                            DataType::Decimal128(precision, scale),
+                            true,
+                            1,
+                        ));
+                    }
+                }
+            }
+            Type::NUMERIC_ARRAY
+                if matches!(
+                    inferenced_type,
+                    Some(DataType::List(field))
+                        if matches!(
+                            field.data_type(),
+                            DataType::Decimal128(..) | DataType::Decimal256(..)
+                        )
+                ) =>
+            {
+                let value = portal.parameter::<Vec<Option<NumericParam>>>(i, &pg_type)?;
+                let (element, precision, scale) = match inferenced_type {
+                    Some(DataType::List(field)) => match field.data_type() {
+                        DataType::Decimal128(precision, scale) => {
+                            (DataType::Decimal128(*precision, *scale), *precision, *scale)
+                        }
+                        DataType::Decimal256(precision, scale) => {
+                            (DataType::Decimal256(*precision, *scale), *precision, *scale)
+                        }
+                        _ => unreachable!(),
+                    },
+                    _ => unreachable!(),
+                };
+                match value {
+                    Some(values) => {
+                        let scalar_values: Vec<ScalarValue> = values
+                            .into_iter()
+                            .map(|numeric| {
+                                let parsed = numeric
+                                    .map(|numeric| parse_decimal_i256(&numeric.0, precision, scale))
+                                    .transpose()?;
+                                Ok::<_, Box<dyn std::error::Error + Sync + Send>>(match &element {
+                                    DataType::Decimal128(..) => ScalarValue::Decimal128(
+                                        parsed.and_then(|value| value.to_i128()),
+                                        precision,
+                                        scale,
+                                    ),
+                                    _ => ScalarValue::Decimal256(parsed, precision, scale),
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(&scalar_values, &element),
+                        ));
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(element, true, 1));
                     }
                 }
             }
@@ -1471,6 +1588,16 @@ where
     Ok(ParamValues::List(
         deserialized_params.into_iter().map(|p| p.into()).collect(),
     ))
+}
+
+/// Convert a money value (int64 cents) to a decimal mantissa at `scale`.
+fn money_mantissa(cents: i64, scale: i8) -> i128 {
+    let cents = i128::from(cents);
+    match scale.cmp(&2) {
+        std::cmp::Ordering::Equal => cents,
+        std::cmp::Ordering::Greater => cents * 10i128.pow((scale - 2) as u32),
+        std::cmp::Ordering::Less => cents / 10i128.pow((2 - scale) as u32),
+    }
 }
 
 fn parse_decimal_i256(
