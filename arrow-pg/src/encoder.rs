@@ -901,13 +901,13 @@ pub fn encode_value<T: Encoder>(
     // Arrow canonical UUID extension. The storage is FixedSizeBinary(16),
     // but the wire type is UUID and the text format is the canonical
     // hyphenated form (not bytea's `\x...`).
-    if crate::datatypes::is_pg_uuid_field(arrow_field) || pg_field.datatype() == &Type::UUID {
+    if pg_field.datatype() == &Type::UUID {
         return encode_pg_uuid(encoder, arr, idx, pg_field);
     }
 
     // PostgreSQL money is an int64 count of cents on the wire; LakeSoul stores
     // it as an Arrow decimal with scale 2 and a `pg.type=money` marker.
-    if crate::datatypes::is_pg_money_field(arrow_field) || pg_field.datatype() == &Type::MONEY {
+    if pg_field.datatype() == &Type::MONEY {
         return encode_pg_money(encoder, arr, idx, pg_field);
     }
 
