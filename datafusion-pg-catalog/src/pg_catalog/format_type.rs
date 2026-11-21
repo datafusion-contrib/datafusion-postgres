@@ -186,6 +186,12 @@ fn format_postgres_type(type_oid: i32, typemod: i32) -> String {
         // UUID
         2950 => "uuid".to_string(),
 
+        // pgvector's `vector` type (fixed OID, like a real extension install).
+        // Drivers and ORMs reflect columns through format_type; reporting the
+        // extension's type name instead of a raw OID keeps that working.
+        #[cfg(feature = "pgvector")]
+        oid if oid == arrow_pg::datatypes::PG_VECTOR_TYPE_OID as i32 => "vector".to_string(),
+
         // Arrays (append [] to base type)
         oid if oid > 0 => {
             // For array types, we need to look up the base type
@@ -275,4 +281,17 @@ impl ScalarUDFImpl for FormatTypeUDF {
 
 pub fn create_format_type_udf() -> ScalarUDF {
     FormatTypeUDF::new().into_scalar_udf()
+}
+
+#[cfg(all(test, feature = "pgvector"))]
+mod tests {
+    use super::format_postgres_type;
+
+    #[test]
+    fn pgvector_type_formats_as_vector_not_raw_oid() {
+        assert_eq!(
+            format_postgres_type(arrow_pg::datatypes::PG_VECTOR_TYPE_OID as i32, -1),
+            "vector"
+        );
+    }
 }
