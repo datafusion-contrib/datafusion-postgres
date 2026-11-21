@@ -46,6 +46,11 @@ pub(crate) fn with_pg_vector_support(
             "typname" => *scalar = ScalarValue::Utf8(Some("vector".to_string())),
             "typtype" => *scalar = ScalarValue::Utf8(Some("b".to_string())),
             "typnamespace" => *scalar = ScalarValue::Int32(Some(PG_CATALOG_NAMESPACE_OID)),
+            // pgjdbc compares typinput against 'pg_catalog.array_in'::regproc
+            // while caching type info. An empty string is cast to an OID and
+            // fails, so give the row valid regproc display names.
+            "typinput" => *scalar = ScalarValue::Utf8(Some("vector_in".to_string())),
+            "typoutput" => *scalar = ScalarValue::Utf8(Some("vector_out".to_string())),
             _ => {}
         }
     })?);
