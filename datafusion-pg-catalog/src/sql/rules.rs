@@ -919,10 +919,11 @@ const REG_CAST_SPECS: &[RegCastSpec] = &[
         type_name: "regtype",
         query: "SELECT oid FROM pg_catalog.pg_type WHERE typname = $1",
     },
-    // regproc: function name -> pg_proc.oid
+    // regproc: function name -> pg_proc.oid. Drivers use schema-qualified
+    // names such as 'pg_catalog.array_in'; pg_proc stores the bare name.
     RegCastSpec {
         type_name: "regproc",
-        query: "SELECT oid FROM pg_catalog.pg_proc WHERE proname = $1",
+        query: "SELECT oid FROM pg_catalog.pg_proc WHERE proname = split_part($1, '.', 2)",
     },
 ];
 
@@ -1435,7 +1436,12 @@ mod tests {
         assert_rewrite!(
             &rules,
             "SELECT 'array_in'::regproc",
-            "SELECT (SELECT oid FROM pg_catalog.pg_proc WHERE proname = 'array_in')"
+            "SELECT (SELECT oid FROM pg_catalog.pg_proc WHERE proname = split_part('array_in', '.', 2))"
+        );
+        assert_rewrite!(
+            &rules,
+            "SELECT 'pg_catalog.array_in'::regproc",
+            "SELECT (SELECT oid FROM pg_catalog.pg_proc WHERE proname = split_part('pg_catalog.array_in', '.', 2))"
         );
         assert_rewrite!(
             &rules,
