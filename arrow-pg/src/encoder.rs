@@ -210,6 +210,383 @@ fn encode_pg_char<T: Encoder>(
     }
 }
 
+/// A UUID value encoded in PostgreSQL's text or binary format.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PgUuidValue(pub(crate) [u8; 16]);
+
+impl PgUuidValue {
+    fn text(self) -> String {
+        let b = self.0;
+        format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            b[0],
+            b[1],
+            b[2],
+            b[3],
+            b[4],
+            b[5],
+            b[6],
+            b[7],
+            b[8],
+            b[9],
+            b[10],
+            b[11],
+            b[12],
+            b[13],
+            b[14],
+            b[15]
+        )
+    }
+}
+
+impl ToSqlText for PgUuidValue {
+    fn to_sql_text(
+        &self,
+        _ty: &Type,
+        out: &mut BytesMut,
+        _format_options: &pgwire::types::format::FormatOptions,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        out.put_slice(self.text().as_bytes());
+        Ok(IsNull::No)
+    }
+}
+
+impl ToSql for PgUuidValue {
+    fn to_sql(
+        &self,
+        _ty: &Type,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        out.put_slice(&self.0);
+        Ok(IsNull::No)
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(ty.oid(), 2950 | 2951)
+    }
+
+    fn to_sql_checked(
+        &self,
+        ty: &Type,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        if !Self::accepts(ty) {
+            return Err("UUID value bound to a non-UUID result type".into());
+        }
+        self.to_sql(ty, out)
+    }
+}
+
+fn encode_pg_uuid<T: Encoder>(
+    encoder: &mut T,
+    arr: &Arc<dyn Array>,
+    idx: usize,
+    pg_field: &FieldInfo,
+) -> PgWireResult<()> {
+    if arr.is_null(idx) {
+        return encoder.encode_field(&None::<PgUuidValue>, pg_field);
+    }
+    let value = match arr.data_type() {
+        DataType::FixedSizeBinary(16) => {
+            let array = arr
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .expect("FixedSizeBinary(16) array");
+            let bytes = array.value(idx);
+            let mut value = [0u8; 16];
+            value.copy_from_slice(bytes);
+            PgUuidValue(value)
+        }
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            let text = if let Some(array) = arr.as_any().downcast_ref::<StringArray>() {
+                array.value(idx)
+            } else if let Some(array) = arr.as_any().downcast_ref::<LargeStringArray>() {
+                array.value(idx)
+            } else {
+                arr.as_any()
+                    .downcast_ref::<StringViewArray>()
+                    .expect("UTF-8 array")
+                    .value(idx)
+            };
+            let uuid = uuid::Uuid::parse_str(text.trim()).map_err(|error| {
+                PgWireError::UserError(Box::new(ErrorInfo::new(
+                    "ERROR".to_string(),
+                    "22P02".to_string(),
+                    format!("invalid input syntax for type uuid: {text:?}: {error}"),
+                )))
+            })?;
+            PgUuidValue(*uuid.as_bytes())
+        }
+        other => {
+            return Err(PgWireError::ApiError(ToSqlError::from(format!(
+                "UUID column must be UTF-8 or FixedSizeBinary(16), got {other}"
+            ))));
+        }
+    };
+    encoder.encode_field(&Some(value), pg_field)
+}
+
+/// A PostgreSQL money value in int64 cents.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PgMoneyValue(pub(crate) i64);
+
+impl PgMoneyValue {
+    fn text(self) -> String {
+        let negative = self.0 < 0;
+        let cents = self.0.unsigned_abs();
+        let whole = cents / 100;
+        let fraction = cents % 100;
+        let mut whole = whole.to_string();
+        let mut grouped = String::new();
+        while whole.len() > 3 {
+            let split = whole.len() - 3;
+            grouped.insert_str(0, &format!(",{}", &whole[split..]));
+            whole.truncate(split);
+        }
+        grouped.insert_str(0, &whole);
+        format!(
+            "{}${}.{:02}",
+            if negative { "-" } else { "" },
+            grouped,
+            fraction
+        )
+    }
+}
+
+impl ToSqlText for PgMoneyValue {
+    fn to_sql_text(
+        &self,
+        _ty: &Type,
+        out: &mut BytesMut,
+        _format_options: &pgwire::types::format::FormatOptions,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        out.put_slice(self.text().as_bytes());
+        Ok(IsNull::No)
+    }
+}
+
+impl ToSql for PgMoneyValue {
+    fn to_sql(
+        &self,
+        _ty: &Type,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        out.put_i64(self.0);
+        Ok(IsNull::No)
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(ty.oid(), 790 | 791)
+    }
+
+    fn to_sql_checked(
+        &self,
+        ty: &Type,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        if !Self::accepts(ty) {
+            return Err("money value bound to a non-money result type".into());
+        }
+        self.to_sql(ty, out)
+    }
+}
+
+pub(crate) fn money_cents(value: i128, scale: i8) -> PgWireResult<i64> {
+    let cents = if scale == 2 {
+        value
+    } else if scale < 2 {
+        value
+            .checked_mul(10i128.pow((2 - scale) as u32))
+            .ok_or_else(|| PgWireError::ApiError(ToSqlError::from("money value out of range")))?
+    } else {
+        value / 10i128.pow((scale - 2) as u32)
+    };
+    i64::try_from(cents)
+        .map_err(|_| PgWireError::ApiError(ToSqlError::from("money value out of range")))
+}
+
+fn encode_pg_money<T: Encoder>(
+    encoder: &mut T,
+    arr: &Arc<dyn Array>,
+    idx: usize,
+    pg_field: &FieldInfo,
+) -> PgWireResult<()> {
+    if arr.is_null(idx) {
+        return encoder.encode_field(&None::<PgMoneyValue>, pg_field);
+    }
+    let (value, scale) = match arr.data_type() {
+        DataType::Decimal128(_, scale) => (
+            arr.as_any()
+                .downcast_ref::<Decimal128Array>()
+                .unwrap()
+                .value(idx),
+            *scale,
+        ),
+        other => {
+            return Err(PgWireError::ApiError(ToSqlError::from(format!(
+                "money column must be Decimal128(19,2), got {other}"
+            ))));
+        }
+    };
+    let cents = money_cents(value, scale)?;
+    encoder.encode_field(&Some(PgMoneyValue(cents)), pg_field)
+}
+
+/// A Decimal256 value encoded as PostgreSQL numeric text/binary.
+#[derive(Debug, Clone)]
+pub(crate) struct PgNumericValue {
+    pub(crate) text: String,
+    pub(crate) scale: u32,
+}
+
+impl PgNumericValue {
+    pub(crate) fn from_i256(value: i256, scale: i8) -> Self {
+        let negative = value < i256::ZERO;
+        let digits = if negative {
+            (-value).to_string()
+        } else {
+            value.to_string()
+        };
+        Self {
+            text: decimal_text(&digits, negative, scale),
+            scale: scale.max(0) as u32,
+        }
+    }
+
+    fn payload(&self) -> Result<Vec<u8>, Box<dyn std::error::Error + Sync + Send>> {
+        let (negative, digits) = if let Some(rest) = self.text.strip_prefix('-') {
+            (true, rest)
+        } else {
+            (false, self.text.as_str())
+        };
+        let mut parts = digits.split('.');
+        let integer = parts.next().unwrap_or("0");
+        let fraction = parts.next().unwrap_or("");
+        let mut all = String::with_capacity(integer.len() + self.scale as usize);
+        all.push_str(integer);
+        all.push_str(fraction);
+        while all.len() < self.scale as usize + 1 {
+            all.insert(0, '0');
+        }
+        let integer_len = all.len() - self.scale as usize;
+        let mut integer_digits = all[..integer_len].trim_start_matches('0').to_string();
+        if integer_digits.is_empty() {
+            integer_digits.push('0');
+        }
+        let mut fractional = all[integer_len..].to_string();
+        while fractional.len() < self.scale as usize {
+            fractional.push('0');
+        }
+        let mut groups: Vec<u16> = Vec::new();
+        let mut int_work = integer_digits;
+        while int_work.len() % 4 != 0 {
+            int_work.insert(0, '0');
+        }
+        for chunk in int_work.as_bytes().chunks(4) {
+            groups.push(std::str::from_utf8(chunk)?.parse::<u16>()?);
+        }
+        let weight = groups.len() as i32 - 1;
+        let mut frac_work = fractional;
+        while frac_work.len() % 4 != 0 {
+            frac_work.push('0');
+        }
+        for chunk in frac_work.as_bytes().chunks(4) {
+            groups.push(std::str::from_utf8(chunk)?.parse::<u16>()?);
+        }
+        // Preserve the requested display scale even for zero.
+        let mut ndigits = groups.len();
+        while ndigits > 0 && groups[ndigits - 1] == 0 && ndigits > (weight + 1).max(0) as usize {
+            ndigits -= 1;
+        }
+        let mut out = BytesMut::with_capacity(8 + ndigits * 2);
+        out.put_u16(ndigits as u16);
+        out.put_i16(weight as i16);
+        out.put_u16(if negative { 0x4000 } else { 0 });
+        out.put_u16(self.scale as u16);
+        for group in &groups[..ndigits] {
+            out.put_u16(*group);
+        }
+        Ok(out.to_vec())
+    }
+}
+
+impl ToSqlText for PgNumericValue {
+    fn to_sql_text(
+        &self,
+        _ty: &Type,
+        out: &mut BytesMut,
+        _format_options: &pgwire::types::format::FormatOptions,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        out.put_slice(self.text.as_bytes());
+        Ok(IsNull::No)
+    }
+}
+
+impl ToSql for PgNumericValue {
+    fn to_sql(
+        &self,
+        _ty: &Type,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        out.put_slice(&self.payload()?);
+        Ok(IsNull::No)
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(ty.oid(), 1700 | 1231)
+    }
+
+    fn to_sql_checked(
+        &self,
+        ty: &Type,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        if !Self::accepts(ty) {
+            return Err("numeric value bound to a non-numeric result type".into());
+        }
+        self.to_sql(ty, out)
+    }
+}
+
+fn decimal_text(digits: &str, negative: bool, scale: i8) -> String {
+    let mut text = if scale <= 0 {
+        digits.to_string()
+    } else {
+        let scale = scale as usize;
+        let mut digits = digits.to_string();
+        if digits.len() <= scale {
+            digits.insert_str(0, &"0".repeat(scale + 1 - digits.len()));
+        }
+        let split = digits.len() - scale;
+        format!("{}.{}", &digits[..split], &digits[split..])
+    };
+    if negative {
+        text.insert(0, '-');
+    }
+    text
+}
+
+fn encode_decimal256<T: Encoder>(
+    encoder: &mut T,
+    arr: &Arc<dyn Array>,
+    idx: usize,
+    pg_field: &FieldInfo,
+) -> PgWireResult<()> {
+    if arr.is_null(idx) {
+        return encoder.encode_field(&None::<PgNumericValue>, pg_field);
+    }
+    let DataType::Decimal256(_, scale) = arr.data_type() else {
+        unreachable!()
+    };
+    let value = arr
+        .as_any()
+        .downcast_ref::<Decimal256Array>()
+        .unwrap()
+        .value(idx);
+    let value = PgNumericValue::from_i256(value, *scale);
+    encoder.encode_field(&Some(value), pg_field)
+}
+
 /// A pgvector `vector` value that pgwire serializes in the format the client
 /// requested: binary (pgvector layout, big-endian `int16` dimension followed by
 /// big-endian IEEE float32s) or text (`[1,2,3]`).
@@ -519,6 +896,25 @@ pub fn encode_value<T: Encoder>(
     // char-specific binary/text encoding.
     if crate::datatypes::is_pg_char_field(arrow_field) {
         return encode_pg_char(encoder, arr, idx, pg_field);
+    }
+
+    // Arrow canonical UUID extension. The storage is FixedSizeBinary(16),
+    // but the wire type is UUID and the text format is the canonical
+    // hyphenated form (not bytea's `\x...`).
+    if pg_field.datatype() == &Type::UUID {
+        return encode_pg_uuid(encoder, arr, idx, pg_field);
+    }
+
+    // PostgreSQL money is an int64 count of cents on the wire; LakeSoul stores
+    // it as an Arrow decimal with scale 2 and a `pg.type=money` marker.
+    if pg_field.datatype() == &Type::MONEY {
+        return encode_pg_money(encoder, arr, idx, pg_field);
+    }
+
+    // Decimal256 has no rust_decimal representation. Encode it as a
+    // PostgreSQL numeric payload (binary) or its decimal text (text).
+    if matches!(arrow_type, DataType::Decimal256(_, _)) && pg_field.datatype() == &Type::NUMERIC {
+        return encode_decimal256(encoder, arr, idx, pg_field);
     }
 
     // Postgres `oid` columns are `u32` on the wire but stored as Arrow Int32.

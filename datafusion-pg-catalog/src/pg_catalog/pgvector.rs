@@ -46,6 +46,13 @@ pub(crate) fn with_pg_vector_support(
             "typname" => *scalar = ScalarValue::Utf8(Some("vector".to_string())),
             "typtype" => *scalar = ScalarValue::Utf8(Some("b".to_string())),
             "typnamespace" => *scalar = ScalarValue::Int32(Some(PG_CATALOG_NAMESPACE_OID)),
+            // pgjdbc compares typinput against 'pg_catalog.array_in'::regproc
+            // while caching type info for custom OIDs. That comparison casts
+            // this Utf8 column to Int32, so a function name (or the empty
+            // default) fails to parse; an OID-shaped value keeps the lookup
+            // working and correctly reports is_array = false.
+            "typinput" => *scalar = ScalarValue::Utf8(Some("0".to_string())),
+            "typoutput" => *scalar = ScalarValue::Utf8(Some("0".to_string())),
             _ => {}
         }
     })?);

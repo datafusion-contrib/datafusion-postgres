@@ -45,54 +45,66 @@ pub fn into_pg_type(arrow_type: &DataType) -> PgWireResult<Type> {
         | DataType::BinaryView => Type::BYTEA,
         DataType::Float16 | DataType::Float32 => Type::FLOAT4,
         DataType::Float64 => Type::FLOAT8,
-        DataType::Decimal128(_, _) => Type::NUMERIC,
+        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => Type::NUMERIC,
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Type::TEXT,
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field)
         | DataType::ListView(field)
-        | DataType::LargeListView(field) => match field.data_type() {
-            // Align with PostgreSQL: an array literal without type
-            // information such as `ARRAY[NULL]` has a `Null` element type and
-            // is reported as `text[]` by postgres.
-            DataType::Null => Type::TEXT_ARRAY,
-            DataType::Boolean => Type::BOOL_ARRAY,
-            DataType::Int8 => Type::INT2_ARRAY,
-            DataType::Int16 | DataType::UInt8 => Type::INT2_ARRAY,
-            DataType::Int32 | DataType::UInt16 => Type::INT4_ARRAY,
-            DataType::Int64 | DataType::UInt32 => Type::INT8_ARRAY,
-            DataType::UInt64 | DataType::Decimal128(_, _) => Type::NUMERIC_ARRAY,
-            DataType::Timestamp(_, tz) => {
-                if tz.is_some() {
-                    Type::TIMESTAMPTZ_ARRAY
-                } else {
-                    Type::TIMESTAMP_ARRAY
+        | DataType::LargeListView(field) => {
+            // Prefer the semantic element type (UUID, money, varchar, ...)
+            // over the physical Arrow type, so an array keeps the PostgreSQL
+            // element OID instead of degrading to text/binary/numeric.
+            let element = field_into_pg_type(field)?;
+            if let Some(array) = array_type_for(&element) {
+                array
+            } else {
+                match field.data_type() {
+                    // Align with PostgreSQL: an array literal without type
+                    // information such as `ARRAY[NULL]` has a `Null` element type and
+                    // is reported as `text[]` by postgres.
+                    DataType::Null => Type::TEXT_ARRAY,
+                    DataType::Boolean => Type::BOOL_ARRAY,
+                    DataType::Int8 => Type::INT2_ARRAY,
+                    DataType::Int16 | DataType::UInt8 => Type::INT2_ARRAY,
+                    DataType::Int32 | DataType::UInt16 => Type::INT4_ARRAY,
+                    DataType::Int64 | DataType::UInt32 => Type::INT8_ARRAY,
+                    DataType::UInt64 | DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
+                        Type::NUMERIC_ARRAY
+                    }
+                    DataType::Timestamp(_, tz) => {
+                        if tz.is_some() {
+                            Type::TIMESTAMPTZ_ARRAY
+                        } else {
+                            Type::TIMESTAMP_ARRAY
+                        }
+                    }
+                    DataType::Time32(_) | DataType::Time64(_) => Type::TIME_ARRAY,
+                    DataType::Date32 | DataType::Date64 => Type::DATE_ARRAY,
+                    DataType::Interval(_) | DataType::Duration(_) => Type::INTERVAL_ARRAY,
+                    DataType::FixedSizeBinary(_)
+                    | DataType::Binary
+                    | DataType::LargeBinary
+                    | DataType::BinaryView => Type::BYTEA_ARRAY,
+                    DataType::Float16 | DataType::Float32 => Type::FLOAT4_ARRAY,
+                    DataType::Float64 => Type::FLOAT8_ARRAY,
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Type::TEXT_ARRAY,
+                    DataType::Struct(_) => Type::new(
+                        Type::RECORD_ARRAY.name().into(),
+                        Type::RECORD_ARRAY.oid(),
+                        Kind::Array(field_into_pg_type(field)?),
+                        Type::RECORD_ARRAY.schema().into(),
+                    ),
+                    list_type => {
+                        return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
+                            "ERROR".to_owned(),
+                            "XX000".to_owned(),
+                            format!("Unsupported List Datatype {list_type}"),
+                        ))));
+                    }
                 }
             }
-            DataType::Time32(_) | DataType::Time64(_) => Type::TIME_ARRAY,
-            DataType::Date32 | DataType::Date64 => Type::DATE_ARRAY,
-            DataType::Interval(_) | DataType::Duration(_) => Type::INTERVAL_ARRAY,
-            DataType::FixedSizeBinary(_)
-            | DataType::Binary
-            | DataType::LargeBinary
-            | DataType::BinaryView => Type::BYTEA_ARRAY,
-            DataType::Float16 | DataType::Float32 => Type::FLOAT4_ARRAY,
-            DataType::Float64 => Type::FLOAT8_ARRAY,
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Type::TEXT_ARRAY,
-            DataType::Struct(_) => Type::new(
-                Type::RECORD_ARRAY.name().into(),
-                Type::RECORD_ARRAY.oid(),
-                Kind::Array(field_into_pg_type(field)?),
-                Type::RECORD_ARRAY.schema().into(),
-            ),
-            list_type => {
-                return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                    "ERROR".to_owned(),
-                    "XX000".to_owned(),
-                    format!("Unsupported List Datatype {list_type}"),
-                ))));
-            }
-        },
+        }
         DataType::Dictionary(_, value_type) => into_pg_type(value_type.as_ref())?,
         DataType::Struct(fields) => {
             let name: String = fields
@@ -210,6 +222,91 @@ pub fn is_arrow_json_field(field: &Field) -> bool {
     field.extension_type_name() == Some(ARROW_JSON_EXTENSION_NAME)
 }
 
+/// Field metadata key carrying the semantic PostgreSQL type when the Arrow
+/// physical type is ambiguous. Values are lower-case PostgreSQL type names
+/// (`uuid`, `varchar`, `bpchar`, `money`, `time`, `interval`, `numeric`,
+/// `timestamp`, `timestamptz`).
+pub const PG_TYPE_KEY: &str = "pg.type";
+
+/// Field metadata key carrying a PostgreSQL `atttypmod`. The value is the
+/// signed decimal integer PostgreSQL stores in `pg_attribute.atttypmod`.
+pub const PG_TYPMOD_KEY: &str = "pg.typmod";
+
+/// Field metadata key marking a one-dimensional semantic array. The element
+/// field carries the real semantic type.
+pub const PG_ARRAY_KEY: &str = "pg.array";
+
+/// Arrow canonical UUID extension name. The storage type is
+/// `FixedSizeBinary(16)`.
+pub const ARROW_UUID_EXTENSION_NAME: &str = "arrow.uuid";
+
+/// The semantic PostgreSQL type name stored on `field`, if any.
+pub fn pg_type_name(field: &Field) -> Option<&str> {
+    field.metadata().get(PG_TYPE_KEY).map(String::as_str)
+}
+
+/// The PostgreSQL `atttypmod` stored on `field`, if any.
+pub fn pg_typmod(field: &Field) -> Option<i32> {
+    field
+        .metadata()
+        .get(PG_TYPMOD_KEY)
+        .and_then(|value| value.parse().ok())
+}
+
+/// The `atttypmod` of a field, looking through an array to its element field.
+/// PostgreSQL stores the element type modifier on the array column.
+pub fn pg_typmod_for_field(field: &Field) -> Option<i32> {
+    pg_typmod(field).or_else(|| match field.data_type() {
+        DataType::List(inner)
+        | DataType::LargeList(inner)
+        | DataType::FixedSizeList(inner, _)
+        | DataType::ListView(inner)
+        | DataType::LargeListView(inner) => pg_typmod(inner),
+        _ => None,
+    })
+}
+
+/// True when `field` is an Arrow canonical UUID field.
+pub fn is_pg_uuid_field(field: &Field) -> bool {
+    field.extension_type_name() == Some(ARROW_UUID_EXTENSION_NAME)
+        || pg_type_name(field) == Some("uuid")
+}
+
+/// True when `field` carries the money marker.
+pub fn is_pg_money_field(field: &Field) -> bool {
+    pg_type_name(field) == Some("money")
+}
+
+/// The PostgreSQL array type for a scalar element type, if it is known.
+pub fn array_type_for(element: &Type) -> Option<Type> {
+    Some(match element.oid() {
+        16 => Type::BOOL_ARRAY,
+        17 => Type::BYTEA_ARRAY,
+        18 => Type::CHAR_ARRAY,
+        20 => Type::INT8_ARRAY,
+        21 => Type::INT2_ARRAY,
+        23 => Type::INT4_ARRAY,
+        25 => Type::TEXT_ARRAY,
+        26 => Type::OID_ARRAY,
+        114 => Type::JSON_ARRAY,
+        700 => Type::FLOAT4_ARRAY,
+        701 => Type::FLOAT8_ARRAY,
+        790 => Type::MONEY_ARRAY,
+        869 => Type::INET_ARRAY,
+        1042 => Type::BPCHAR_ARRAY,
+        1043 => Type::VARCHAR_ARRAY,
+        1082 => Type::DATE_ARRAY,
+        1083 => Type::TIME_ARRAY,
+        1114 => Type::TIMESTAMP_ARRAY,
+        1184 => Type::TIMESTAMPTZ_ARRAY,
+        1186 => Type::INTERVAL_ARRAY,
+        1700 => Type::NUMERIC_ARRAY,
+        2950 => Type::UUID_ARRAY,
+        3802 => Type::JSONB_ARRAY,
+        _ => return None,
+    })
+}
+
 /// Map an oid-alias kind name ([`PG_OID_ALIAS_KEY`] value) to its Postgres
 /// [`Type`], e.g. `"oid"` -> OID 26, `"regtype"` -> OID 2206.
 ///
@@ -288,6 +385,23 @@ pub fn field_into_pg_type(field: &Arc<Field>) -> PgWireResult<Type> {
     #[cfg(feature = "pgvector")]
     if is_pg_vector_field(field) {
         return Ok(pg_vector_type());
+    }
+
+    // Arrow canonical UUID extension (FixedSizeBinary(16)).
+    if is_pg_uuid_field(field) {
+        return Ok(Type::UUID);
+    }
+
+    // PostgreSQL money is stored as an Arrow decimal, but reports the MONEY
+    // OID. The marker is explicit because the physical type is NUMERIC.
+    if is_pg_money_field(field) && matches!(field.data_type(), DataType::Decimal128(_, _)) {
+        return Ok(Type::MONEY);
+    }
+
+    match pg_type_name(field) {
+        Some("varchar") => return Ok(Type::VARCHAR),
+        Some("bpchar") => return Ok(Type::BPCHAR),
+        _ => {}
     }
 
     // A pg.json-tagged column with the Arrow canonical JSON extension is a

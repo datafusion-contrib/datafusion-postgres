@@ -275,6 +275,208 @@ fn coerce_interval_value(value: Option<Interval>, target: &DataType) -> PgWireRe
 /// A Postgres `json` / `jsonb` parameter decoded from either the text or
 /// binary wire format.
 ///
+/// A UUID parameter, decoded from either PostgreSQL's 16-byte binary form or
+/// its canonical text form.
+#[derive(Debug, Clone, Copy)]
+struct UuidParam([u8; 16]);
+
+impl UuidParam {
+    fn canonical_text(self) -> String {
+        uuid::Uuid::from_bytes(self.0).hyphenated().to_string()
+    }
+}
+
+impl<'a> postgres_types::FromSql<'a> for UuidParam {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() != 16 {
+            return Err("uuid parameter must be exactly 16 bytes".into());
+        }
+        let mut value = [0u8; 16];
+        value.copy_from_slice(raw);
+        Ok(Self(value))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.oid() == 2950 || ty.oid() == 2951
+    }
+}
+
+impl<'a> pgwire::types::FromSqlText<'a> for UuidParam {
+    fn from_sql_text(
+        _ty: &Type,
+        input: &'a [u8],
+        _format_options: &FormatOptions,
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let text = std::str::from_utf8(input)?;
+        let uuid = uuid::Uuid::parse_str(text.trim())?;
+        Ok(Self(*uuid.as_bytes()))
+    }
+}
+
+/// A money parameter, decoded from int64 cents (binary) or PostgreSQL's
+/// text form (binary-compatible decimal input is also accepted).
+#[derive(Debug, Clone, Copy)]
+struct MoneyParam(i64);
+
+impl<'a> postgres_types::FromSql<'a> for MoneyParam {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() != 8 {
+            return Err("money parameter must be exactly 8 bytes".into());
+        }
+        Ok(Self(i64::from_be_bytes([
+            raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
+        ])))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.oid() == 790 || ty.oid() == 791
+    }
+}
+
+impl<'a> pgwire::types::FromSqlText<'a> for MoneyParam {
+    fn from_sql_text(
+        _ty: &Type,
+        input: &'a [u8],
+        _format_options: &FormatOptions,
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let text = std::str::from_utf8(input)?.trim();
+        Ok(Self(parse_money_text(text)?))
+    }
+}
+
+fn parse_money_text(text: &str) -> Result<i64, Box<dyn std::error::Error + Sync + Send>> {
+    let mut value = text.trim().to_string();
+    let negative = value.starts_with('-') || (value.starts_with('(') && value.ends_with(')'));
+    value = value
+        .trim_start_matches('-')
+        .trim_start_matches('+')
+        .trim_matches('(')
+        .trim_matches(')')
+        .trim_start_matches('$')
+        .replace(',', "");
+    let (whole, fraction) = match value.split_once('.') {
+        Some((whole, fraction)) => (whole, fraction),
+        None => (value.as_str(), ""),
+    };
+    let whole: i128 = if whole.is_empty() { 0 } else { whole.parse()? };
+    let mut fraction = fraction.to_string();
+    if fraction.len() > 2 {
+        // PostgreSQL money has two fractional digits; round half away from
+        // zero for the extra digits.
+        let round_up = fraction.as_bytes()[2] >= b'5';
+        fraction.truncate(2);
+        let mut cents: i128 = fraction.parse().unwrap_or(0);
+        if round_up {
+            cents += 1;
+        }
+        let mut cents = whole * 100 + cents;
+        if negative {
+            cents = -cents;
+        }
+        return i64::try_from(cents).map_err(Into::into);
+    }
+    while fraction.len() < 2 {
+        fraction.push('0');
+    }
+    let mut cents = whole * 100 + fraction.parse::<i128>()?;
+    if negative {
+        cents = -cents;
+    }
+    i64::try_from(cents).map_err(Into::into)
+}
+
+/// A PostgreSQL numeric parameter, decoded into decimal text so it can be
+/// converted to Decimal128 or Decimal256 according to the inferred target.
+#[derive(Debug, Clone)]
+struct NumericParam(String);
+
+impl<'a> postgres_types::FromSql<'a> for NumericParam {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(Self(numeric_binary_to_text(raw)?))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        ty.oid() == 1700 || ty.oid() == 1231
+    }
+}
+
+impl<'a> pgwire::types::FromSqlText<'a> for NumericParam {
+    fn from_sql_text(
+        _ty: &Type,
+        input: &'a [u8],
+        _format_options: &FormatOptions,
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(Self(std::str::from_utf8(input)?.to_owned()))
+    }
+}
+
+fn numeric_binary_to_text(raw: &[u8]) -> Result<String, Box<dyn std::error::Error + Sync + Send>> {
+    if raw.len() < 8 {
+        return Err("numeric parameter is shorter than its header".into());
+    }
+    let ndigits = u16::from_be_bytes([raw[0], raw[1]]) as usize;
+    let weight = i16::from_be_bytes([raw[2], raw[3]]) as i32;
+    let sign = u16::from_be_bytes([raw[4], raw[5]]);
+    let dscale = u16::from_be_bytes([raw[6], raw[7]]) as usize;
+    if raw.len() < 8 + ndigits * 2 {
+        return Err("numeric parameter is truncated".into());
+    }
+    let mut digits = String::new();
+    for index in 0..ndigits {
+        let offset = 8 + index * 2;
+        let group = u16::from_be_bytes([raw[offset], raw[offset + 1]]);
+        digits.push_str(&format!("{group:04}"));
+    }
+    let integer_len = (weight + 1) * 4;
+    let (integer, fraction) = if integer_len <= 0 {
+        (
+            "0".to_string(),
+            format!("{}{}", "0".repeat((-integer_len) as usize), digits),
+        )
+    } else if integer_len >= digits.len() as i32 {
+        (
+            format!(
+                "{}{}",
+                digits,
+                "0".repeat((integer_len as usize) - digits.len())
+            ),
+            String::new(),
+        )
+    } else {
+        let split = integer_len as usize;
+        (digits[..split].to_string(), digits[split..].to_string())
+    };
+    let mut integer = integer.trim_start_matches('0').to_string();
+    if integer.is_empty() {
+        integer.push('0');
+    }
+    let mut fraction = fraction;
+    if fraction.len() > dscale {
+        fraction.truncate(dscale);
+    }
+    while fraction.len() < dscale {
+        fraction.push('0');
+    }
+    let mut text = integer;
+    if dscale > 0 {
+        text.push('.');
+        text.push_str(&fraction);
+    }
+    if sign == 0x4000 && text != "0" {
+        text.insert(0, '-');
+    }
+    Ok(text)
+}
+
 /// The binary form of `jsonb` starts with a one-byte format version (1); the
 /// remaining bytes are the JSON document. `json` has no version header.
 #[derive(Debug)]
@@ -733,6 +935,17 @@ where
                     }
                 }
             }
+            Type::NUMERIC if matches!(inferenced_type, Some(DataType::Decimal256(..))) => {
+                let value = portal.parameter::<NumericParam>(i, &pg_type)?;
+                let (precision, scale) = match inferenced_type {
+                    Some(DataType::Decimal256(precision, scale)) => (*precision, *scale),
+                    _ => unreachable!(),
+                };
+                let parsed = value
+                    .map(|value| parse_decimal_i256(&value.0, precision, scale))
+                    .transpose()?;
+                deserialized_params.push(ScalarValue::Decimal256(parsed, precision, scale));
+            }
             Type::NUMERIC => {
                 let value = portal.parameter::<Decimal>(i, &pg_type)?;
                 match inferenced_type {
@@ -851,9 +1064,19 @@ where
                 deserialized_params.push(scalar_value);
             }
             Type::UUID => {
-                let value = portal.parameter::<String>(i, &pg_type)?;
-                // Store UUID as string for now
-                deserialized_params.push(ScalarValue::Utf8(value));
+                let value = portal.parameter::<UuidParam>(i, &pg_type)?;
+                let value = value.map(|uuid| uuid.0.to_vec());
+                match inferenced_type {
+                    Some(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
+                        deserialized_params.push(ScalarValue::Utf8(value.map(|bytes| {
+                            uuid::Uuid::from_slice(&bytes)
+                                .expect("UUID bytes have a fixed length")
+                                .hyphenated()
+                                .to_string()
+                        })));
+                    }
+                    _ => deserialized_params.push(ScalarValue::FixedSizeBinary(16, value)),
+                }
             }
             Type::JSON | Type::JSONB => {
                 let value = portal
@@ -1014,7 +1237,7 @@ where
                     }
                 }
             }
-            Type::TEXT_ARRAY | Type::VARCHAR_ARRAY => {
+            Type::TEXT_ARRAY | Type::VARCHAR_ARRAY | Type::BPCHAR_ARRAY => {
                 let value = portal.parameter::<Vec<Option<String>>>(i, &pg_type)?;
                 match value {
                     Some(values) => {
@@ -1030,6 +1253,117 @@ where
                             true,
                             1,
                         ));
+                    }
+                }
+            }
+            // Semantic arrays whose binary elements need a custom decoder. A
+            // client binds these whenever the parameter description reports
+            // UUID[], MONEY[] or a numeric[] with Decimal256 precision.
+            Type::UUID_ARRAY => {
+                let value = portal.parameter::<Vec<Option<UuidParam>>>(i, &pg_type)?;
+                match value {
+                    Some(values) => {
+                        let scalar_values: Vec<ScalarValue> = values
+                            .into_iter()
+                            .map(|uuid| ScalarValue::Utf8(uuid.map(|uuid| uuid.canonical_text())))
+                            .collect();
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(&scalar_values, &DataType::Utf8),
+                        ));
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(
+                            DataType::Utf8,
+                            true,
+                            1,
+                        ));
+                    }
+                }
+            }
+            Type::MONEY_ARRAY => {
+                let value = portal.parameter::<Vec<Option<MoneyParam>>>(i, &pg_type)?;
+                let (precision, scale) = match inferenced_type {
+                    Some(DataType::List(field)) => match field.data_type() {
+                        DataType::Decimal128(precision, scale) => (*precision, *scale),
+                        _ => (19, 2),
+                    },
+                    _ => (19, 2),
+                };
+                match value {
+                    Some(values) => {
+                        let scalar_values: Vec<ScalarValue> = values
+                            .into_iter()
+                            .map(|money| {
+                                ScalarValue::Decimal128(
+                                    money.map(|money| money_mantissa(money.0, scale)),
+                                    precision,
+                                    scale,
+                                )
+                            })
+                            .collect();
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(
+                                &scalar_values,
+                                &DataType::Decimal128(precision, scale),
+                            ),
+                        ));
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(
+                            DataType::Decimal128(precision, scale),
+                            true,
+                            1,
+                        ));
+                    }
+                }
+            }
+            Type::NUMERIC_ARRAY
+                if matches!(
+                    inferenced_type,
+                    Some(DataType::List(field))
+                        if matches!(
+                            field.data_type(),
+                            DataType::Decimal128(..) | DataType::Decimal256(..)
+                        )
+                ) =>
+            {
+                let value = portal.parameter::<Vec<Option<NumericParam>>>(i, &pg_type)?;
+                let (element, precision, scale) = match inferenced_type {
+                    Some(DataType::List(field)) => match field.data_type() {
+                        DataType::Decimal128(precision, scale) => {
+                            (DataType::Decimal128(*precision, *scale), *precision, *scale)
+                        }
+                        DataType::Decimal256(precision, scale) => {
+                            (DataType::Decimal256(*precision, *scale), *precision, *scale)
+                        }
+                        _ => unreachable!(),
+                    },
+                    _ => unreachable!(),
+                };
+                match value {
+                    Some(values) => {
+                        let scalar_values: Vec<ScalarValue> = values
+                            .into_iter()
+                            .map(|numeric| {
+                                let parsed = numeric
+                                    .map(|numeric| parse_decimal_i256(&numeric.0, precision, scale))
+                                    .transpose()?;
+                                Ok::<_, Box<dyn std::error::Error + Sync + Send>>(match &element {
+                                    DataType::Decimal128(..) => ScalarValue::Decimal128(
+                                        parsed.and_then(|value| value.to_i128()),
+                                        precision,
+                                        scale,
+                                    ),
+                                    _ => ScalarValue::Decimal256(parsed, precision, scale),
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        deserialized_params.push(ScalarValue::List(
+                            ScalarValue::new_list_nullable(&scalar_values, &element),
+                        ));
+                    }
+                    None => {
+                        deserialized_params.push(ScalarValue::new_null_list(element, true, 1));
                     }
                 }
             }
@@ -1186,9 +1520,17 @@ where
             }
             // Advanced types
             Type::MONEY => {
-                let value = portal.parameter::<i64>(i, &pg_type)?;
-                // Store money as int64 (cents)
-                deserialized_params.push(ScalarValue::Int64(value));
+                let value = portal.parameter::<MoneyParam>(i, &pg_type)?;
+                match inferenced_type {
+                    Some(DataType::Decimal128(precision, scale)) => {
+                        deserialized_params.push(ScalarValue::Decimal128(
+                            value.map(|money| i128::from(money.0)),
+                            *precision,
+                            *scale,
+                        ));
+                    }
+                    _ => deserialized_params.push(ScalarValue::Int64(value.map(|money| money.0))),
+                }
             }
             Type::INET => {
                 let value = portal.parameter::<String>(i, &pg_type)?;
@@ -1246,6 +1588,80 @@ where
     Ok(ParamValues::List(
         deserialized_params.into_iter().map(|p| p.into()).collect(),
     ))
+}
+
+/// Convert a money value (int64 cents) to a decimal mantissa at `scale`.
+fn money_mantissa(cents: i64, scale: i8) -> i128 {
+    let cents = i128::from(cents);
+    match scale.cmp(&2) {
+        std::cmp::Ordering::Equal => cents,
+        std::cmp::Ordering::Greater => cents * 10i128.pow((scale - 2) as u32),
+        std::cmp::Ordering::Less => cents / 10i128.pow((2 - scale) as u32),
+    }
+}
+
+fn parse_decimal_i256(
+    text: &str,
+    precision: u8,
+    scale: i8,
+) -> Result<datafusion::arrow::datatypes::i256, Box<dyn std::error::Error + Sync + Send>> {
+    use datafusion::arrow::datatypes::i256;
+    let text = text.trim();
+    if text.eq_ignore_ascii_case("nan") {
+        return Err("NaN is not a supported numeric value".into());
+    }
+    let negative = text.starts_with('-');
+    let unsigned = text.trim_start_matches(['-', '+']);
+    let (whole, fraction) = match unsigned.split_once('.') {
+        Some((whole, fraction)) => (whole, fraction),
+        None => (unsigned, ""),
+    };
+    let whole = if whole.is_empty() { "0" } else { whole };
+    let mut digits = format!("{whole}{fraction}");
+    let current_scale = fraction.len() as i32;
+    let target_scale = i32::from(scale);
+    if current_scale < target_scale {
+        digits.push_str(&"0".repeat((target_scale - current_scale) as usize));
+    } else if current_scale > target_scale {
+        let keep = digits
+            .len()
+            .saturating_sub((current_scale - target_scale) as usize);
+        let round_up = digits
+            .as_bytes()
+            .get(keep)
+            .is_some_and(|digit| *digit >= b'5');
+        digits.truncate(keep);
+        if round_up {
+            let mut carry = true;
+            let mut bytes = digits.into_bytes();
+            for byte in bytes.iter_mut().rev() {
+                if !carry {
+                    break;
+                }
+                if *byte == b'9' {
+                    *byte = b'0';
+                } else {
+                    *byte += 1;
+                    carry = false;
+                }
+            }
+            if carry {
+                bytes.insert(0, b'1');
+            }
+            digits = String::from_utf8(bytes)?;
+        }
+    }
+    let digits = digits.trim_start_matches('0');
+    let digits = if digits.is_empty() { "0" } else { digits };
+    let mut value = i256::from_string(digits).ok_or("numeric value out of range")?;
+    if negative {
+        value = -value;
+    }
+    let max_digits = i32::from(precision);
+    if value.to_string().trim_start_matches('-').len() > max_digits as usize {
+        return Err("numeric field overflow".into());
+    }
+    Ok(value)
 }
 
 #[cfg(test)]

@@ -108,6 +108,36 @@ pub fn parameter_override_types(plan: &LogicalPlan) -> HashMap<String, Type> {
                     if let Some(ty) = arrow_pg::datatypes::pg_json_type(field) {
                         overrides.insert(id.to_string(), ty);
                     }
+                    // Semantic types whose physical Arrow type is ambiguous.
+                    if let Some(kind) = arrow_pg::datatypes::pg_type_name(field) {
+                        match kind {
+                            "uuid" => {
+                                overrides.insert(id.to_string(), pgwire::api::Type::UUID);
+                            }
+                            "money" => {
+                                overrides.insert(id.to_string(), pgwire::api::Type::MONEY);
+                            }
+                            "varchar" => {
+                                overrides.insert(id.to_string(), pgwire::api::Type::VARCHAR);
+                            }
+                            "bpchar" => {
+                                overrides.insert(id.to_string(), pgwire::api::Type::BPCHAR);
+                            }
+                            _ => {}
+                        }
+                    }
+                    // An array placeholder carries the element metadata on its
+                    // inner field; resolve the array OID from the field.
+                    if matches!(
+                        field.data_type(),
+                        datafusion::arrow::datatypes::DataType::List(_)
+                            | datafusion::arrow::datatypes::DataType::LargeList(_)
+                            | datafusion::arrow::datatypes::DataType::FixedSizeList(_, _)
+                    ) && let Ok(ty) =
+                        arrow_pg::datatypes::field_into_pg_type(&std::sync::Arc::new(field.clone()))
+                    {
+                        overrides.insert(id.to_string(), ty);
+                    }
                 }
                 Ok(TreeNodeRecursion::Continue)
             });

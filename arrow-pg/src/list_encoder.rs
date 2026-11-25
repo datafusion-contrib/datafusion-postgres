@@ -5,7 +5,7 @@ use arrow::{
     array::{
         Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
         Decimal128Array, Decimal256Array, DurationMicrosecondArray, DurationMillisecondArray,
-        DurationNanosecondArray, DurationSecondArray, IntervalDayTimeArray,
+        DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray, IntervalDayTimeArray,
         IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
         LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray, StringViewArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
@@ -25,7 +25,7 @@ use datafusion::arrow::{
     array::{
         Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
         Decimal128Array, Decimal256Array, DurationMicrosecondArray, DurationMillisecondArray,
-        DurationNanosecondArray, DurationSecondArray, IntervalDayTimeArray,
+        DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray, IntervalDayTimeArray,
         IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
         LargeStringArray, ListArray, MapArray, PrimitiveArray, StringArray, StringViewArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
@@ -47,7 +47,7 @@ use pgwire::api::results::FieldInfo;
 use pgwire::error::{PgWireError, PgWireResult};
 use rust_decimal::Decimal;
 
-use crate::encoder::Encoder;
+use crate::encoder::{Encoder, PgMoneyValue, PgNumericValue, PgUuidValue, money_cents};
 use crate::error::ToSqlError;
 use crate::struct_encoder::encode_structs;
 
@@ -105,6 +105,67 @@ pub fn encode_list<T: Encoder>(
     pg_field: &FieldInfo,
 ) -> PgWireResult<()> {
     match arr.data_type() {
+        DataType::Utf8 if pg_field.datatype().oid() == 2951 => {
+            let array = arr.as_any().downcast_ref::<StringArray>().unwrap();
+            let values: Result<Vec<Option<PgUuidValue>>, _> = array
+                .iter()
+                .map(|value| {
+                    value
+                        .map(|text| {
+                            uuid::Uuid::parse_str(text.trim())
+                                .map(|uuid| PgUuidValue(*uuid.as_bytes()))
+                                .map_err(|error| PgWireError::ApiError(Box::new(error)))
+                        })
+                        .transpose()
+                })
+                .collect();
+            encoder.encode_field(&values?, pg_field)?;
+            Ok(())
+        }
+        DataType::FixedSizeBinary(16) if pg_field.datatype().oid() == 2951 => {
+            let array = arr.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
+            let values: Vec<Option<PgUuidValue>> = (0..array.len())
+                .map(|index| {
+                    if array.is_null(index) {
+                        None
+                    } else {
+                        let bytes = array.value(index);
+                        let mut value = [0u8; 16];
+                        value.copy_from_slice(bytes);
+                        Some(PgUuidValue(value))
+                    }
+                })
+                .collect();
+            encoder.encode_field(&values, pg_field)?;
+            Ok(())
+        }
+        DataType::Decimal128(_, scale) if pg_field.datatype().oid() == 791 => {
+            let array = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            let values: Result<Vec<Option<PgMoneyValue>>, _> = array
+                .iter()
+                .map(|value| {
+                    value
+                        .map(|value| money_cents(value, *scale).map(PgMoneyValue))
+                        .transpose()
+                })
+                .collect();
+            encoder.encode_field(&values?, pg_field)?;
+            Ok(())
+        }
+        DataType::Decimal256(_, scale) if pg_field.datatype().oid() == 1231 => {
+            let array = arr.as_any().downcast_ref::<Decimal256Array>().unwrap();
+            let values: Vec<Option<PgNumericValue>> = (0..array.len())
+                .map(|index| {
+                    if array.is_null(index) {
+                        None
+                    } else {
+                        Some(PgNumericValue::from_i256(array.value(index), *scale))
+                    }
+                })
+                .collect();
+            encoder.encode_field(&values, pg_field)?;
+            Ok(())
+        }
         DataType::Null => {
             // The element type is unknown (e.g. `ARRAY[NULL]`). Align with
             // PostgreSQL and treat the list as `text[]`, preserving the
