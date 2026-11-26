@@ -27,6 +27,7 @@ use crate::hooks::QueryHook;
 use crate::hooks::cursor::CursorStatementHook;
 use crate::hooks::set_show::SetShowHook;
 use crate::hooks::transactions::TransactionStatementHook;
+use crate::session::session_for;
 use crate::{client, planner};
 use arrow_pg::datatypes::df;
 use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
@@ -104,8 +105,15 @@ impl ErrorHandler for LoggingErrorHandler {
 }
 
 /// The pgwire handler backed by a datafusion `SessionContext`
+///
+/// The `SessionContext` is used as a *template*: every connection gets its own
+/// session derived from it on first use. Tables, views and schemas are shared
+/// between all connections, while session settings (`SET`) and prepared
+/// statements are private to a connection. Anything that must be visible to
+/// every connection -- registered tables, functions, the pg_catalog -- has to
+/// be set up on the `SessionContext` *before* connections are served.
 pub struct DfSessionService {
-    session_context: Arc<SessionContext>,
+    session_template: Arc<SessionContext>,
     parser: Arc<Parser>,
     query_hooks: Vec<Arc<dyn QueryHook>>,
 }
@@ -115,20 +123,28 @@ impl DfSessionService {
         Self::new_with_hooks(session_context, default_query_hooks())
     }
 
+    /// `session_context` is the template every connection's session is derived
+    /// from; see the type-level documentation.
     pub fn new_with_hooks(
         session_context: Arc<SessionContext>,
         query_hooks: Vec<Arc<dyn QueryHook>>,
     ) -> DfSessionService {
         let parser = Arc::new(Parser {
-            session_context: session_context.clone(),
+            session_template: session_context.clone(),
             sql_parser: PostgresCompatibilityParser::new(),
             query_hooks: query_hooks.clone(),
         });
         DfSessionService {
-            session_context,
+            session_template: session_context,
             parser,
             query_hooks,
         }
+    }
+
+    /// The session of the connection behind `client`: private to the
+    /// connection, created from the template on first use.
+    fn session_for(&self, client: &dyn ClientInfo) -> Arc<SessionContext> {
+        session_for(&self.session_template, client)
     }
 }
 
@@ -175,9 +191,10 @@ impl SimpleQueryHandler for DfSessionService {
         let mut results = vec![];
         'stmt: for statement in statements {
             // Call query hooks with the parsed statement
+            let session_context = self.session_for(client);
             for hook in &self.query_hooks {
                 if let Some(result) = hook
-                    .handle_simple_query(&statement, &self.session_context, client)
+                    .handle_simple_query(&statement, &session_context, client)
                     .await
                 {
                     results.push(result?);
@@ -186,7 +203,7 @@ impl SimpleQueryHandler for DfSessionService {
             }
 
             let query = statement.to_string();
-            let df = client::execute_statement(client, &self.session_context, &query).await?;
+            let df = client::execute_statement(client, &session_context, &query).await?;
 
             if matches!(statement, sqlparser::ast::Statement::Insert(_)) {
                 let resp = map_rows_affected_for_insert(&df).await?;
@@ -232,6 +249,7 @@ impl ExtendedQueryHandler for DfSessionService {
     {
         let query = &portal.statement.statement.0;
         log::debug!("Received execute extended query: {query}");
+        let session_context = self.session_for(client);
         // Check query hooks first
         if !self.query_hooks.is_empty()
             && let (_, Some((statement, plan))) = &portal.statement.statement
@@ -259,13 +277,7 @@ impl ExtendedQueryHandler for DfSessionService {
 
             for hook in &self.query_hooks {
                 if let Some(result) = hook
-                    .handle_extended_query(
-                        statement,
-                        plan,
-                        &param_values,
-                        &self.session_context,
-                        client,
-                    )
+                    .handle_extended_query(statement, plan, &param_values, &session_context, client)
                     .await
                 {
                     return result;
@@ -298,8 +310,7 @@ impl ExtendedQueryHandler for DfSessionService {
                 .clone()
                 .replace_params_with_values(&param_values)
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-            let optimised = self
-                .session_context
+            let optimised = session_context
                 .state()
                 .optimize(&plan)
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
@@ -309,7 +320,7 @@ impl ExtendedQueryHandler for DfSessionService {
                 if let Some(timeout_duration) = timeout {
                     tokio::time::timeout(
                         timeout_duration,
-                        self.session_context.execute_logical_plan(optimised),
+                        session_context.execute_logical_plan(optimised),
                     )
                     .await
                     .map_err(|_| {
@@ -321,7 +332,7 @@ impl ExtendedQueryHandler for DfSessionService {
                     })?
                     .map_err(|e| PgWireError::ApiError(Box::new(e)))?
                 } else {
-                    self.session_context
+                    session_context
                         .execute_logical_plan(optimised)
                         .await
                         .map_err(|e| PgWireError::ApiError(Box::new(e)))?
@@ -375,7 +386,7 @@ pub(crate) async fn map_rows_affected_for_insert(df: &DataFrame) -> PgWireResult
 }
 
 pub struct Parser {
-    session_context: Arc<SessionContext>,
+    session_template: Arc<SessionContext>,
     sql_parser: PostgresCompatibilityParser,
     query_hooks: Vec<Arc<dyn QueryHook>>,
 }
@@ -405,12 +416,12 @@ impl QueryParser for Parser {
         let statement = statements.remove(0);
         let query = statement.to_string();
 
-        let context = &self.session_context;
+        let context = session_for(&self.session_template, client);
         let state = context.state();
 
         for hook in &self.query_hooks {
             if let Some(logical_plan) = hook
-                .handle_extended_parse_query(&statement, context, client)
+                .handle_extended_parse_query(&statement, &context, client)
                 .await
             {
                 return Ok(Some((query, Some((statement, logical_plan?)))));
@@ -659,6 +670,103 @@ mod tests {
             .any(|m| matches!(m, PgWireBackendMessage::ParameterStatus(_)));
 
         assert!(!has_ps, "statement_timeout should not send ParameterStatus");
+    }
+
+    /// Run `sql` on behalf of `client` and return its single response.
+    async fn query(
+        service: &DfSessionService,
+        client: &mut MockClient,
+        sql: &str,
+    ) -> PgWireResult<Response> {
+        let mut responses =
+            <DfSessionService as SimpleQueryHandler>::do_query(service, client, sql).await?;
+        assert_eq!(responses.len(), 1, "expected one response for {sql}");
+        Ok(responses.remove(0))
+    }
+
+    /// The text values of a query response, row by row. (pgwire hands out
+    /// `DataRow`s in their wire encoding: an `i32` length followed by that
+    /// many bytes, `-1` for NULL.)
+    async fn row_texts(response: Response) -> Vec<Vec<Option<String>>> {
+        use futures::StreamExt;
+        use pgwire::messages::data::DataRow;
+
+        fn text_values(row: &DataRow) -> Vec<Option<String>> {
+            let mut data = row.data.as_ref();
+            let mut values = Vec::with_capacity(row.field_count as usize);
+            for _ in 0..row.field_count {
+                let len = i32::from_be_bytes(data[..4].try_into().unwrap());
+                data = &data[4..];
+                if len < 0 {
+                    values.push(None);
+                } else {
+                    let len = len as usize;
+                    values.push(Some(String::from_utf8_lossy(&data[..len]).into_owned()));
+                    data = &data[len..];
+                }
+            }
+            values
+        }
+
+        let Response::Query(mut query) = response else {
+            panic!("Expected Query response");
+        };
+        let mut rows = Vec::new();
+        while let Some(row) = query.data_rows().next().await {
+            rows.push(text_values(&row.expect("row stream error")));
+        }
+        rows
+    }
+
+    fn first_column_type(response: &Response) -> Type {
+        let Response::Query(query) = response else {
+            panic!("Expected Query response");
+        };
+        query.row_schema()[0].datatype().clone()
+    }
+
+    #[tokio::test]
+    async fn test_session_settings_are_per_connection_but_catalog_is_shared() {
+        let service = crate::testing::setup_handlers();
+        let mut alice = MockClient::new();
+        let mut bob = MockClient::new();
+
+        // Session settings are private to the connection that sets them:
+        // `SET TIME ZONE` changes the type of `now()` for Alice only.
+        query(&service, &mut alice, "SET TIME ZONE 'America/New_York'")
+            .await
+            .unwrap();
+        let now = query(&service, &mut alice, "SELECT now()").await.unwrap();
+        assert_eq!(first_column_type(&now), Type::TIMESTAMPTZ);
+        let now = query(&service, &mut bob, "SELECT now()").await.unwrap();
+        assert_eq!(first_column_type(&now), Type::TIMESTAMP);
+
+        // So are SQL-level prepared statements.
+        query(&service, &mut alice, "PREPARE visit AS SELECT 1")
+            .await
+            .unwrap();
+        assert!(
+            query(&service, &mut bob, "EXECUTE visit").await.is_err(),
+            "prepared statements must not leak across connections"
+        );
+        let rows = query(&service, &mut alice, "EXECUTE visit").await.unwrap();
+        assert_eq!(row_texts(rows).await, vec![vec![Some("1".to_string())]]);
+
+        // The catalog is shared: DDL and INSERT through one connection are
+        // visible to the other.
+        query(&service, &mut alice, "CREATE TABLE visits (id INT)")
+            .await
+            .unwrap();
+        query(&service, &mut alice, "INSERT INTO visits VALUES (1), (2)")
+            .await
+            .unwrap();
+        query(&service, &mut bob, "INSERT INTO visits VALUES (3)")
+            .await
+            .unwrap();
+        let count = query(&service, &mut bob, "SELECT count(*) FROM visits")
+            .await
+            .unwrap();
+        assert_eq!(row_texts(count).await, vec![vec![Some("3".to_string())]]);
     }
 
     fn assert_execution_tag(response: &Response, expected: &str) {

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::{ParamValues, ToDFSchema};
 use datafusion::error::DataFusionError;
-use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::{LogicalPlan, SetVariable, Statement as PlanStatement};
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::{Expr, Set, Statement};
 use log::{info, warn};
@@ -212,11 +212,14 @@ async fn try_respond_set_statements(
             let tz = value.to_string();
             let tz = tz.trim_matches('"').trim_matches('\'');
             client::set_timezone(client, Some(tz));
-            // The time zone is tracked in the per-connection client metadata
-            // only. DataFusion's `execution.time_zone` is deliberately left
-            // alone: the `SessionContext` is shared by every connection (see
-            // `HandlerFactory`), so writing it here would apply one session's
-            // `SET TIME ZONE` to all of them.
+            // execution options for timezone. `session_context` is the
+            // connection's own session (see the `session` module), so this
+            // stays private to the connection.
+            if let Err(e) = set_session_timezone(session_context, tz).await {
+                warn!(
+                    "SET statement {statement} is not supported by datafusion, error {e}, statement ignored",
+                );
+            }
             let tz_value = client::get_timezone(client).unwrap_or("UTC").to_string();
             if let Err(e) = client
                 .send_message(PgWireBackendMessage::ParameterStatus(ParameterStatus::new(
@@ -241,6 +244,31 @@ async fn try_respond_set_statements(
 
     // Always return SET success
     Some(Ok(Response::Execution(Tag::new("SET"))))
+}
+
+/// Apply a `SET TIME ZONE` value to a connection's session as
+/// `datafusion.execution.time_zone`.
+///
+/// The value is applied through DataFusion's own `SET` handling rather than by
+/// writing the config field directly: an unknown zone is rejected by the config
+/// (leaving the current setting untouched), and the functions that depend on
+/// the time zone (such as `now()`) are re-initialized with the new value.
+///
+/// `session_context` must be the connection's own session (see the `session`
+/// module): the session template is shared by every connection.
+async fn set_session_timezone(
+    session_context: &SessionContext,
+    tz: &str,
+) -> Result<(), DataFusionError> {
+    session_context
+        .execute_logical_plan(LogicalPlan::Statement(PlanStatement::SetVariable(
+            SetVariable {
+                variable: "datafusion.execution.time_zone".to_string(),
+                value: tz.to_string(),
+            },
+        )))
+        .await
+        .map(|_| ())
 }
 
 fn parameter_status_for_var(
@@ -367,6 +395,7 @@ async fn try_respond_show_statements(
 mod tests {
     use std::time::Duration;
 
+    use datafusion::arrow::datatypes::TimeUnit;
     use datafusion::sql::sqlparser::{dialect::PostgreSqlDialect, parser::Parser};
 
     use super::*;
@@ -585,8 +614,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_set_time_zone_is_tracked_per_connection() {
-        let session_context = SessionContext::new();
+    async fn test_set_time_zone_updates_connection_session_only() {
+        let template = SessionContext::new();
+        let session_context = crate::session::new_connection_session(&template);
         let mut client = MockClient::new();
 
         set_time_zone(
@@ -597,11 +627,44 @@ mod tests {
         .await
         .unwrap();
 
-        // Reported to the client and stored in its per-connection metadata ...
+        // The zone is reported to the client, lands on the connection's own
+        // session, and the functions that take their zone from the session
+        // config (here `now()`) pick it up ...
         assert_eq!(client::get_timezone(&client), Some("America/New_York"));
-        // ... but never written to the shared `SessionContext`: one session's
-        // `SET TIME ZONE` must not change the time zone of the others.
-        assert_eq!(session_time_zone(&session_context), None);
+        assert_eq!(
+            session_time_zone(&session_context).as_deref(),
+            Some("America/New_York")
+        );
+        let df = session_context.sql("select now()").await.unwrap();
+        assert_eq!(
+            df.schema().field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("America/New_York".into()))
+        );
+
+        // ... while the session template, shared by every connection, is left
+        // untouched.
+        assert_eq!(session_time_zone(&template), None);
+    }
+
+    #[tokio::test]
+    async fn test_set_time_zone_unknown_zone_keeps_session_time_zone() {
+        let template = SessionContext::new();
+        let session_context = crate::session::new_connection_session(&template);
+        let mut client = MockClient::new();
+        set_time_zone(&session_context, &mut client, "set time zone 'UTC'")
+            .await
+            .unwrap();
+
+        // DataFusion validates the zone: an unknown one leaves the session's
+        // time zone untouched while the statement still succeeds.
+        let response = set_time_zone(
+            &session_context,
+            &mut client,
+            "set time zone 'Mars/Olympus_Mons'",
+        )
+        .await;
+        assert!(response.is_ok());
+        assert_eq!(session_time_zone(&session_context).as_deref(), Some("UTC"));
     }
 
     #[tokio::test]
