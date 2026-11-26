@@ -8,6 +8,7 @@
 //! format without re-implementing any pgvector encoding here.
 #![cfg(feature = "pgvector")]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,11 +37,10 @@ fn register_items(ctx: &SessionContext) {
         DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Float32, true)), 3),
         false,
     )
-    .with_metadata(
-        [("pg.vector".to_string(), "vector".to_string())]
-            .into_iter()
-            .collect(),
-    );
+    .with_metadata(HashMap::from([(
+        "pg.vector".to_string(),
+        "vector".to_string(),
+    )]));
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
         embedding,
