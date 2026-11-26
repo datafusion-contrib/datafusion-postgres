@@ -212,13 +212,11 @@ async fn try_respond_set_statements(
             let tz = value.to_string();
             let tz = tz.trim_matches('"').trim_matches('\'');
             client::set_timezone(client, Some(tz));
-            // execution options for timezone
-            session_context
-                .state()
-                .config_mut()
-                .options_mut()
-                .execution
-                .time_zone = Some(tz.to_string());
+            // The time zone is tracked in the per-connection client metadata
+            // only. DataFusion's `execution.time_zone` is deliberately left
+            // alone: the `SessionContext` is shared by every connection (see
+            // `HandlerFactory`), so writing it here would apply one session's
+            // `SET TIME ZONE` to all of them.
             let tz_value = client::get_timezone(client).unwrap_or("UTC").to_string();
             if let Err(e) = client
                 .send_message(PgWireBackendMessage::ParameterStatus(ParameterStatus::new(
@@ -373,6 +371,32 @@ mod tests {
 
     use super::*;
     use crate::testing::MockClient;
+
+    async fn set_time_zone(
+        session_context: &SessionContext,
+        client: &mut MockClient,
+        sql: &str,
+    ) -> PgWireResult<Response> {
+        let statement = Parser::new(&PostgreSqlDialect {})
+            .try_with_sql(sql)
+            .unwrap()
+            .parse_statement()
+            .unwrap();
+        try_respond_set_statements(client, &statement, session_context)
+            .await
+            .expect("SET TIME ZONE is handled by the hook")
+    }
+
+    fn session_time_zone(session_context: &SessionContext) -> Option<String> {
+        session_context
+            .state()
+            .config()
+            .options()
+            .execution
+            .time_zone
+            .as_ref()
+            .map(|tz| tz.as_str().to_string())
+    }
 
     #[tokio::test]
     async fn test_statement_timeout_set_and_show() {
@@ -558,6 +582,26 @@ mod tests {
             assert_eq!(ps_msgs[0].name, expected_key, "Wrong key for {sql}");
             assert_eq!(ps_msgs[0].value, expected_value, "Wrong value for {sql}");
         }
+    }
+
+    #[tokio::test]
+    async fn test_set_time_zone_is_tracked_per_connection() {
+        let session_context = SessionContext::new();
+        let mut client = MockClient::new();
+
+        set_time_zone(
+            &session_context,
+            &mut client,
+            "set time zone 'America/New_York'",
+        )
+        .await
+        .unwrap();
+
+        // Reported to the client and stored in its per-connection metadata ...
+        assert_eq!(client::get_timezone(&client), Some("America/New_York"));
+        // ... but never written to the shared `SessionContext`: one session's
+        // `SET TIME ZONE` must not change the time zone of the others.
+        assert_eq!(session_time_zone(&session_context), None);
     }
 
     #[tokio::test]

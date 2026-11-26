@@ -308,7 +308,7 @@ fn encode_pg_vector<T: Encoder>(
                 // Respect the array's own offset: a sliced FixedSizeListArray
                 // (offset > 0, e.g. a batch sliced by LIMIT) starts its rows
                 // further into the flattened values.
-                let start = list.value_offset(idx) as usize;
+                let start = list.value_offset_at(idx);
                 (0..size).map(|i| values.value(start + i)).collect()
             }
             DataType::List(_) => {

@@ -11,18 +11,18 @@ members = [
 [workspace.package]
 edition = "2024"
 license = "Apache-2.0"
-rust-version = "1.89"
+rust-version = "1.95"
 authors = ["Ning Sun <n@sunng.info>"]
 keywords = ["database", "postgresql", "datafusion"]
 repository = "https://github.com/datafusion-contrib/datafusion-postgres/"
 documentation = "https://docs.rs/crate/datafusion-postgres/"
 
 [workspace.dependencies]
-arrow = "59"
-arrow-schema = "59"
+arrow = "60"
+arrow-schema = "60"
 bytes = "1.11.1"
 chrono = { version = "0.4", features = ["std"] }
-datafusion = { version = "55" }
+datafusion = { version = "56" }
 futures = "0.3"
 pgwire = { version = "0.42", default-features = false }
 postgres-types = "0.2"
