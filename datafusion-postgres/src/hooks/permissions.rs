@@ -80,6 +80,7 @@ impl PermissionsHook {
         matches!(
             statement,
             Statement::Set { .. }
+                | Statement::Reset { .. }
                 | Statement::ShowVariable { .. }
                 | Statement::ShowStatus { .. }
                 | Statement::ShowCatalogs { .. }

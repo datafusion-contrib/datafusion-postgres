@@ -5,6 +5,7 @@ pub mod hooks;
 #[cfg(feature = "pgvector")]
 pub mod pgvector;
 mod planner;
+mod session;
 #[cfg(any(test, debug_assertions))]
 pub mod testing;
 
@@ -86,6 +87,10 @@ fn setup_tls(cert_path: &str, key_path: &str) -> Result<TlsAcceptor, IOError> {
 }
 
 /// Serve the Datafusion `SessionContext` with Postgres protocol.
+///
+/// Every connection is served with its own session derived from
+/// `session_context`; see [`DfSessionService`] for what is shared between
+/// connections and what is not.
 pub async fn serve(
     session_context: Arc<SessionContext>,
     opts: &ServerOptions,

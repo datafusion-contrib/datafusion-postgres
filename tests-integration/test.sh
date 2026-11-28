@@ -18,7 +18,7 @@ done
 # Function to cleanup processes
 cleanup() {
     echo "🧹 Cleaning up processes..."
-    for pid in $CSV_PID $TRANSACTION_PID $PARQUET_PID $RBAC_PID $SSL_PID $POSTGIS_PID $FDW_PID $PGVECTOR_PID; do
+    for pid in $CSV_PID $TRANSACTION_PID $PARQUET_PID $RBAC_PID $SSL_PID $POSTGIS_PID $FDW_PID $PGVECTOR_PID $SESSIONS_PID; do
         if [ ! -z "$pid" ]; then
             kill -9 $pid 2>/dev/null || true
         fi
@@ -288,6 +288,35 @@ else
 fi
 sleep 3
 
+# Test 8: per-connection sessions
+# Session settings (SET, PREPARE) are private to a connection while catalog
+# changes (CREATE TABLE, INSERT) are shared, as in Postgres. Uses two live
+# connections against the same server.
+echo ""
+echo "🔐 Test 8: Per-connection Sessions"
+echo "---------------------------------"
+wait_for_port 5433
+../target/debug/datafusion-postgres-cli -p 5433 --csv delhi:delhiclimate.csv &
+SESSIONS_PID=$!
+sleep 5
+
+# Check if server is actually running
+if ! ps -p $SESSIONS_PID > /dev/null 2>&1; then
+    echo "❌ sessions server failed to start"
+    exit 1
+fi
+
+if python test_sessions.py; then
+    echo "✅ Per-connection sessions test passed"
+else
+    echo "❌ Per-connection sessions test failed"
+    kill -9 $SESSIONS_PID 2>/dev/null || true
+    exit 1
+fi
+
+kill -9 $SESSIONS_PID 2>/dev/null || true
+sleep 3
+
 echo ""
 echo "🎉 All enhanced integration tests passed!"
 echo "=========================================="
@@ -301,6 +330,7 @@ echo "  ✅ Array types and complex data type support"
 echo "  ✅ Improved pg_catalog system tables"
 echo "  ✅ PostgreSQL function compatibility"
 echo "  ✅ SSL/TLS encryption support"
+echo "  ✅ Per-connection sessions (private SET/PREPARE, shared catalog)"
 if [ -z "$SKIP_PGVECTOR" ]; then
     echo "  ✅ pgvector support (vector columns, literals, distance operators)"
 fi

@@ -37,6 +37,10 @@ This directory contains comprehensive integration tests for the DataFusion Postg
 - **Connection security** - Encrypted and unencrypted connections
 - **Feature availability** - Command-line TLS options
 
+### 6. Per-connection Sessions (`test_sessions.py`)
+- **Private session state** - `SET` and `PREPARE` only affect the connection that ran them
+- **Shared catalog** - Tables created or written through one connection are visible to others
+
 ## Key Features Tested
 
 ### PostgreSQL Compatibility
@@ -94,6 +98,9 @@ python3 test_rbac.py
 
 # SSL/TLS encryption tests
 python3 test_ssl.py
+
+# Per-connection session tests
+python3 test_sessions.py
 ```
 
 ### SSL/TLS Testing
