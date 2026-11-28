@@ -5,13 +5,20 @@
 //! queries run on: each pgwire connection gets its own `SessionContext`,
 //! created from the template the first time the connection runs a statement.
 //!
-//! DataFusion session states are copy-on-write. A per-connection session shares
-//! the template's catalogs and runtime (memory pool, disk manager, caches), so
-//! tables created, inserted into or dropped through one connection are visible
-//! to every other -- as tables are in Postgres. What Postgres scopes per
-//! session instead -- configuration (`SET`), registered functions and prepared
-//! statements (`PREPARE`/`EXECUTE`) -- is split off on first write and stays
-//! private to the connection.
+//! A per-connection session shares the template's catalogs and runtime (memory
+//! pool, disk manager, caches), so tables created, inserted into or dropped
+//! through one connection are visible to every other -- as tables are in
+//! Postgres. What Postgres scopes per session instead -- configuration (`SET`),
+//! registered functions and prepared statements (`PREPARE`/`EXECUTE`) -- is
+//! split off on first write and stays private to the connection. Each session
+//! also gets a session id of its own and starts without prepared statements,
+//! even when the template has some.
+//!
+//! `datafusion.runtime.*` settings are the exception to "private": DataFusion
+//! applies them by swapping the session's runtime environment, so a connection
+//! changing e.g. `metadata_cache_limit` changes it for every connection
+//! sharing the caches, while `memory_limit` gives that connection a private
+//! memory pool that no longer counts against the template's.
 //!
 //! The session is kept in pgwire's [`SessionExtensions`], which needs no
 //! bookkeeping of its own: it is created lazily and dropped with the
@@ -19,17 +26,23 @@
 
 use std::sync::Arc;
 
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::SessionContext;
 use pgwire::api::ClientInfo;
 
 /// The entry stored in a connection's session extensions.
 struct ConnectionSession(Arc<SessionContext>);
 
-/// A new connection session: a copy-on-write clone of `template`'s state.
+/// A new connection session: the template's catalogs and runtime, a session
+/// id of its own and no prepared statements.
 pub(crate) fn new_connection_session(template: &SessionContext) -> SessionContext {
-    // Clone the stored state rather than `template.state()`: the latter is
-    // marked as "execution started" for the query that requested it.
-    SessionContext::new_with_state(template.state_ref().read().clone())
+    // Start from the stored state rather than `template.state()`, which is
+    // marked as "execution started" for the query that requested it. Unlike a
+    // plain clone of the state, `new_from_existing` does not carry over the
+    // template's session id and prepared statements.
+    SessionContext::new_with_state(
+        SessionStateBuilder::new_from_existing(template.state_ref().read().clone()).build(),
+    )
 }
 
 /// The `SessionContext` of `client`, created from `template` on first use.
@@ -47,9 +60,11 @@ pub(crate) fn session_for(
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, TimeUnit};
-    use pgwire::api::SessionExtensions;
+    use datafusion::logical_expr::{LogicalPlan, SetVariable, Statement as PlanStatement};
+    use std::sync::Arc;
 
     use super::*;
+    use crate::testing::MockClient;
 
     fn time_zone(ctx: &SessionContext) -> Option<String> {
         ctx.state()
@@ -71,73 +86,54 @@ mod tests {
             .clone()
     }
 
-    async fn scalar(ctx: &SessionContext, sql: &str) -> String {
+    async fn run(
+        ctx: &SessionContext,
+        sql: &str,
+    ) -> Result<(), datafusion::error::DataFusionError> {
+        ctx.sql(sql).await?.collect().await.map(|_| ())
+    }
+
+    async fn count(ctx: &SessionContext, sql: &str) -> i64 {
         let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
-        let value = batches[0]
+        batches[0]
             .column(0)
             .as_any()
             .downcast_ref::<datafusion::arrow::array::Int64Array>()
             .unwrap()
-            .value(0);
-        value.to_string()
+            .value(0)
     }
 
-    struct Client(SessionExtensions);
+    fn memory_pool(
+        ctx: &SessionContext,
+    ) -> Arc<dyn datafusion::execution::memory_pool::MemoryPool> {
+        ctx.state_ref().read().runtime_env().memory_pool.clone()
+    }
 
-    impl ClientInfo for Client {
-        fn socket_addr(&self) -> std::net::SocketAddr {
-            "127.0.0.1:5432".parse().unwrap()
-        }
-        fn is_secure(&self) -> bool {
-            false
-        }
-        fn protocol_version(&self) -> pgwire::messages::ProtocolVersion {
-            pgwire::messages::ProtocolVersion::PROTOCOL3_0
-        }
-        fn set_protocol_version(&mut self, _version: pgwire::messages::ProtocolVersion) {}
-        fn pid_and_secret_key(&self) -> (i32, pgwire::messages::startup::SecretKey) {
-            (0, pgwire::messages::startup::SecretKey::I32(0))
-        }
-        fn set_pid_and_secret_key(
-            &mut self,
-            _pid: i32,
-            _key: pgwire::messages::startup::SecretKey,
-        ) {
-        }
-        fn state(&self) -> pgwire::api::PgWireConnectionState {
-            pgwire::api::PgWireConnectionState::ReadyForQuery
-        }
-        fn set_state(&mut self, _new_state: pgwire::api::PgWireConnectionState) {}
-        fn transaction_status(&self) -> pgwire::messages::response::TransactionStatus {
-            pgwire::messages::response::TransactionStatus::Idle
-        }
-        fn set_transaction_status(
-            &mut self,
-            _new_status: pgwire::messages::response::TransactionStatus,
-        ) {
-        }
-        fn metadata(&self) -> &std::collections::HashMap<String, String> {
-            unimplemented!()
-        }
-        fn metadata_mut(&mut self) -> &mut std::collections::HashMap<String, String> {
-            unimplemented!()
-        }
-        fn session_extensions(&self) -> &SessionExtensions {
-            &self.0
-        }
-        fn client_certificates<'a>(&self) -> Option<&[rustls_pki_types::CertificateDer<'a>]> {
-            None
-        }
-        fn sni_server_name(&self) -> Option<&str> {
-            None
-        }
+    async fn set_time_zone(ctx: &SessionContext, zone: &str) {
+        ctx.execute_logical_plan(LogicalPlan::Statement(PlanStatement::SetVariable(
+            SetVariable {
+                variable: "datafusion.execution.time_zone".to_string(),
+                value: zone.to_string(),
+            },
+        )))
+        .await
+        .unwrap();
+    }
+
+    /// Two clients of one server, and their sessions.
+    async fn two_connections(
+        template: &SessionContext,
+    ) -> (Arc<SessionContext>, Arc<SessionContext>) {
+        let alice = MockClient::new();
+        let bob = MockClient::new();
+        (session_for(template, &alice), session_for(template, &bob))
     }
 
     #[test]
     fn session_is_stable_per_connection_and_distinct_across_connections() {
         let template = SessionContext::new();
-        let alice = Client(SessionExtensions::new());
-        let bob = Client(SessionExtensions::new());
+        let alice = MockClient::new();
+        let bob = MockClient::new();
 
         let a1 = session_for(&template, &alice);
         let a2 = session_for(&template, &alice);
@@ -147,28 +143,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_settings_are_private_while_catalog_is_shared() {
+    async fn session_settings_are_private_while_catalog_and_runtime_are_shared() {
         let template = SessionContext::new();
-        let alice = Client(SessionExtensions::new());
-        let bob = Client(SessionExtensions::new());
-        let alice = session_for(&template, &alice);
-        let bob = session_for(&template, &bob);
+        let (alice, bob) = two_connections(&template).await;
         assert_eq!(
             now_type(&alice).await,
             DataType::Timestamp(TimeUnit::Nanosecond, None)
         );
 
-        alice
-            .execute_logical_plan(datafusion::logical_expr::LogicalPlan::Statement(
-                datafusion::logical_expr::Statement::SetVariable(
-                    datafusion::logical_expr::SetVariable {
-                        variable: "datafusion.execution.time_zone".to_string(),
-                        value: "America/New_York".to_string(),
-                    },
-                ),
-            ))
-            .await
-            .unwrap();
+        set_time_zone(&alice, "America/New_York").await;
 
         // configuration follows the connection
         assert_eq!(time_zone(&alice).as_deref(), Some("America/New_York"));
@@ -184,54 +167,54 @@ mod tests {
         );
 
         // DDL and INSERT are visible everywhere
-        alice
-            .sql("create table visits (id bigint)")
-            .await
-            .unwrap()
-            .collect()
+        run(&alice, "create table visits (id bigint)")
             .await
             .unwrap();
-        alice
-            .sql("insert into visits values (1), (2)")
-            .await
-            .unwrap()
-            .collect()
+        run(&alice, "insert into visits values (1), (2)")
             .await
             .unwrap();
-        bob.sql("insert into visits values (3)")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-        assert_eq!(scalar(&bob, "select count(*) from visits").await, "3");
-        assert_eq!(scalar(&template, "select count(*) from visits").await, "3");
-        bob.sql("drop table visits")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
+        run(&bob, "insert into visits values (3)").await.unwrap();
+        assert_eq!(count(&bob, "select count(*) from visits").await, 3);
+        assert_eq!(count(&template, "select count(*) from visits").await, 3);
+        run(&bob, "drop table visits").await.unwrap();
         assert!(!alice.table_exist("visits").unwrap());
+
+        // and so is the runtime
+        assert!(Arc::ptr_eq(&memory_pool(&alice), &memory_pool(&template)));
+        assert!(Arc::ptr_eq(&memory_pool(&bob), &memory_pool(&template)));
     }
 
     #[tokio::test]
     async fn sql_prepared_statements_are_private_to_the_connection() {
         let template = SessionContext::new();
-        let alice = session_for(&template, &Client(SessionExtensions::new()));
-        let bob = session_for(&template, &Client(SessionExtensions::new()));
+        let (alice, bob) = two_connections(&template).await;
 
-        alice
-            .sql("prepare p as select 1")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-        assert_eq!(scalar(&alice, "execute p").await, "1");
+        run(&alice, "prepare p as select 1").await.unwrap();
+        assert_eq!(count(&alice, "execute p").await, 1);
         assert!(
-            bob.sql("execute p").await.is_err(),
+            run(&bob, "execute p").await.is_err(),
             "must not see the other connection's statement"
         );
+    }
+
+    #[tokio::test]
+    async fn connections_get_their_own_session_id_and_no_prepared_statements() {
+        // A template that is not empty: it carries a prepared statement.
+        let template = SessionContext::new();
+        run(&template, "prepare shared as select 42").await.unwrap();
+        assert_eq!(count(&template, "execute shared").await, 42);
+
+        let (alice, bob) = two_connections(&template).await;
+        assert_ne!(alice.session_id(), template.session_id());
+        assert_ne!(bob.session_id(), template.session_id());
+        assert_ne!(alice.session_id(), bob.session_id());
+        for connection in [&alice, &bob] {
+            assert!(
+                run(connection, "execute shared").await.is_err(),
+                "a statement prepared on the template must not leak into connections"
+            );
+        }
+        // The template itself is left alone.
+        assert_eq!(count(&template, "execute shared").await, 42);
     }
 }

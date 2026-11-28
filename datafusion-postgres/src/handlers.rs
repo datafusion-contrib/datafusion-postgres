@@ -112,6 +112,10 @@ impl ErrorHandler for LoggingErrorHandler {
 /// statements are private to a connection. Anything that must be visible to
 /// every connection -- registered tables, functions, the pg_catalog -- has to
 /// be set up on the `SessionContext` *before* connections are served.
+///
+/// `datafusion.runtime.*` settings are the exception on both counts: they are
+/// not private, as DataFusion applies them to the runtime the sessions share
+/// (see the `session` module).
 pub struct DfSessionService {
     session_template: Arc<SessionContext>,
     parser: Arc<Parser>,
@@ -498,7 +502,7 @@ mod tests {
     use datafusion::prelude::SessionContext;
 
     use super::*;
-    use crate::testing::MockClient;
+    use crate::testing::{MockClient, row_texts};
 
     use crate::hooks::HookClient;
 
@@ -684,40 +688,6 @@ mod tests {
         Ok(responses.remove(0))
     }
 
-    /// The text values of a query response, row by row. (pgwire hands out
-    /// `DataRow`s in their wire encoding: an `i32` length followed by that
-    /// many bytes, `-1` for NULL.)
-    async fn row_texts(response: Response) -> Vec<Vec<Option<String>>> {
-        use futures::StreamExt;
-        use pgwire::messages::data::DataRow;
-
-        fn text_values(row: &DataRow) -> Vec<Option<String>> {
-            let mut data = row.data.as_ref();
-            let mut values = Vec::with_capacity(row.field_count as usize);
-            for _ in 0..row.field_count {
-                let len = i32::from_be_bytes(data[..4].try_into().unwrap());
-                data = &data[4..];
-                if len < 0 {
-                    values.push(None);
-                } else {
-                    let len = len as usize;
-                    values.push(Some(String::from_utf8_lossy(&data[..len]).into_owned()));
-                    data = &data[len..];
-                }
-            }
-            values
-        }
-
-        let Response::Query(mut query) = response else {
-            panic!("Expected Query response");
-        };
-        let mut rows = Vec::new();
-        while let Some(row) = query.data_rows().next().await {
-            rows.push(text_values(&row.expect("row stream error")));
-        }
-        rows
-    }
-
     fn first_column_type(response: &Response) -> Type {
         let Response::Query(query) = response else {
             panic!("Expected Query response");
@@ -740,6 +710,38 @@ mod tests {
         assert_eq!(first_column_type(&now), Type::TIMESTAMPTZ);
         let now = query(&service, &mut bob, "SELECT now()").await.unwrap();
         assert_eq!(first_column_type(&now), Type::TIMESTAMP);
+
+        // `SHOW TIME ZONE` follows each connection's session ...
+        let show = query(&service, &mut alice, "SHOW time zone").await.unwrap();
+        assert_eq!(
+            row_texts(show).await,
+            vec![vec![Some("America/New_York".to_string())]]
+        );
+        let show = query(&service, &mut bob, "SHOW time zone").await.unwrap();
+        assert_eq!(row_texts(show).await, vec![vec![Some("UTC".to_string())]]);
+
+        // ... an unknown zone is rejected without changing anything ...
+        let error = query(&service, &mut alice, "SET TIME ZONE 'Mars/Olympus_Mons'")
+            .await
+            .expect_err("an unknown time zone must be rejected");
+        let PgWireError::UserError(info) = error else {
+            panic!("expected a Postgres error");
+        };
+        assert_eq!(info.code, "22023");
+        let show = query(&service, &mut alice, "SHOW time zone").await.unwrap();
+        assert_eq!(
+            row_texts(show).await,
+            vec![vec![Some("America/New_York".to_string())]]
+        );
+
+        // ... and a `RESET` reaches the connection that runs it, in whichever
+        // protocol it arrives (psycopg and JDBC send it through the extended
+        // one).
+        query(&service, &mut alice, "RESET timezone").await.unwrap();
+        let now = query(&service, &mut alice, "SELECT now()").await.unwrap();
+        assert_eq!(first_column_type(&now), Type::TIMESTAMP);
+        let show = query(&service, &mut alice, "SHOW time zone").await.unwrap();
+        assert_eq!(row_texts(show).await, vec![vec![Some("UTC".to_string())]]);
 
         // So are SQL-level prepared statements.
         query(&service, &mut alice, "PREPARE visit AS SELECT 1")

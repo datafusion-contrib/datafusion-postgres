@@ -79,9 +79,11 @@ connection gets its own session, derived from it when the connection runs its
 first statement. Session-level state -- `SET`, prepared statements
 (`PREPARE`/`EXECUTE`), functions registered at runtime -- stays private to a
 connection, while catalogs are shared: tables created, inserted into or dropped
-through one connection are visible to all of them, as in Postgres. Set up
-whatever must be visible to every connection (tables, functions,
-`pg_catalog`, ...) on the `SessionContext` *before* calling `serve`.
+through one connection are visible to all of them, as in Postgres. (The
+exception is `datafusion.runtime.*`, which DataFusion applies to the runtime
+the sessions share.) Set up whatever must be visible to every connection
+(tables, functions, `pg_catalog`, ...) on the `SessionContext` *before* calling
+`serve`.
 
 ### The CLI `datafusion-postgres-cli`
 

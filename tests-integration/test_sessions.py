@@ -42,7 +42,26 @@ def test_session_settings_stay_with_their_connection(alice, bob):
     bob.execute("SELECT now()")
     assert column_type(alice) == TIMESTAMPTZ_OID, column_type(alice)
     assert column_type(bob) == TIMESTAMP_OID, column_type(bob)
+    assert scalar(alice, "SHOW time zone") == "America/New_York"
+    assert scalar(bob, "SHOW time zone") == "UTC"
     print("  ✓ SET TIME ZONE only takes effect on its own connection")
+
+    # Like in Postgres, an unknown zone is rejected and changes nothing ...
+    try:
+        scalar(alice, "SET TIME ZONE 'Mars/Olympus_Mons'")
+    except psycopg.Error as error:
+        assert "invalid value for parameter" in str(error), error
+    else:
+        raise AssertionError("an unknown time zone must be rejected")
+    assert scalar(alice, "SHOW time zone") == "America/New_York"
+
+    # ... and so does a reset, only on the connection that runs it.
+    alice.execute("RESET timezone")
+    assert scalar(alice, "SHOW time zone") == "UTC"
+    alice.execute("SELECT now()")
+    assert column_type(alice) == TIMESTAMP_OID, column_type(alice)
+    assert scalar(bob, "SHOW time zone") == "UTC"
+    print("  ✓ an unknown zone is rejected; RESET TIME ZONE only reaches its own connection")
 
 
 def test_prepared_statements_stay_with_their_connection(alice, bob):

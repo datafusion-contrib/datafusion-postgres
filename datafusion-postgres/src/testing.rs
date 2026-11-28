@@ -163,3 +163,47 @@ impl Sink<PgWireBackendMessage> for MockClient {
         std::task::Poll::Ready(Ok(()))
     }
 }
+
+/// The text values of a query response, row by row.
+///
+/// pgwire hands out `DataRow`s in their wire encoding: an `i32` length
+/// followed by that many bytes, `-1` for NULL.
+pub async fn row_texts(response: pgwire::api::results::Response) -> Vec<Vec<Option<String>>> {
+    use futures::StreamExt;
+    use pgwire::messages::data::DataRow;
+
+    fn text_values(row: &DataRow) -> Vec<Option<String>> {
+        let mut data = row.data.as_ref();
+        let mut values = Vec::with_capacity(row.field_count as usize);
+        for _ in 0..row.field_count {
+            let len = i32::from_be_bytes(data[..4].try_into().unwrap());
+            data = &data[4..];
+            if len < 0 {
+                values.push(None);
+            } else {
+                let len = len as usize;
+                values.push(Some(String::from_utf8_lossy(&data[..len]).into_owned()));
+                data = &data[len..];
+            }
+        }
+        values
+    }
+
+    let pgwire::api::results::Response::Query(mut query) = response else {
+        panic!("Expected Query response");
+    };
+    let mut rows = Vec::new();
+    while let Some(row) = query.data_rows().next().await {
+        rows.push(text_values(&row.expect("row stream error")));
+    }
+    rows
+}
+
+/// The text value of the single column of a response's single row.
+pub async fn scalar_text(response: pgwire::api::results::Response) -> String {
+    let mut rows = row_texts(response).await;
+    assert_eq!(rows.len(), 1, "expected exactly one row");
+    let row = rows.remove(0);
+    assert_eq!(row.len(), 1, "expected exactly one column");
+    row[0].clone().expect("expected a non-NULL value")
+}
